@@ -1,0 +1,3 @@
+# Keep the models directory in git, but never commit model weights.
+*
+!.gitignore

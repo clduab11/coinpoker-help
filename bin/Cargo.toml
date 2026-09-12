@@ -1,0 +1,23 @@
+[package]
+name = "coinpoker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "coinpoker-help binary: wires ingestion, decision, mimicry, modeling, and UI"
+
+[[bin]]
+name = "coinpoker"
+path = "main.rs"
+
+[dependencies]
+ingest = { path = "../crates/ingest" }
+core-engine = { path = "../crates/core-engine" }
+ghost-layer = { path = "../crates/ghost-layer" }
+opponent-model = { path = "../crates/opponent-model" }
+ui = { path = "../crates/ui" }
+rand = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

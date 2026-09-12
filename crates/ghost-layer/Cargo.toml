@@ -1,0 +1,15 @@
+[package]
+name = "ghost-layer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Behavioral mimicry layer: human-like temporal variance and betting entropy"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }

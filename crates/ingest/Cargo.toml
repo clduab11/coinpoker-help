@@ -1,0 +1,24 @@
+[package]
+name = "ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "VLM-based game state ingestion: screen capture, change detection, and structured state extraction"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+image = { workspace = true }
+tracing = { workspace = true }
+# Blocking HTTP client for the local MLX VLM server backend.
+ureq = { version = "2.12", features = ["json"] }
+base64 = "0.22"
+
+# macOS-only screen capture (ScreenCaptureKit bindings). The crate remains
+# buildable on other hosts; capture is a no-op stub there.
+# `macos_14_0` enables the single-frame screenshot API (SCScreenshotManager).
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { version = "10.0", features = ["macos_14_0"] }

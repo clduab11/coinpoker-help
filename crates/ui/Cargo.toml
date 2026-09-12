@@ -1,0 +1,17 @@
+[package]
+name = "ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Minimalist output interface: desktop decision panel and headless JSON/WebSocket output"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
