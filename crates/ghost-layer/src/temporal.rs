@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use rand::Rng;
 use rand_distr::{Distribution, LogNormal};
+use thiserror::Error;
 
 /// Decision complexity tiers, ordered from fastest to slowest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +65,43 @@ impl Default for TemporalConfig {
     }
 }
 
+/// Semantic validation errors for [`TemporalConfig`].
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum TemporalConfigError {
+    #[error("temporal sigma_log must be finite")]
+    NonFiniteSigma,
+    #[error("temporal sigma_log must be greater than zero")]
+    NonPositiveSigma,
+    #[error("temporal min_ms must be finite and non-negative")]
+    InvalidMinimum,
+    #[error("temporal max_ms must be finite and non-negative")]
+    InvalidMaximum,
+    #[error("temporal min_ms cannot exceed max_ms")]
+    InvertedBounds,
+}
+
+impl TemporalConfig {
+    /// Validate parameters before constructing a sampler or loading a profile.
+    pub fn validate(&self) -> Result<(), TemporalConfigError> {
+        if !self.sigma_log.is_finite() {
+            return Err(TemporalConfigError::NonFiniteSigma);
+        }
+        if self.sigma_log <= 0.0 {
+            return Err(TemporalConfigError::NonPositiveSigma);
+        }
+        if !self.min_ms.is_finite() || self.min_ms < 0.0 {
+            return Err(TemporalConfigError::InvalidMinimum);
+        }
+        if !self.max_ms.is_finite() || self.max_ms < 0.0 {
+            return Err(TemporalConfigError::InvalidMaximum);
+        }
+        if self.min_ms > self.max_ms {
+            return Err(TemporalConfigError::InvertedBounds);
+        }
+        Ok(())
+    }
+}
+
 /// Samples human-like reaction times.
 #[derive(Debug, Clone)]
 pub struct TemporalSampler {
@@ -71,19 +109,42 @@ pub struct TemporalSampler {
 }
 
 impl TemporalSampler {
+    /// Construct a sampler. Invalid manually supplied configuration is handled
+    /// safely by [`Self::sample`]; prefer [`Self::try_new`] when validation
+    /// feedback is useful.
     pub fn new(config: TemporalConfig) -> Self {
         Self { config }
+    }
+
+    /// Construct a sampler after validating its configuration.
+    pub fn try_new(config: TemporalConfig) -> Result<Self, TemporalConfigError> {
+        config.validate()?;
+        Ok(Self { config })
     }
 
     /// Sample a reaction time for the given decision complexity.
     pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R, complexity: DecisionComplexity) -> Duration {
         let median_ms = complexity.median_ms();
-        // Log-normal: exp(N(mu, sigma)) where mu = ln(median).
-        let dist = LogNormal::new(median_ms.ln(), self.config.sigma_log)
-            .expect("valid log-normal parameters");
-        let raw_ms: f64 = dist.sample(rng);
-        let clamped = raw_ms.clamp(self.config.min_ms, self.config.max_ms);
-        Duration::from_millis(clamped.round() as u64)
+        // Log-normal: exp(N(mu, sigma)) where mu = ln(median). Fall back to
+        // the median for an invalid manually constructed sigma.
+        let raw_ms = LogNormal::new(median_ms.ln(), self.config.sigma_log)
+            .map(|dist| dist.sample(rng))
+            .unwrap_or(median_ms);
+
+        // Normalize manually constructed invalid bounds without using
+        // f64::clamp, which panics for NaN or inverted bounds.
+        let min_ms = if self.config.min_ms.is_finite() && self.config.min_ms >= 0.0 {
+            self.config.min_ms
+        } else {
+            0.0
+        };
+        let max_ms = if self.config.max_ms.is_finite() && self.config.max_ms >= min_ms {
+            self.config.max_ms
+        } else {
+            min_ms
+        };
+        let bounded_ms = raw_ms.max(min_ms).min(max_ms);
+        Duration::from_millis(bounded_ms.round() as u64)
     }
 }
 
@@ -94,6 +155,37 @@ mod tests {
 
     fn rng() -> rand::rngs::StdRng {
         rand::rngs::StdRng::seed_from_u64(42)
+    }
+
+    #[test]
+    fn rejects_invalid_temporal_config() {
+        let config = TemporalConfig {
+            sigma_log: 0.0,
+            ..TemporalConfig::default()
+        };
+        assert_eq!(
+            config.validate(),
+            Err(TemporalConfigError::NonPositiveSigma)
+        );
+        assert_eq!(
+            TemporalSampler::try_new(config).unwrap_err(),
+            TemporalConfigError::NonPositiveSigma
+        );
+    }
+
+    #[test]
+    fn invalid_manual_config_does_not_panic() {
+        let sampler = TemporalSampler::new(TemporalConfig {
+            sigma_log: f64::NAN,
+            min_ms: 100.0,
+            max_ms: 10.0,
+        });
+        assert_eq!(
+            sampler
+                .sample(&mut rng(), DecisionComplexity::PreflopFold)
+                .as_millis(),
+            100
+        );
     }
 
     #[test]

@@ -6,8 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 description = "Adaptive opponent modeling: feature extraction, archetype classification, exploitation"
+publish = false
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }

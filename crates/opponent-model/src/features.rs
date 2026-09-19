@@ -98,7 +98,14 @@ impl StatsAccumulator {
             vpip: ratio(self.vpip_count, self.hands),
             pfr: ratio(self.pfr_count, self.hands),
             aggression_factor: if self.passive_calls == 0 {
-                f64::from(self.aggressive_actions)
+                if self.aggressive_actions == 0 {
+                    0.0
+                } else {
+                    // AF is mathematically unbounded when the denominator is
+                    // zero. Use the largest finite value so the statistic stays
+                    // serializable while still classifying as aggressive.
+                    f64::MAX
+                }
             } else {
                 f64::from(self.aggressive_actions) / f64::from(self.passive_calls)
             },
@@ -152,11 +159,11 @@ mod tests {
     }
 
     #[test]
-    fn aggression_factor_without_calls_is_aggressive_count() {
+    fn aggression_factor_without_calls_is_unbounded_but_finite() {
         let mut acc = StatsAccumulator::new();
+        assert_eq!(acc.stats().aggression_factor, 0.0);
         acc.observe_aggressive_action();
-        acc.observe_aggressive_action();
-        assert!((acc.stats().aggression_factor - 2.0).abs() < 1e-9);
+        assert_eq!(acc.stats().aggression_factor, f64::MAX);
     }
 
     #[test]

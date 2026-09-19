@@ -13,6 +13,15 @@ use rs_poker::core::{Card as RsCard, Hand, Rankable, Suit as RsSuit, Value as Rs
 /// Errors produced by the equity estimator.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EquityError {
+    /// No player hands were provided.
+    #[error("at least one hand is required")]
+    EmptyHands,
+    /// No unknown active opponents were requested.
+    #[error("at least one opponent is required")]
+    NoOpponents,
+    /// The estimator was configured with no Monte Carlo iterations.
+    #[error("equity estimation requires at least one iteration")]
+    ZeroIterations,
     /// A card was specified more than once.
     #[error("duplicate card in known cards")]
     DuplicateCard,
@@ -158,6 +167,12 @@ impl EquityEstimator {
     ///
     /// Returns each player's equity share in the same order as `hands`.
     pub fn estimate(&self, hands: &[Vec<Card>], board: &[Card]) -> Result<Vec<f64>, EquityError> {
+        if hands.is_empty() {
+            return Err(EquityError::EmptyHands);
+        }
+        if self.config.iterations == 0 {
+            return Err(EquityError::ZeroIterations);
+        }
         if board.len() > 5 {
             return Err(EquityError::BoardTooLarge);
         }
@@ -223,7 +238,7 @@ impl EquityEstimator {
                 .collect();
 
             // Best rank wins; ties split the pot evenly.
-            let best = ranks.iter().max().copied().expect("at least one hand");
+            let best = ranks.iter().max().copied().ok_or(EquityError::EmptyHands)?;
             let tied: Vec<usize> = ranks
                 .iter()
                 .enumerate()
@@ -246,6 +261,102 @@ impl EquityEstimator {
             .zip(split.iter())
             .map(|(&w, &s)| (w as f64 + s) / iters)
             .collect())
+    }
+
+    /// Estimate hero equity against uniformly random unknown opponent hands.
+    ///
+    /// Each iteration shuffles the deck remaining after the hero's two cards
+    /// and the known board, then deals distinct two-card hands to
+    /// `opponent_count` active opponents and completes the board. The returned
+    /// value is the hero's pot share, including split pots.
+    pub fn estimate_against_unknown(
+        &self,
+        hero: &[Card],
+        opponent_count: usize,
+        board: &[Card],
+    ) -> Result<f64, EquityError> {
+        if hero.len() != 2 {
+            return Err(EquityError::InvalidHandSize);
+        }
+        if opponent_count == 0 {
+            return Err(EquityError::NoOpponents);
+        }
+        if self.config.iterations == 0 {
+            return Err(EquityError::ZeroIterations);
+        }
+        if board.len() > 5 {
+            return Err(EquityError::BoardTooLarge);
+        }
+
+        let mut known = Vec::with_capacity(hero.len() + board.len());
+        known.extend_from_slice(hero);
+        known.extend_from_slice(board);
+        for i in 0..known.len() {
+            for j in (i + 1)..known.len() {
+                if known[i] == known[j] {
+                    return Err(EquityError::DuplicateCard);
+                }
+            }
+        }
+
+        let mut deck: Vec<RsCard> = full_deck()
+            .into_iter()
+            .filter(|card| !known.contains(card))
+            .map(Card::to_rs)
+            .collect();
+        let board_needed = 5 - board.len();
+        let cards_needed = opponent_count
+            .checked_mul(2)
+            .and_then(|hole_cards| hole_cards.checked_add(board_needed))
+            .ok_or(EquityError::DeckExhausted)?;
+        if deck.len() < cards_needed {
+            return Err(EquityError::DeckExhausted);
+        }
+
+        let hero_rs: Vec<RsCard> = hero.iter().copied().map(Card::to_rs).collect();
+        let board_rs: Vec<RsCard> = board.iter().copied().map(Card::to_rs).collect();
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let mut hero_share = 0.0;
+
+        for _ in 0..self.config.iterations {
+            deck.shuffle(&mut rng);
+
+            let mut full_board = board_rs.clone();
+            full_board.extend(deck.iter().take(board_needed).copied());
+
+            let mut hero_hand = Hand::new();
+            for card in full_board.iter().chain(hero_rs.iter()) {
+                hero_hand.insert(*card);
+            }
+            let hero_rank = hero_hand.rank();
+            let mut best_rank = hero_rank;
+            let mut tied_players = 1usize;
+            let mut hero_has_best_rank = true;
+
+            for opponent_index in 0..opponent_count {
+                let hole_start = board_needed + opponent_index * 2;
+                let hole_end = hole_start + 2;
+                let mut opponent_hand = Hand::new();
+                for card in full_board.iter().chain(deck[hole_start..hole_end].iter()) {
+                    opponent_hand.insert(*card);
+                }
+                let opponent_rank = opponent_hand.rank();
+
+                if opponent_rank > best_rank {
+                    best_rank = opponent_rank;
+                    tied_players = 1;
+                    hero_has_best_rank = false;
+                } else if opponent_rank == best_rank {
+                    tied_players += 1;
+                }
+            }
+
+            if hero_has_best_rank {
+                hero_share += 1.0 / tied_players as f64;
+            }
+        }
+
+        Ok(hero_share / self.config.iterations as f64)
     }
 }
 
@@ -275,9 +386,8 @@ mod tests {
 
     #[test]
     fn made_flush_beats_pair_on_river() {
-        // Board: four hearts; hero holds the ace of hearts for the nut flush.
-        // The villain can only win by making a full house with a pocket pair
-        // matching a board card (~0.3%), so hero equity is near-certain.
+        // On this fixed river board, the hero's ace-high heart flush always
+        // beats the villain's two pair (kings and twos).
         let board = vec![
             Card::new(Rank::Two, Suit::Hearts),
             Card::new(Rank::Seven, Suit::Hearts),
@@ -291,6 +401,21 @@ mod tests {
             .estimate(&[hero, villain], &board)
             .expect("estimate");
         assert!(eq[0] > 0.99, "hero equity was {}", eq[0]);
+    }
+
+    #[test]
+    fn rejects_empty_hands() {
+        assert_eq!(estimator().estimate(&[], &[]), Err(EquityError::EmptyHands));
+    }
+
+    #[test]
+    fn rejects_zero_iterations() {
+        let estimator = EquityEstimator::new(EquityConfig { iterations: 0 });
+        let hero = hand(Rank::Ace, Suit::Spades, Rank::Ace, Suit::Hearts);
+        assert_eq!(
+            estimator.estimate(&[hero], &[]),
+            Err(EquityError::ZeroIterations)
+        );
     }
 
     #[test]
@@ -341,5 +466,112 @@ mod tests {
             .expect("estimate");
         let sum: f64 = eq.iter().sum();
         assert!((sum - 1.0).abs() < 1e-6, "sum was {sum}");
+    }
+
+    #[test]
+    fn hero_with_exclusive_royal_flush_beats_unknown_opponents() {
+        let hero = hand(Rank::Ten, Suit::Spades, Rank::Three, Suit::Clubs);
+        let board = vec![
+            Card::new(Rank::Ace, Suit::Spades),
+            Card::new(Rank::King, Suit::Spades),
+            Card::new(Rank::Queen, Suit::Spades),
+            Card::new(Rank::Jack, Suit::Spades),
+            Card::new(Rank::Two, Suit::Diamonds),
+        ];
+        let equity = estimator()
+            .estimate_against_unknown(&hero, 4, &board)
+            .expect("estimate");
+        assert!((equity - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn board_royal_flush_splits_unknown_multiway_pot() {
+        let hero = hand(Rank::Two, Suit::Hearts, Rank::Three, Suit::Diamonds);
+        let board = vec![
+            Card::new(Rank::Ace, Suit::Spades),
+            Card::new(Rank::King, Suit::Spades),
+            Card::new(Rank::Queen, Suit::Spades),
+            Card::new(Rank::Jack, Suit::Spades),
+            Card::new(Rank::Ten, Suit::Spades),
+        ];
+        let equity = estimator()
+            .estimate_against_unknown(&hero, 3, &board)
+            .expect("estimate");
+        assert!((equity - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn unknown_opponents_require_two_hero_cards() {
+        let hero = vec![Card::new(Rank::Ace, Suit::Spades)];
+        assert_eq!(
+            estimator().estimate_against_unknown(&hero, 1, &[]),
+            Err(EquityError::InvalidHandSize)
+        );
+    }
+
+    #[test]
+    fn unknown_opponents_require_at_least_one_opponent() {
+        let hero = hand(Rank::Ace, Suit::Spades, Rank::Ace, Suit::Hearts);
+        assert_eq!(
+            estimator().estimate_against_unknown(&hero, 0, &[]),
+            Err(EquityError::NoOpponents)
+        );
+    }
+
+    #[test]
+    fn unknown_opponents_reject_zero_iterations() {
+        let estimator = EquityEstimator::new(EquityConfig { iterations: 0 });
+        let hero = hand(Rank::Ace, Suit::Spades, Rank::Ace, Suit::Hearts);
+        assert_eq!(
+            estimator.estimate_against_unknown(&hero, 1, &[]),
+            Err(EquityError::ZeroIterations)
+        );
+    }
+
+    #[test]
+    fn unknown_opponents_reject_duplicate_known_cards() {
+        let hero = hand(Rank::Ace, Suit::Spades, Rank::Ace, Suit::Hearts);
+        let board = vec![Card::new(Rank::Ace, Suit::Spades)];
+        assert_eq!(
+            estimator().estimate_against_unknown(&hero, 1, &board),
+            Err(EquityError::DuplicateCard)
+        );
+    }
+
+    #[test]
+    fn unknown_opponents_reject_oversized_board() {
+        let hero = hand(Rank::Ace, Suit::Spades, Rank::Ace, Suit::Hearts);
+        let board = vec![
+            Card::new(Rank::Two, Suit::Hearts),
+            Card::new(Rank::Three, Suit::Hearts),
+            Card::new(Rank::Four, Suit::Hearts),
+            Card::new(Rank::Five, Suit::Hearts),
+            Card::new(Rank::Six, Suit::Hearts),
+            Card::new(Rank::Seven, Suit::Hearts),
+        ];
+        assert_eq!(
+            estimator().estimate_against_unknown(&hero, 1, &board),
+            Err(EquityError::BoardTooLarge)
+        );
+    }
+
+    #[test]
+    fn unknown_opponents_reject_insufficient_deck_capacity() {
+        let hero = hand(Rank::Ace, Suit::Spades, Rank::Ace, Suit::Hearts);
+        let board = vec![
+            Card::new(Rank::Two, Suit::Hearts),
+            Card::new(Rank::Three, Suit::Hearts),
+            Card::new(Rank::Four, Suit::Hearts),
+            Card::new(Rank::Five, Suit::Hearts),
+            Card::new(Rank::Six, Suit::Hearts),
+        ];
+        assert_eq!(
+            estimator().estimate_against_unknown(&hero, 23, &board),
+            Err(EquityError::DeckExhausted)
+        );
+        assert_eq!(
+            estimator().estimate_against_unknown(&hero, usize::MAX, &board),
+            Err(EquityError::DeckExhausted)
+        );
     }
 }

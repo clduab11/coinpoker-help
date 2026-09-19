@@ -1,6 +1,6 @@
 //! Cheap change detection between consecutive frames.
 //!
-//! Computes a sampled pixel-diff score against the previous frame and
+//! Computes a sampled pixel-diff score against the last trigger baseline and
 //! reports whether the visible table state changed enough to justify a VLM
 //! inference pass. This avoids the prefill cost of needless inference on a
 //! static table: capture runs at ~10fps, but the VLM fires only when the
@@ -30,7 +30,7 @@ impl Default for ChangeDetectorConfig {
     }
 }
 
-/// Outcome of comparing a frame against the previous one.
+/// Outcome of comparing a frame against the current baseline.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChangeResult {
     /// The table state changed enough to trigger inference.
@@ -52,53 +52,62 @@ impl ChangeResult {
     }
 }
 
-/// Compares consecutive frames and reports whether the table changed.
+/// Compares frames against the last accepted trigger baseline.
 #[derive(Debug, Clone)]
 pub struct ChangeDetector {
     config: ChangeDetectorConfig,
-    previous: Option<super::capture::Frame>,
+    baseline: Option<super::capture::Frame>,
 }
 
 impl ChangeDetector {
     pub fn new(config: ChangeDetectorConfig) -> Self {
         Self {
             config,
-            previous: None,
+            baseline: None,
         }
     }
 
-    /// Compare `frame` against the previously seen frame.
+    /// Compare `frame` against the last frame that triggered a change.
     ///
-    /// The first frame after construction is always reported as changed
-    /// (there is no baseline to compare against), and becomes the baseline.
+    /// The first valid frame after construction is always reported as changed
+    /// and becomes the baseline. Sub-threshold frames do not replace that
+    /// baseline, allowing incremental visual changes to accumulate.
     pub fn detect(&mut self, frame: &super::capture::Frame) -> ChangeResult {
-        let previous = match &self.previous {
-            Some(prev) => prev,
+        // Malformed buffers are unsafe to compare and must never suppress
+        // inference or replace a known-good baseline.
+        if frame.validate().is_err() {
+            return ChangeResult::Changed { score: 1.0 };
+        }
+
+        let baseline = match &self.baseline {
+            Some(baseline) => baseline,
             None => {
-                self.previous = Some(frame.clone());
+                self.baseline = Some(frame.clone());
                 return ChangeResult::Changed { score: 1.0 };
             }
         };
 
-        // Dimension mismatch is an unambiguous change.
-        if previous.width != frame.width || previous.height != frame.height {
-            self.previous = Some(frame.clone());
+        if baseline.validate().is_err()
+            || baseline.width != frame.width
+            || baseline.height != frame.height
+        {
+            self.baseline = Some(frame.clone());
             return ChangeResult::Changed { score: 1.0 };
         }
 
-        let score = diff_score(previous, frame, &self.config);
-        self.previous = Some(frame.clone());
+        let score = diff_score(baseline, frame, &self.config);
 
         if score >= self.config.changed_fraction {
+            self.baseline = Some(frame.clone());
             ChangeResult::Changed { score }
         } else {
             ChangeResult::Unchanged { score }
         }
     }
 
-    /// Reset the baseline so the next frame is reported as changed.
+    /// Reset the baseline so the next valid frame is reported as changed.
     pub fn reset(&mut self) {
-        self.previous = None;
+        self.baseline = None;
     }
 }
 
@@ -198,6 +207,28 @@ mod tests {
     }
 
     #[test]
+    fn cumulative_sub_threshold_changes_trigger_against_baseline() {
+        let config = ChangeDetectorConfig {
+            sample_stride: 1,
+            channel_delta: 24,
+            changed_fraction: 0.5,
+        };
+        let mut detector = ChangeDetector::new(config);
+        let baseline = solid_frame(4, 1, 0);
+        detector.detect(&baseline);
+
+        let mut one_pixel_changed = baseline.clone();
+        one_pixel_changed.rgba[0] = 255;
+        assert!(!detector.detect(&one_pixel_changed).is_changed());
+
+        let mut two_pixels_changed = one_pixel_changed;
+        two_pixels_changed.rgba[4] = 255;
+        let result = detector.detect(&two_pixels_changed);
+        assert!(result.is_changed());
+        assert_eq!(result.score(), 0.5);
+    }
+
+    #[test]
     fn large_fraction_of_pixels_triggers() {
         let config = ChangeDetectorConfig {
             sample_stride: 1,
@@ -216,6 +247,26 @@ mod tests {
         let result = detector.detect(&frame);
         assert!(result.is_changed());
         assert!(result.score() >= 0.5);
+    }
+
+    #[test]
+    fn malformed_buffer_is_fail_safe_changed_without_replacing_baseline() {
+        let mut detector = ChangeDetector::new(ChangeDetectorConfig::default());
+        let baseline = solid_frame(2, 2, 128);
+        detector.detect(&baseline);
+
+        let malformed = Frame {
+            width: 2,
+            height: 2,
+            rgba: vec![128; 15],
+        };
+        let result = detector.detect(&malformed);
+        assert!(result.is_changed());
+        assert_eq!(result.score(), 1.0);
+
+        let result = detector.detect(&baseline);
+        assert!(!result.is_changed());
+        assert_eq!(result.score(), 0.0);
     }
 
     #[test]

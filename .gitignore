@@ -1,14 +1,20 @@
-﻿# Rust build output
+# Rust build output
 /target/
 
-# Cargo-generated artifacts
-debug
-*.pdb
-**/*.rs.bk
-**/mutants.out*/
+# Downloaded MLX model repositories. Keep root-level model documentation and
+# manifests trackable; downloaded repository directories remain ignored by
+# models/.gitignore.
+/models/*
+!/models/.gitignore
+!/models/README.md
+!/models/*.md
+!/models/*.json
+!/models/*.toml
 
-# Downloaded model weights (fetched by download-model.sh)
-models/*.gguf
+# Local environment and secrets
+.env
+.env.*
+!.env.example
 
 # Editor / OS noise
 .DS_Store

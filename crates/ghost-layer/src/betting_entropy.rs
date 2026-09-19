@@ -6,6 +6,7 @@
 //! bet sizes rather than betting arbitrary amounts.
 
 use rand::Rng;
+use thiserror::Error;
 
 /// The canonical human discretization menu, as pot fractions.
 pub const SIZING_MENU: [f64; 11] = [0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5];
@@ -28,6 +29,37 @@ impl Default for BettingEntropyConfig {
     }
 }
 
+/// Semantic validation errors for [`BettingEntropyConfig`].
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum BettingEntropyConfigError {
+    #[error("off_grid_probability must be finite and between zero and one")]
+    InvalidProbability,
+    #[error("off_grid_jitter must be finite and non-negative")]
+    InvalidJitter,
+}
+
+impl BettingEntropyConfig {
+    /// Validate parameters before constructing a sampler or loading a profile.
+    pub fn validate(&self) -> Result<(), BettingEntropyConfigError> {
+        if !self.off_grid_probability.is_finite()
+            || !(0.0..=1.0).contains(&self.off_grid_probability)
+        {
+            return Err(BettingEntropyConfigError::InvalidProbability);
+        }
+        if !self.off_grid_jitter.is_finite() || self.off_grid_jitter < 0.0 {
+            return Err(BettingEntropyConfigError::InvalidJitter);
+        }
+        Ok(())
+    }
+}
+
+/// Errors from bounded bet humanization.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum HumanizeError {
+    #[error("minimum legal bet {min} exceeds maximum legal bet {max}")]
+    InvalidLegalBounds { min: u32, max: u32 },
+}
+
 /// Maps solver-recommended bet sizes to human-like discretized sizes.
 #[derive(Debug, Clone)]
 pub struct BettingEntropy {
@@ -35,41 +67,83 @@ pub struct BettingEntropy {
 }
 
 impl BettingEntropy {
+    /// Construct a humanizer. Invalid manually supplied configuration is
+    /// handled safely by [`Self::humanize`]; prefer [`Self::try_new`] when
+    /// validation feedback is useful.
     pub fn new(config: BettingEntropyConfig) -> Self {
         Self { config }
+    }
+
+    /// Construct a humanizer after validating its configuration.
+    pub fn try_new(config: BettingEntropyConfig) -> Result<Self, BettingEntropyConfigError> {
+        config.validate()?;
+        Ok(Self { config })
     }
 
     /// Convert a target bet (in chips) into a human-like bet size.
     ///
     /// With probability `off_grid_probability` the result is jittered
     /// off-grid by up to `off_grid_jitter`; otherwise it snaps to the
-    /// nearest menu fraction of the pot.
+    /// nearest menu fraction of the pot. A zero target remains zero.
     pub fn humanize<R: Rng + ?Sized>(&self, rng: &mut R, target_bet: u32, pot: u32) -> u32 {
-        if pot == 0 {
+        if target_bet == 0 || pot == 0 {
             return target_bet;
         }
 
         let target_fraction = f64::from(target_bet) / f64::from(pot);
+        let probability = self.config.off_grid_probability;
+        let off_grid = probability.is_finite()
+            && probability > 0.0
+            && probability <= 1.0
+            && rng.gen_bool(probability);
 
-        if rng.gen_bool(self.config.off_grid_probability) {
-            // Rare off-grid event: jitter around the target fraction.
-            let jitter = rng.gen_range(-self.config.off_grid_jitter..self.config.off_grid_jitter);
+        if off_grid {
+            // A zero or invalid jitter produces the unchanged target instead
+            // of constructing an empty/invalid gen_range interval.
+            let jitter_limit = self.config.off_grid_jitter;
+            let jitter = if jitter_limit.is_finite() && jitter_limit > 0.0 {
+                rng.gen_range(-jitter_limit..jitter_limit)
+            } else {
+                0.0
+            };
             let fraction = (target_fraction * (1.0 + jitter)).max(0.0);
             return (f64::from(pot) * fraction).round().max(1.0) as u32;
         }
 
-        // Snap to the nearest menu item.
+        // Snap to the nearest menu item. total_cmp remains defined for every
+        // floating-point value and avoids a partial_cmp unwrap.
         let nearest = SIZING_MENU
             .iter()
-            .min_by(|a, b| {
-                let da = (**a - target_fraction).abs();
-                let db = (**b - target_fraction).abs();
-                da.partial_cmp(&db).expect("finite values")
-            })
             .copied()
-            .expect("menu is non-empty");
+            .min_by(|a, b| {
+                let da = (*a - target_fraction).abs();
+                let db = (*b - target_fraction).abs();
+                da.total_cmp(&db)
+            })
+            .unwrap_or(1.0);
 
         (f64::from(pot) * nearest).round().max(1.0) as u32
+    }
+
+    /// Humanize a target while enforcing explicit legal amount bounds.
+    pub fn humanize_bounded<R: Rng + ?Sized>(
+        &self,
+        rng: &mut R,
+        target_bet: u32,
+        pot: u32,
+        min_legal: u32,
+        max_legal: u32,
+    ) -> Result<u32, HumanizeError> {
+        if min_legal > max_legal {
+            return Err(HumanizeError::InvalidLegalBounds {
+                min: min_legal,
+                max: max_legal,
+            });
+        }
+        Ok(self
+            .humanize(rng, target_bet, pot)
+            .max(min_legal)
+            .min(max_legal))
     }
 }
 
@@ -111,6 +185,55 @@ mod tests {
     }
 
     #[test]
+    fn zero_jitter_is_safe() {
+        let entropy = BettingEntropy::try_new(BettingEntropyConfig {
+            off_grid_probability: 1.0,
+            off_grid_jitter: 0.0,
+        })
+        .expect("valid config");
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        assert_eq!(entropy.humanize(&mut rng, 500, 1000), 500);
+    }
+
+    #[test]
+    fn zero_target_is_preserved() {
+        let entropy = BettingEntropy::new(BettingEntropyConfig::default());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        assert_eq!(entropy.humanize(&mut rng, 0, 1000), 0);
+    }
+
+    #[test]
+    fn bounded_humanization_respects_legal_amounts() {
+        let entropy = BettingEntropy::new(BettingEntropyConfig {
+            off_grid_probability: 0.0,
+            off_grid_jitter: 0.0,
+        });
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        assert_eq!(
+            entropy
+                .humanize_bounded(&mut rng, 2400, 1000, 100, 1200)
+                .expect("valid bounds"),
+            1200
+        );
+        assert_eq!(
+            entropy
+                .humanize_bounded(&mut rng, 100, 1000, 400, 800)
+                .expect("valid bounds"),
+            400
+        );
+    }
+
+    #[test]
+    fn bounded_humanization_rejects_inverted_bounds() {
+        let entropy = BettingEntropy::new(BettingEntropyConfig::default());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        assert_eq!(
+            entropy.humanize_bounded(&mut rng, 500, 1000, 600, 500),
+            Err(HumanizeError::InvalidLegalBounds { min: 600, max: 500 })
+        );
+    }
+
+    #[test]
     fn zero_pot_passes_target_through() {
         let entropy = BettingEntropy::new(BettingEntropyConfig::default());
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
@@ -118,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn never_returns_zero() {
+    fn positive_target_never_returns_zero() {
         let entropy = BettingEntropy::new(BettingEntropyConfig {
             off_grid_probability: 1.0,
             off_grid_jitter: 0.9,

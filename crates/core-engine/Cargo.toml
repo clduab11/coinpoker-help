@@ -6,10 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 description = "Mathematical decision kernel: pot odds, implied odds, equity, and expected value"
+publish = false
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 rand = { workspace = true }
 rs_poker = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -18,7 +18,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-rust-version = "1.75"
+rust-version = "1.95"
 authors = ["coinpoker-help contributors"]
 description = "A modular decision-support framework for stochastic gaming environments"
 
@@ -28,6 +28,7 @@ description = "A modular decision-support framework for stochastic gaming enviro
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
 thiserror = "2"
 rand = "0.8"
 rand_distr = "0.4"
@@ -37,9 +38,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 rs_poker = { version = "4.1", default-features = false, features = ["serde"] }
 egui = "0.36"
 eframe = "0.36"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 
 [profile.release]
 lto = "fat"

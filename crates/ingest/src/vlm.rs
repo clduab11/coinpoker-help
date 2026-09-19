@@ -35,6 +35,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::capture::Frame;
+use crate::prompt::SYSTEM_PROMPT;
 
 /// Errors produced by the VLM layer.
 #[derive(Debug, Error)]
@@ -54,6 +55,9 @@ pub enum VlmError {
     /// The frame could not be encoded for submission.
     #[error("image encoding failed: {0}")]
     ImageEncoding(String),
+    /// The model stopped because the generation budget was exhausted.
+    #[error("VLM response was truncated (finish_reason: {0})")]
+    Truncated(String),
 }
 
 /// Configuration for the VLM backend.
@@ -75,9 +79,9 @@ impl Default for VlmConfig {
     fn default() -> Self {
         Self {
             endpoint: "http://127.0.0.1:8080/v1/chat/completions".to_string(),
-            model: "gemma-4-e2b-it".to_string(),
+            model: "gemma-4-e2b-it-OptiQ-4bit".to_string(),
             temperature: 0.1,
-            max_tokens: 256,
+            max_tokens: 1024,
             timeout_secs: 30,
         }
     }
@@ -111,6 +115,9 @@ impl MlxServerBackend {
     pub fn new(config: VlmConfig) -> Self {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(config.timeout_secs))
+            // The endpoint policy is validated before construction. Following
+            // redirects could otherwise escape an approved loopback endpoint.
+            .redirects(0)
             .build();
         Self { config, agent }
     }
@@ -129,16 +136,22 @@ impl VlmBackend for MlxServerBackend {
             "model": self.config.model,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    { "type": "text", "text": prompt },
-                    { "type": "image_url", "image_url": { "url": data_url } }
-                ]
-            }]
+            "messages": [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": prompt },
+                        { "type": "image_url", "image_url": { "url": data_url } }
+                    ]
+                }
+            ]
         });
 
-        // ureq 2.x surfaces non-2xx statuses as `Error::Status`, so handle
+        // ureq 2.x surfaces 4xx/5xx statuses as `Error::Status`, so handle
         // that variant explicitly to preserve the server's error body.
         let response = match self.agent.post(&self.config.endpoint).send_json(body) {
             Ok(response) => response,
@@ -151,6 +164,16 @@ impl VlmBackend for MlxServerBackend {
             Err(e) => return Err(VlmError::Request(e.to_string())),
         };
 
+        // With redirects disabled, ureq returns 3xx responses directly rather
+        // than as `Error::Status`; surface them before parsing the body.
+        let status = response.status();
+        if !(200..300).contains(&status) {
+            let body = response
+                .into_string()
+                .map_err(|e| VlmError::Request(e.to_string()))?;
+            return Err(VlmError::Server { status, body });
+        }
+
         let text = response
             .into_string()
             .map_err(|e| VlmError::Request(e.to_string()))?;
@@ -161,7 +184,9 @@ impl VlmBackend for MlxServerBackend {
 
 /// Encode a frame as a PNG and wrap it in a `data:` URL for submission.
 fn encode_frame_as_png_data_url(frame: &Frame) -> Result<String, VlmError> {
-    let img = frame.to_rgba_image();
+    let img = frame
+        .to_rgba_image()
+        .map_err(|e| VlmError::ImageEncoding(e.to_string()))?;
     let mut png = Vec::new();
     img.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
         .map_err(|e| VlmError::ImageEncoding(e.to_string()))?;
@@ -179,6 +204,8 @@ struct ChatResponse {
 #[derive(Debug, Deserialize)]
 struct ChatChoice {
     message: ChatMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,13 +216,30 @@ struct ChatMessage {
 fn parse_chat_response(body: &str) -> Result<VlmOutput, VlmError> {
     let parsed: ChatResponse =
         serde_json::from_str(body).map_err(|e| VlmError::Parse(e.to_string()))?;
-    let content = parsed
+    let choice = parsed
         .choices
         .into_iter()
         .next()
-        .map(|c| c.message.content)
         .ok_or_else(|| VlmError::Parse("response contained no choices".to_string()))?;
-    Ok(VlmOutput { text: content })
+
+    if matches!(
+        choice.finish_reason.as_deref(),
+        Some("length" | "max_tokens")
+    ) {
+        return Err(VlmError::Truncated(
+            choice.finish_reason.unwrap_or_default(),
+        ));
+    }
+
+    if choice.message.content.trim().is_empty() {
+        return Err(VlmError::Parse(
+            "response contained empty message content".to_string(),
+        ));
+    }
+
+    Ok(VlmOutput {
+        text: choice.message.content,
+    })
 }
 
 #[cfg(test)]
@@ -203,6 +247,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc::{self, Receiver};
     use std::thread;
 
     fn tiny_frame() -> Frame {
@@ -217,14 +262,14 @@ mod tests {
 
     /// Read a full HTTP request (headers + Content-Length body) so the mock
     /// server can respond without triggering a connection reset.
-    fn read_http_request(stream: &mut TcpStream) {
+    fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
         let mut buf = [0u8; 4096];
         let mut data: Vec<u8> = Vec::new();
 
         let header_end = loop {
             let n = stream.read(&mut buf).expect("read request");
             if n == 0 {
-                return;
+                return Vec::new();
             }
             data.extend_from_slice(&buf[..n]);
             if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
@@ -249,20 +294,40 @@ mod tests {
             }
             data.extend_from_slice(&buf[..n]);
         }
+
+        data[header_end..data.len().min(header_end + content_length)].to_vec()
     }
 
-    /// Spawn a one-shot mock server that reads the request and replies with
-    /// the given status line and JSON body. Returns the bound port.
-    fn mock_server(status_line: &'static str, body: &'static str) -> u16 {
+    /// Spawn a one-shot mock server that captures the request body and replies
+    /// with the given status line and body.
+    fn mock_server(status_line: &'static str, body: &'static str) -> (u16, Receiver<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (request_tx, request_rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request_body = read_http_request(&mut stream);
+            request_tx.send(request_body).expect("send request body");
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+
+        (port, request_rx)
+    }
+
+    fn mock_redirect_server(location: String) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
 
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
-            read_http_request(&mut stream);
+            let _ = read_http_request(&mut stream);
             let response = format!(
-                "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
+                "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             );
             stream.write_all(response.as_bytes()).expect("write");
         });
@@ -306,6 +371,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_truncated_chat_completion() {
+        let body = r#"{
+            "choices": [{
+                "message": {"role": "assistant", "content": "{\"game_phase\":"},
+                "finish_reason": "length"
+            }]
+        }"#;
+        assert!(matches!(
+            parse_chat_response(body),
+            Err(VlmError::Truncated(reason)) if reason == "length"
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_chat_completion_content() {
+        let body = r#"{
+            "choices": [{
+                "message": {"role": "assistant", "content": "  \n "},
+                "finish_reason": "stop"
+            }]
+        }"#;
+        assert!(matches!(parse_chat_response(body), Err(VlmError::Parse(_))));
+    }
+
+    #[test]
+    fn malformed_frame_encoding_returns_error() {
+        let frame = Frame {
+            width: 2,
+            height: 2,
+            rgba: vec![0; 15],
+        };
+        assert!(matches!(
+            encode_frame_as_png_data_url(&frame),
+            Err(VlmError::ImageEncoding(_))
+        ));
+    }
+
+    #[test]
     fn request_to_closed_port_fails_cleanly() {
         // Bind a port and drop the listener so nothing is listening.
         let port = {
@@ -326,9 +429,9 @@ mod tests {
 
     #[test]
     fn happy_path_against_mock_server() {
-        let port = mock_server(
+        let (port, request_rx) = mock_server(
             "200 OK",
-            r#"{"choices":[{"message":{"role":"assistant","content":"{\"action_required\":true}"}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"{\"action_required\":true}"},"finish_reason":"stop"}]}"#,
         );
 
         let config = VlmConfig {
@@ -341,11 +444,47 @@ mod tests {
             .analyze(&tiny_frame(), "describe the table")
             .expect("mock server responds");
         assert_eq!(out.text, "{\"action_required\":true}");
+
+        let request_body = request_rx.recv().expect("captured request body");
+        let request: serde_json::Value =
+            serde_json::from_slice(&request_body).expect("request is JSON");
+        let messages = request["messages"].as_array().expect("messages array");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], SYSTEM_PROMPT);
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"][0]["type"], "text");
+        assert_eq!(messages[1]["content"][0]["text"], "describe the table");
+        assert_eq!(messages[1]["content"][1]["type"], "image_url");
+        assert!(messages[1]["content"][1]["image_url"]["url"]
+            .as_str()
+            .expect("image data URL")
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn redirects_are_surfaced_instead_of_followed() {
+        let target_port = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+            listener.local_addr().expect("addr").port()
+        };
+        let port =
+            mock_redirect_server(format!("http://127.0.0.1:{target_port}/unapproved-target"));
+        let config = VlmConfig {
+            endpoint: format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            timeout_secs: 2,
+            ..VlmConfig::default()
+        };
+        let backend = MlxServerBackend::new(config);
+        let err = backend
+            .analyze(&tiny_frame(), "describe the table")
+            .expect_err("redirect must not be followed");
+        assert!(matches!(err, VlmError::Server { status: 302, .. }));
     }
 
     #[test]
     fn server_error_status_is_surfaced() {
-        let port = mock_server("404 Not Found", "model not found");
+        let (port, _request_rx) = mock_server("404 Not Found", "model not found");
 
         let config = VlmConfig {
             endpoint: format!("http://127.0.0.1:{port}/v1/chat/completions"),

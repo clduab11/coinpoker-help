@@ -4,10 +4,10 @@
 //! system needs: pot odds, implied odds, hand equity, and expected value
 //! for multi-way pots.
 //!
-//! Modules (built out in subsequent steps):
-//! - `pot_odds` — pot odds, implied odds, multi-way EV
+//! Modules:
+//! - `pot_odds` — pot odds, implied odds, and expected value
 //! - `equity`   — Monte Carlo equity estimation via `rs-poker`
-//! - `decision` — Fold/Call/Raise recommendation with confidence bounds
+//! - `decision` — legal-action-aware Fold/Check/Call/Raise recommendations
 
 pub mod decision;
 pub mod equity;

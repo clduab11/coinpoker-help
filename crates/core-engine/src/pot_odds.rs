@@ -11,7 +11,7 @@ pub fn pot_odds_fraction(pot: u32, to_call: u32) -> Option<f64> {
     if to_call == 0 {
         return None;
     }
-    Some(f64::from(to_call) / f64::from(pot + to_call))
+    Some(f64::from(to_call) / (f64::from(pot) + f64::from(to_call)))
 }
 
 /// Pot odds expressed as a ratio `pot : to_call` (e.g. `3.0` means 3:1).
@@ -32,7 +32,10 @@ pub fn implied_odds_fraction(pot: u32, to_call: u32, estimated_future_bet: u32) 
     if to_call == 0 {
         return None;
     }
-    Some(f64::from(to_call) / f64::from(pot + to_call + estimated_future_bet))
+    Some(
+        f64::from(to_call)
+            / (f64::from(pot) + f64::from(to_call) + f64::from(estimated_future_bet)),
+    )
 }
 
 /// The minimum equity required for a call to break even.
@@ -47,18 +50,28 @@ pub fn break_even_equity(pot: u32, to_call: u32) -> Option<f64> {
 ///
 /// `ev = equity * (pot + to_call) - to_call`.
 pub fn ev_call(equity: f64, pot: u32, to_call: u32) -> f64 {
-    equity * f64::from(pot + to_call) - f64::from(to_call)
+    equity * (f64::from(pot) + f64::from(to_call)) - f64::from(to_call)
 }
 
-/// Expected value of raising to `raise_amount`, in chips, given an
+/// Expected value of paying `hero_raise_cost` to raise, in chips, given an
 /// estimated probability `fold_equity` that all opponents fold.
 ///
-/// When opponents fold the hero wins the current pot; otherwise the
-/// raise is treated as a call at the higher price.
-pub fn ev_raise(equity: f64, pot: u32, raise_amount: u32, fold_equity: f64) -> f64 {
+/// Both `hero_raise_cost` and `expected_caller_contribution` are incremental
+/// amounts added to the current pot. The caller contribution is the aggregate
+/// expected amount from every caller, not a per-opponent amount. When all
+/// opponents fold the hero wins the current pot; otherwise the final pot
+/// includes the current pot and both incremental contributions.
+pub fn ev_raise(
+    equity: f64,
+    pot: u32,
+    hero_raise_cost: u32,
+    expected_caller_contribution: u32,
+    fold_equity: f64,
+) -> f64 {
     let fold_win = fold_equity * f64::from(pot);
-    let called =
-        (1.0 - fold_equity) * (equity * f64::from(pot + raise_amount) - f64::from(raise_amount));
+    let called_pot =
+        f64::from(pot) + f64::from(hero_raise_cost) + f64::from(expected_caller_contribution);
+    let called = (1.0 - fold_equity) * (equity * called_pot - f64::from(hero_raise_cost));
     fold_win + called
 }
 
@@ -105,12 +118,21 @@ mod tests {
     }
 
     #[test]
-    fn ev_raise_accounts_for_fold_equity() {
+    fn ev_raise_accounts_for_fold_equity_and_caller_contributions() {
         // Guaranteed fold: hero wins the pot outright.
-        let ev = ev_raise(0.3, 100, 200, 1.0);
+        let ev = ev_raise(0.3, 100, 200, 200, 1.0);
         assert!((ev - 100.0).abs() < 1e-9);
-        // No fold equity: equivalent to calling 200 into 100.
-        let ev = ev_raise(0.3, 100, 200, 0.0);
-        assert!((ev - (0.3 * 300.0 - 200.0)).abs() < 1e-9);
+        // No fold equity: the called pot includes both incremental contributions.
+        let ev = ev_raise(0.3, 100, 80, 60, 0.0);
+        assert!((ev - (0.3 * 240.0 - 80.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn arithmetic_widens_before_adding_chip_amounts() {
+        let max = u32::MAX;
+        assert!((pot_odds_fraction(max, max).unwrap() - 0.5).abs() < 1e-9);
+        assert!(implied_odds_fraction(max, max, max).unwrap().is_finite());
+        assert!(ev_call(0.5, max, max).is_finite());
+        assert!(ev_raise(0.5, max, max, max, 0.0).is_finite());
     }
 }

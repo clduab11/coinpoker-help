@@ -10,7 +10,7 @@ use crate::parser::{GamePhase, GameState};
 /// Events emitted by the state machine.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableEvent {
-    /// The table state changed meaningfully (new street, new cards, new pot).
+    /// Decision-relevant table state changed.
     StateChanged(GameState),
     /// It is the hero's turn to act.
     ActionRequired(GameState),
@@ -23,8 +23,6 @@ pub enum TableEvent {
 /// Tracks table state across observations and emits [`TableEvent`]s.
 #[derive(Debug, Clone, Default)]
 pub struct StateMachine {
-    last_phase: Option<GamePhase>,
-    last_action_required: bool,
     last_state: Option<GameState>,
 }
 
@@ -47,17 +45,14 @@ impl StateMachine {
                 }
             }
             Some(prev) => {
-                let phase_changed = prev.game_phase != state.game_phase;
-                let action_turned_on = !self.last_action_required && state.action_required;
-                let state_meaningfully_changed =
-                    prev.pot_size != state.pot_size || prev.board != state.board;
+                let action_turned_on = !prev.action_required && state.action_required;
 
                 if state.game_phase == GamePhase::Showdown && prev.game_phase != GamePhase::Showdown
                 {
                     TableEvent::Showdown(state.clone())
                 } else if action_turned_on {
                     TableEvent::ActionRequired(state.clone())
-                } else if phase_changed || state_meaningfully_changed {
+                } else if prev != &state {
                     TableEvent::StateChanged(state.clone())
                 } else {
                     TableEvent::NoChange
@@ -65,8 +60,6 @@ impl StateMachine {
             }
         };
 
-        self.last_phase = Some(state.game_phase);
-        self.last_action_required = state.action_required;
         self.last_state = Some(state);
         event
     }
@@ -78,8 +71,6 @@ impl StateMachine {
 
     /// Reset tracking so the next observation is treated as the first.
     pub fn reset(&mut self) {
-        self.last_phase = None;
-        self.last_action_required = false;
         self.last_state = None;
     }
 }
@@ -87,22 +78,31 @@ impl StateMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Card;
+    use crate::parser::{Card, PlayerState};
 
     fn state(phase: GamePhase, action: bool, pot: u32, board: usize) -> GameState {
         GameState {
             game_phase: phase,
             hero_cards: vec![],
-            board: vec![
-                Card {
-                    rank: "Q".to_string(),
-                    suit: "diamonds".to_string(),
-                };
-                board
-            ],
+            board: [
+                ("Q", "diamonds"),
+                ("7", "clubs"),
+                ("2", "spades"),
+                ("9", "hearts"),
+                ("J", "clubs"),
+            ]
+            .into_iter()
+            .take(board)
+            .map(|(rank, suit)| Card {
+                rank: rank.to_string(),
+                suit: suit.to_string(),
+            })
+            .collect(),
             pot_size: pot,
             to_call: 0,
             hero_chips: 0,
+            min_raise_to: None,
+            max_raise_to: None,
             players: vec![],
             action_required: action,
             available_actions: if action {
@@ -155,6 +155,64 @@ mod tests {
         // Action still required on the next observation: no repeat event.
         let event = sm.update(state(GamePhase::Preflop, true, 100, 0));
         assert_eq!(event, TableEvent::NoChange);
+    }
+
+    #[test]
+    fn to_call_change_emits_state_changed_while_action_remains_required() {
+        let mut sm = StateMachine::new();
+        let initial = state(GamePhase::Preflop, true, 100, 0);
+        sm.update(initial.clone());
+
+        let mut changed = initial;
+        changed.to_call = 50;
+        assert!(matches!(sm.update(changed), TableEvent::StateChanged(_)));
+    }
+
+    #[test]
+    fn hero_card_change_emits_state_changed_while_action_remains_required() {
+        let mut sm = StateMachine::new();
+        let initial = state(GamePhase::Preflop, true, 100, 0);
+        sm.update(initial.clone());
+
+        let mut changed = initial;
+        changed.hero_cards = vec![
+            Card {
+                rank: "A".to_string(),
+                suit: "spades".to_string(),
+            },
+            Card {
+                rank: "K".to_string(),
+                suit: "hearts".to_string(),
+            },
+        ];
+        assert!(matches!(sm.update(changed), TableEvent::StateChanged(_)));
+    }
+
+    #[test]
+    fn available_action_change_emits_state_changed_while_action_remains_required() {
+        let mut sm = StateMachine::new();
+        let initial = state(GamePhase::Preflop, true, 100, 0);
+        sm.update(initial.clone());
+
+        let mut changed = initial;
+        changed.available_actions.push("raise".to_string());
+        assert!(matches!(sm.update(changed), TableEvent::StateChanged(_)));
+    }
+
+    #[test]
+    fn player_change_emits_state_changed_while_action_remains_required() {
+        let mut sm = StateMachine::new();
+        let initial = state(GamePhase::Preflop, true, 100, 0);
+        sm.update(initial.clone());
+
+        let mut changed = initial;
+        changed.players.push(PlayerState {
+            name: "Villain".to_string(),
+            chips: 2_000,
+            last_action: Some("raise".to_string()),
+            bet_amount: 100,
+        });
+        assert!(matches!(sm.update(changed), TableEvent::StateChanged(_)));
     }
 
     #[test]

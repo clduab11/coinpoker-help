@@ -9,7 +9,7 @@ use serde::Serialize;
 /// Everything the panel needs to display for one decision point.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DecisionView {
-    /// Recommended action: fold, check, call, or raise.
+    /// Recommended action: fold, check, call, raise, or allin.
     pub action: String,
     /// Recommended total amount for a raise; 0 otherwise.
     pub amount: u32,
@@ -73,11 +73,19 @@ impl DecisionView {
 }
 
 /// Render the decision panel into an egui frame.
+#[cfg(feature = "desktop")]
 pub fn render_panel(ui: &mut egui::Ui, view: &DecisionView) {
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
+                let recommendation = if view.amount > 0 {
+                    format!("{} {}", view.action.to_uppercase(), view.amount)
+                } else {
+                    view.action.to_uppercase()
+                };
+                ui.label(egui::RichText::new(recommendation).size(32.0).strong());
+                ui.add_space(8.0);
                 ui.heading(format!("EV {}", view.ev_label()));
                 ui.add_space(6.0);
                 ui.label(format!("Equity: {}", view.equity_percent()));

@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::betting_entropy::BettingEntropyConfig;
-use crate::temporal::TemporalConfig;
+use crate::betting_entropy::{BettingEntropyConfig, BettingEntropyConfigError};
+use crate::temporal::{TemporalConfig, TemporalConfigError};
 
 /// Errors produced when loading or saving a profile.
 #[derive(Debug, Error)]
@@ -16,6 +16,17 @@ pub enum ProfileError {
     Io(#[from] std::io::Error),
     #[error("profile parse error: {0}")]
     Parse(#[from] serde_json::Error),
+    #[error("profile validation error: {0}")]
+    Validation(#[from] ProfileValidationError),
+}
+
+/// Typed semantic validation errors for [`GhostProfile`].
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum ProfileValidationError {
+    #[error("invalid temporal configuration: {0}")]
+    Temporal(#[from] TemporalConfigError),
+    #[error("invalid betting configuration: {0}")]
+    Betting(#[from] BettingEntropyConfigError),
 }
 
 /// The full set of human-parity parameters.
@@ -40,14 +51,24 @@ impl Default for GhostProfile {
 }
 
 impl GhostProfile {
-    /// Serialize the profile to a JSON string.
+    /// Validate temporal and betting configuration semantics.
+    pub fn validate(&self) -> Result<(), ProfileValidationError> {
+        self.temporal.validate()?;
+        self.betting.validate()?;
+        Ok(())
+    }
+
+    /// Serialize a validated profile to a JSON string.
     pub fn to_json(&self) -> Result<String, ProfileError> {
+        self.validate()?;
         Ok(serde_json::to_string_pretty(self)?)
     }
 
-    /// Deserialize a profile from a JSON string.
+    /// Deserialize and validate a profile from a JSON string.
     pub fn from_json(json: &str) -> Result<Self, ProfileError> {
-        Ok(serde_json::from_str(json)?)
+        let profile: Self = serde_json::from_str(json)?;
+        profile.validate()?;
+        Ok(profile)
     }
 
     /// Save the profile to a file.
@@ -101,5 +122,35 @@ mod tests {
     #[test]
     fn rejects_malformed_json() {
         assert!(GhostProfile::from_json("{not json").is_err());
+    }
+
+    #[test]
+    fn rejects_semantically_invalid_temporal_json() {
+        let json = r#"{
+            "name": "invalid",
+            "temporal": { "sigma_log": 0.35, "min_ms": 500.0, "max_ms": 10.0 },
+            "betting": { "off_grid_probability": 0.08, "off_grid_jitter": 0.05 }
+        }"#;
+        assert!(matches!(
+            GhostProfile::from_json(json),
+            Err(ProfileError::Validation(ProfileValidationError::Temporal(
+                TemporalConfigError::InvertedBounds
+            )))
+        ));
+    }
+
+    #[test]
+    fn rejects_semantically_invalid_betting_json() {
+        let json = r#"{
+            "name": "invalid",
+            "temporal": { "sigma_log": 0.35, "min_ms": 10.0, "max_ms": 3000.0 },
+            "betting": { "off_grid_probability": 1.5, "off_grid_jitter": 0.05 }
+        }"#;
+        assert!(matches!(
+            GhostProfile::from_json(json),
+            Err(ProfileError::Validation(ProfileValidationError::Betting(
+                BettingEntropyConfigError::InvalidProbability
+            )))
+        ));
     }
 }

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 description = "Behavioral mimicry layer: human-like temporal variance and betting entropy"
+publish = false
 
 [dependencies]
 serde = { workspace = true }

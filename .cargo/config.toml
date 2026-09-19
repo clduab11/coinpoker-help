@@ -1,16 +1,3 @@
-# Build configuration for the coinpoker-help workspace.
-#
-# The primary deployment target is Apple Silicon (M1 / aarch64-apple-darwin).
-# The flags below apply only when the corresponding target is selected, so a
-# plain `cargo check` on any other host (e.g. Windows, Linux, Intel macOS)
-# is unaffected.
-
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "target-cpu=apple-m1", "-C", "opt-level=3"]
-
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "target-cpu=core-avx2", "-C", "opt-level=3"]
-
-[build]
-# Keep the workspace buildable from any host; macOS-specific crates gate their
-# platform dependencies behind cfg(target_os = "macos").
+# Keep repository-wide Cargo behavior portable across developer and CI hosts.
+# CPU-specific tuning belongs in explicit release jobs or local RUSTFLAGS,
+# not in version-controlled target configuration.

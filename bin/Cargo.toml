@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 description = "coinpoker-help binary: wires ingestion, decision, mimicry, modeling, and UI"
+publish = false
 
 [[bin]]
 name = "coinpoker"
@@ -19,5 +20,4 @@ opponent-model = { path = "../crates/opponent-model" }
 ui = { path = "../crates/ui" }
 rand = { workspace = true }
 serde_json = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+url = { workspace = true }

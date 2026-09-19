@@ -1,4 +1,4 @@
-//! System prompt and few-shot templates for the vision model.
+//! System and analysis prompts for the vision model.
 //!
 //! Instructs the VLM to return strict JSON describing the visible table
 //! state (cards, pot, stacks, actions, phase). The prompt is paired with a
@@ -17,21 +17,34 @@ Rules:
 - Suits are one of: spades, hearts, diamonds, clubs.
 - game_phase is one of: lobby, preflop, flop, turn, river, showdown.
 - All numeric amounts are integers in chips (no commas, no decimals).
-- If a value is not visible, use 0 for numbers and empty arrays for lists.
-- action_required is true only when it is the hero's turn to act.
+- Always emit every field shown in the JSON schema, even when its value is unknown.
+- If a value is not visible, use 0 for numbers, null for unknown raise bounds, \
+and empty arrays for cards/actions that cannot be read.
+- Never guess or fabricate cards, chip amounts, players, actions, or raise bounds.
+- action_required is true only when it is the hero's turn to act and every \
+critical decision value is readable: both hero cards, the full board for the \
+phase, pot_size, to_call, hero_chips, Hero's current bet, at least one active \
+opponent, and the offered actions (including both raise bounds when raise is offered).
+- If any critical value or card is unreadable, set action_required to false and \
+available_actions to an empty array rather than fabricating a decision.
 - available_actions lists only the actions currently offered to the hero \
 (fold, check, call, raise, allin).
+- min_raise_to and max_raise_to are integer raise-to totals when raise is offered; \
+otherwise use null.
 
 JSON schema:
 {
-  \"game_phase\": \"preflop\",
+  \"game_phase\": \"flop\",
   \"hero_cards\": [{\"rank\": \"A\", \"suit\": \"spades\"}, {\"rank\": \"K\", \"suit\": \"hearts\"}],
-  \"board\": [{\"rank\": \"Q\", \"suit\": \"diamonds\"}],
+  \"board\": [{\"rank\": \"Q\", \"suit\": \"diamonds\"}, {\"rank\": \"7\", \"suit\": \"clubs\"}, {\"rank\": \"2\", \"suit\": \"spades\"}],
   \"pot_size\": 1250,
   \"to_call\": 500,
   \"hero_chips\": 2500,
+  \"min_raise_to\": 1500,
+  \"max_raise_to\": 3000,
   \"players\": [
-    {\"name\": \"Hero\", \"chips\": 2500, \"last_action\": \"raise\", \"bet_amount\": 500}
+    {\"name\": \"Hero\", \"chips\": 2500, \"last_action\": \"raise\", \"bet_amount\": 500},
+    {\"name\": \"Villain\", \"chips\": 3200, \"last_action\": \"call\", \"bet_amount\": 1000}
   ],
   \"action_required\": true,
   \"available_actions\": [\"fold\", \"call\", \"raise\"]
@@ -57,6 +70,14 @@ mod tests {
         assert!(SYSTEM_PROMPT.contains("\"game_phase\""));
         assert!(SYSTEM_PROMPT.contains("\"action_required\""));
         assert!(SYSTEM_PROMPT.contains("\"available_actions\""));
+        assert!(SYSTEM_PROMPT.contains("\"min_raise_to\""));
+        assert!(SYSTEM_PROMPT.contains("\"max_raise_to\""));
+        assert!(SYSTEM_PROMPT.contains("Always emit every field"));
+        assert!(SYSTEM_PROMPT.contains("set action_required to false"));
+        assert!(SYSTEM_PROMPT.contains("\"game_phase\": \"flop\""));
+        assert!(SYSTEM_PROMPT.contains("\"board\": [{\"rank\": \"Q\""));
+        assert!(SYSTEM_PROMPT.contains("\"name\": \"Hero\""));
+        assert!(SYSTEM_PROMPT.contains("\"name\": \"Villain\""));
     }
 
     #[test]

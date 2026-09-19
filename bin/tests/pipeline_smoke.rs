@@ -1,5 +1,5 @@
-//! End-to-end pipeline smoke test: observed state → parse → state machine →
-//! decision → humanized sizing → serializable decision view.
+//! Cross-crate integration smoke test: observed state → parse → state machine
+//! → decision → humanized sizing → serializable decision view.
 //!
 //! Runs on any host (no screen capture or VLM server required).
 
@@ -22,6 +22,8 @@ const FLOP_STATE: &str = r#"{
     "pot_size": 1000,
     "to_call": 500,
     "hero_chips": 5000,
+    "min_raise_to": 1000,
+    "max_raise_to": 5000,
     "players": [
         {"name": "Hero", "chips": 5000, "last_action": "check", "bet_amount": 0},
         {"name": "Villain", "chips": 5000, "last_action": "bet", "bet_amount": 500}
@@ -63,7 +65,7 @@ fn convert_cards(cards: &[ingest::parser::Card]) -> Vec<Card> {
 }
 
 #[test]
-fn full_pipeline_produces_a_decision_view() {
+fn cross_crate_pipeline_produces_a_decision_view() {
     // 1. VLM output → GameState.
     let output = VlmOutput {
         text: FLOP_STATE.to_string(),
@@ -81,36 +83,48 @@ fn full_pipeline_produces_a_decision_view() {
     let _ = classifier;
     let adjustment = ExploitEngine::new().adjust(archetype);
 
-    // 4. Equity: hero top pair + top kicker vs a representative hand.
+    // 4. Equity: hero top pair + top kicker against one unknown opponent.
     let estimator = EquityEstimator::new(EquityConfig { iterations: 2_000 });
     let hero = convert_cards(&state.hero_cards);
     let board = convert_cards(&state.board);
-    let opponent = vec![
-        Card::new(Rank::Queen, Suit::Hearts),
-        Card::new(Rank::Jack, Suit::Hearts),
-    ];
     let equity = estimator
-        .estimate(&[hero, opponent], &board)
-        .expect("estimate")[0];
+        .estimate_against_unknown(&hero, 1, &board)
+        .expect("estimate");
     assert!(equity > 0.5, "top pair should be ahead, got {equity}");
 
     // 5. Decision engine recommends an action.
     let engine = DecisionEngine::new();
-    let decision = engine.decide(&DecisionInput {
-        pot: state.pot_size,
-        to_call: state.to_call,
-        equity,
-        hero_chips: state.hero_chips,
-        fold_equity: (0.3 * adjustment.fold_equity_multiplier).clamp(0.0, 1.0),
-        raise_amount: 750,
-        can_check: false,
-    });
+    let decision = engine
+        .decide(&DecisionInput {
+            pot: state.pot_size,
+            to_call: state.to_call,
+            equity,
+            hero_chips: state.hero_chips,
+            hero_contribution: 0,
+            fold_equity: (0.3 * adjustment.fold_equity_multiplier).clamp(0.0, 1.0),
+            raise_to: 1_000,
+            min_raise_to: 1_000,
+            expected_caller_contribution: 500,
+            can_fold: true,
+            can_check: false,
+            can_call: true,
+            can_raise: true,
+        })
+        .expect("fixture offers legal actions");
 
     // 6. Ghost layer humanizes the sizing.
     let betting = BettingEntropy::new(BettingEntropyConfig::default());
     let mut rng = rand::rngs::StdRng::seed_from_u64(1);
     let amount = if decision.action == core_engine::decision::Action::Raise {
-        betting.humanize(&mut rng, decision.amount, state.pot_size)
+        betting
+            .humanize_bounded(
+                &mut rng,
+                decision.amount,
+                state.pot_size,
+                decision.amount,
+                state.hero_chips,
+            )
+            .expect("legal sizing bounds")
     } else {
         decision.amount
     };

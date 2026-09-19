@@ -1,3 +1,8 @@
-# Keep the models directory in git, but never commit model weights.
+# Keep model documentation/manifests trackable, but never commit downloaded
+# model repository directories or weight files.
 *
 !.gitignore
+!README.md
+!*.md
+!*.json
+!*.toml

@@ -5,13 +5,15 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Minimalist output interface: desktop decision panel and headless JSON/WebSocket output"
+description = "Minimalist output interface: optional desktop panel and headless JSON-lines output"
+publish = false
+
+[features]
+default = []
+desktop = ["dep:egui", "dep:eframe"]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
-egui = { workspace = true }
-eframe = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
+egui = { workspace = true, optional = true }
+eframe = { workspace = true, optional = true }
