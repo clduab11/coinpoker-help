@@ -262,3 +262,89 @@ mod tests {
         assert_eq!(x, y);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+    use rand::SeedableRng;
+
+    fn arb_betting_entropy_config() -> impl Strategy<Value = BettingEntropyConfig> {
+        (0.0..=1.0f64, 0.0..=0.5f64).prop_map(|(prob, jitter)| BettingEntropyConfig {
+            off_grid_probability: prob,
+            off_grid_jitter: jitter,
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn humanize_output_is_bounded(
+            config in arb_betting_entropy_config().prop_filter("valid", |c| c.validate().is_ok()),
+            pot in 1..=100_000u32,
+            target in 0..=100_000u32,
+            seed in 0..=u64::MAX,
+        ) {
+            let jitter_limit = config.off_grid_jitter;
+            let entropy = BettingEntropy::new(config);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let bet = entropy.humanize(&mut rng, target, pot);
+            if target == 0 {
+                prop_assert_eq!(bet, 0);
+            } else {
+                prop_assert!(bet >= 1);
+                // Off-grid scales the target by at most (1 + jitter); snapping
+                // never exceeds the largest menu item (3.5x pot). The result
+                // cannot exceed the larger of the two bounds.
+                let off_grid_max = (f64::from(target) * (1.0 + jitter_limit)).round().max(1.0) as u32;
+                let snap_max = (f64::from(pot) * 3.5).round().max(1.0) as u32;
+                prop_assert!(bet <= off_grid_max.max(snap_max));
+            }
+        }
+
+        #[test]
+        fn humanize_bounded_respects_legal_bounds(
+            config in arb_betting_entropy_config().prop_filter("valid", |c| c.validate().is_ok()),
+            pot in 1..=100_000u32,
+            target in 0..=100_000u32,
+            min_legal in 1..=10_000u32,
+            max_legal in 1..=10_000u32,
+            seed in 0..=u64::MAX,
+        ) {
+            if min_legal > max_legal {
+                return Ok(());
+            }
+            let entropy = BettingEntropy::new(config);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let bet = entropy.humanize_bounded(&mut rng, target, pot, min_legal, max_legal).unwrap();
+            prop_assert!(bet >= min_legal);
+            prop_assert!(bet <= max_legal);
+        }
+
+        #[test]
+        fn off_grid_output_stays_within_jitter_bounds(
+            jitter in 0.001..=0.2f64,
+            pot in 100..=10_000u32,
+            target in 100..=10_000u32,
+            seed in 0..=u64::MAX,
+        ) {
+            // Force every sample off-grid so the jitter invariant always applies.
+            let config = BettingEntropyConfig {
+                off_grid_probability: 1.0,
+                off_grid_jitter: jitter,
+            };
+            let entropy = BettingEntropy::new(config);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let target_fraction = f64::from(target) / f64::from(pot);
+
+            for _ in 0..100 {
+                let bet = entropy.humanize(&mut rng, target, pot);
+                let fraction = f64::from(bet) / f64::from(pot);
+                let lower = (target_fraction * (1.0 - jitter)).max(0.0);
+                let upper = target_fraction * (1.0 + jitter);
+                // Tolerate integer-chip rounding and the 1-chip floor.
+                prop_assert!(fraction >= lower - 0.02);
+                prop_assert!(fraction <= upper + 0.02);
+            }
+        }
+    }
+}

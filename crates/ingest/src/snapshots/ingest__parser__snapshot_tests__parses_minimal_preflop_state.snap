@@ -1,0 +1,30 @@
+---
+source: crates/ingest/src/parser.rs
+expression: state
+---
+{
+  "game_phase": "preflop",
+  "hero_cards": [],
+  "board": [],
+  "pot_size": 0,
+  "to_call": 0,
+  "hero_chips": 1000,
+  "min_raise_to": null,
+  "max_raise_to": null,
+  "players": [
+    {
+      "name": "Hero",
+      "chips": 1000,
+      "last_action": null,
+      "bet_amount": 0
+    },
+    {
+      "name": "Villain",
+      "chips": 1000,
+      "last_action": null,
+      "bet_amount": 0
+    }
+  ],
+  "action_required": false,
+  "available_actions": []
+}

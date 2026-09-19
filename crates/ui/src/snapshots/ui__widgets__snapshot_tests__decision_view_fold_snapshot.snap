@@ -1,0 +1,14 @@
+---
+source: crates/ui/src/widgets.rs
+expression: v
+---
+{
+  "action": "fold",
+  "amount": 0,
+  "ev": -0.25,
+  "pot_odds": 0.33,
+  "equity": 0.15,
+  "break_even": 0.33,
+  "opponent": "tag",
+  "confidence": 0.95
+}

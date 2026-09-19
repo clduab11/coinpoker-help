@@ -1,6 +1,9 @@
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
+const ACTION_STATE: &str = include_str!("fixtures/action_state.json");
+const CLEAR_STATE: &str = include_str!("fixtures/clear_state.json");
+
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_coinpoker"))
         .args(args)
@@ -89,8 +92,7 @@ fn stdin_rejects_states_missing_critical_numeric_fields() {
 
 #[test]
 fn stdin_emits_legal_decision_then_clear_event() {
-    let clear_state = r#"{"game_phase":"flop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"A","suit":"hearts"}],"board":[{"rank":"K","suit":"diamonds"},{"rank":"7","suit":"clubs"},{"rank":"2","suit":"spades"}],"pot_size":1000,"to_call":0,"hero_chips":5000,"min_raise_to":null,"max_raise_to":null,"players":[{"name":"Hero","chips":5000,"last_action":"check","bet_amount":0},{"name":"Villain","chips":5000,"last_action":"check","bet_amount":0}],"action_required":false,"available_actions":[]}"#;
-    let input = format!("{ACTION_STATE}\n{clear_state}\n");
+    let input = format!("{ACTION_STATE}\n{CLEAR_STATE}\n");
 
     let output = run_with_stdin(&["--stdin"], &input);
     assert!(output.status.success());

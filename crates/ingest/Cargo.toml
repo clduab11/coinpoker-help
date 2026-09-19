@@ -22,3 +22,7 @@ base64 = "0.22"
 # `macos_14_0` enables the single-frame screenshot API (SCScreenshotManager).
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "10.0", features = ["macos_14_0"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+insta = { workspace = true }

@@ -14,23 +14,7 @@ use opponent_model::exploit::ExploitEngine;
 use rand::SeedableRng;
 use ui::widgets::DecisionView;
 
-/// A flop state where the hero holds top pair and faces a half-pot bet.
-const FLOP_STATE: &str = r#"{
-    "game_phase": "flop",
-    "hero_cards": [{"rank": "A", "suit": "spades"}, {"rank": "K", "suit": "hearts"}],
-    "board": [{"rank": "A", "suit": "diamonds"}, {"rank": "7", "suit": "clubs"}, {"rank": "2", "suit": "spades"}],
-    "pot_size": 1000,
-    "to_call": 500,
-    "hero_chips": 5000,
-    "min_raise_to": 1000,
-    "max_raise_to": 5000,
-    "players": [
-        {"name": "Hero", "chips": 5000, "last_action": "check", "bet_amount": 0},
-        {"name": "Villain", "chips": 5000, "last_action": "bet", "bet_amount": 500}
-    ],
-    "action_required": true,
-    "available_actions": ["fold", "call", "raise"]
-}"#;
+const FLOP_STATE: &str = include_str!("fixtures/flop_state.json");
 
 fn convert_cards(cards: &[ingest::parser::Card]) -> Vec<Card> {
     cards

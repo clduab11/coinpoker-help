@@ -162,3 +162,64 @@ mod tests {
         assert!(v.summary().starts_with("raise 750"));
     }
 }
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use insta::assert_json_snapshot;
+
+    fn view() -> DecisionView {
+        DecisionView {
+            action: "call".to_string(),
+            amount: 0,
+            ev: 0.42,
+            pot_odds: Some(0.238),
+            equity: 0.412,
+            break_even: Some(0.238),
+            opponent: Some("lag".to_string()),
+            confidence: Some(0.82),
+        }
+    }
+
+    #[test]
+    fn decision_view_call_snapshot() {
+        let v = view();
+        assert_json_snapshot!(v);
+    }
+
+    #[test]
+    fn decision_view_raise_snapshot() {
+        let mut v = view();
+        v.action = "raise".to_string();
+        v.amount = 750;
+        v.ev = 1.23;
+        v.equity = 0.55;
+        assert_json_snapshot!(v);
+    }
+
+    #[test]
+    fn decision_view_fold_snapshot() {
+        let mut v = view();
+        v.action = "fold".to_string();
+        v.ev = -0.25;
+        v.equity = 0.15;
+        v.pot_odds = Some(0.33);
+        v.break_even = Some(0.33);
+        v.opponent = Some("tag".to_string());
+        v.confidence = Some(0.95);
+        assert_json_snapshot!(v);
+    }
+
+    #[test]
+    fn decision_view_no_pot_odds_snapshot() {
+        let mut v = view();
+        v.action = "check".to_string();
+        v.ev = 0.0;
+        v.equity = 0.5;
+        v.pot_odds = None;
+        v.break_even = None;
+        v.opponent = None;
+        v.confidence = None;
+        assert_json_snapshot!(v);
+    }
+}

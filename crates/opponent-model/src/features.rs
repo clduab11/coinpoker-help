@@ -181,3 +181,111 @@ mod tests {
         assert!((stats.won_at_showdown - 0.5).abs() < 1e-9);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_stats(
+        hands: u32,
+        vpip_count: u32,
+        pfr_count: u32,
+        aggressive: u32,
+        passive: u32,
+        saw_flop: u32,
+        showdowns: u32,
+        showdown_wins: u32,
+    ) -> PlayerStats {
+        let mut acc = StatsAccumulator::new();
+        for i in 0..hands {
+            acc.observe_hand(i < vpip_count, i < pfr_count);
+        }
+        for _ in 0..aggressive {
+            acc.observe_aggressive_action();
+        }
+        for _ in 0..passive {
+            acc.observe_passive_call();
+        }
+        for _ in 0..saw_flop {
+            acc.observe_flop_seen();
+        }
+        for i in 0..showdowns {
+            acc.observe_showdown(i < showdown_wins);
+        }
+        acc.stats()
+    }
+
+    proptest! {
+        #[test]
+        fn vpip_and_pfr_are_bounded_by_hands(
+            hands in 1..=1000u32,
+            vpip_count in 0..=1000u32,
+            pfr_count in 0..=1000u32,
+        ) {
+            let vpip_count = vpip_count.min(hands);
+            let pfr_count = pfr_count.min(vpip_count);
+            let stats = build_stats(hands, vpip_count, pfr_count, 0, 0, 0, 0, 0);
+            prop_assert!((0.0..=1.0).contains(&stats.vpip));
+            prop_assert!((0.0..=1.0).contains(&stats.pfr));
+            prop_assert!(stats.pfr <= stats.vpip + 1e-12);
+            prop_assert!((stats.vpip - ratio(vpip_count, hands)).abs() < 1e-12);
+            prop_assert!((stats.pfr - ratio(pfr_count, hands)).abs() < 1e-12);
+        }
+
+        #[test]
+        fn aggression_factor_is_bets_raises_over_calls(
+            aggressive in 0..=1000u32,
+            passive in 1..=1000u32,
+        ) {
+            let stats = build_stats(0, 0, 0, aggressive, passive, 0, 0, 0);
+            let expected = f64::from(aggressive) / f64::from(passive);
+            prop_assert!((stats.aggression_factor - expected).abs() < 1e-9);
+        }
+
+        #[test]
+        fn aggression_factor_without_calls_is_max_f64(
+            aggressive in 1..=1000u32,
+        ) {
+            let stats = build_stats(0, 0, 0, aggressive, 0, 0, 0, 0);
+            prop_assert_eq!(stats.aggression_factor, f64::MAX);
+        }
+
+        #[test]
+        fn showdown_ratios_use_correct_denominators_prop(
+            saw_flop in 1..=1000u32,
+            showdowns in 0..=1000u32,
+            showdown_wins in 0..=1000u32,
+        ) {
+            let showdowns = showdowns.min(saw_flop);
+            let showdown_wins = showdown_wins.min(showdowns);
+            let stats = build_stats(0, 0, 0, 0, 0, saw_flop, showdowns, showdown_wins);
+            prop_assert!((0.0..=1.0).contains(&stats.went_to_showdown));
+            prop_assert!((0.0..=1.0).contains(&stats.won_at_showdown));
+            prop_assert!((stats.went_to_showdown - ratio(showdowns, saw_flop)).abs() < 1e-12);
+            prop_assert!((stats.won_at_showdown - ratio(showdown_wins, showdowns)).abs() < 1e-12);
+        }
+
+        #[test]
+        fn stats_are_deterministic(
+            hands in 0..=100u32,
+            vpip_count in 0..=100u32,
+            pfr_count in 0..=100u32,
+            aggressive in 0..=100u32,
+            passive in 0..=100u32,
+            saw_flop in 0..=100u32,
+            showdowns in 0..=100u32,
+            showdown_wins in 0..=100u32,
+        ) {
+            let vpip_count = vpip_count.min(hands);
+            let pfr_count = pfr_count.min(vpip_count);
+            let showdowns = showdowns.min(saw_flop);
+            let showdown_wins = showdown_wins.min(showdowns);
+
+            let stats1 = build_stats(hands, vpip_count, pfr_count, aggressive, passive, saw_flop, showdowns, showdown_wins);
+            let stats2 = build_stats(hands, vpip_count, pfr_count, aggressive, passive, saw_flop, showdowns, showdown_wins);
+            prop_assert_eq!(stats1, stats2);
+        }
+    }
+}

@@ -1,0 +1,14 @@
+---
+source: crates/ui/src/widgets.rs
+expression: v
+---
+{
+  "action": "check",
+  "amount": 0,
+  "ev": 0.0,
+  "pot_odds": null,
+  "equity": 0.5,
+  "break_even": null,
+  "opponent": null,
+  "confidence": null
+}

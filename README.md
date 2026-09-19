@@ -1,113 +1,118 @@
 # coinpoker-help
 
-An experimental, human-confirmed decision-support framework for studying
-probabilistic poker decisions. It can ingest structured game state directly or,
-on supported macOS systems, capture a CoinPoker window and ask a separately run
-vision-language model (VLM) server to extract state. It emits recommendations;
-it does not inject mouse, keyboard, or game-client input.
+An experimental tool that helps a person study poker decisions. It watches a
+poker table (or reads a description of one), works out the odds and the best
+move, and prints a suggestion. It is a study aid — it never clicks, types, or
+controls the game for you.
 
-Users are responsible for complying with applicable laws, platform rules, and
-model licenses.
+You are responsible for following the law, the rules of any platform you use,
+and the licenses of any models you download.
 
-## Current architecture
+## What it does, in one picture
 
-```text
-macOS capture or JSON-lines stdin
-    -> state parsing and validation
-    -> phase state machine
-    -> Monte Carlo equity and EV calculations
-    -> bounded bet-size humanization
-    -> JSON-lines recommendation output
+```mermaid
+flowchart TB
+    A["CoinPoker window<br/>(macOS screen capture)"] --> B["capture<br/>take a screenshot of the table"]
+    B --> C["change detector<br/>act only when the picture changes"]
+    C --> D["vision model (VLM)<br/>a local AI that reads the table"]
+    E["GameState JSON lines<br/>(--stdin, works on any computer)"] --> F["parser<br/>turn the table into a clean snapshot"]
+    D --> F
+    F --> G["state machine<br/>notice when it is your turn"]
+    G --> H["equity and EV<br/>estimate your odds and value"]
+    G --> I["opponent model<br/>guess the opponent's style"]
+    G --> J["bet humanizer<br/>make bet sizes look natural"]
+    H --> K["decision engine<br/>pick fold, check, call, or raise"]
+    I --> K
+    J --> K
+    K --> L["JSON lines out<br/>one recommendation per line"]
 ```
 
-Workspace crates:
+In plain words: the program turns a poker table into a clean description, works
+out your chances of winning, and suggests whether to fold, check, call, or
+raise. You can feed it a table description directly, or (on a supported Mac) let
+it take a screenshot and have a local AI read the picture for you.
 
-- `ingest`: ScreenCaptureKit capture on macOS, change detection, VLM client,
-  parsing, and state transitions.
-- `core-engine`: pot odds, equity estimation, expected value, and legal action
-  selection.
-- `ghost-layer`: bet-size entropy, timing primitives, and profile storage.
-- `opponent-model`: feature accumulation, archetype classification, and exploit
-  adjustment primitives.
-- `ui`: lightweight decision-view/JSON-lines output plus an unwired egui panel
-  behind the optional `desktop` feature.
-- `bin`: the `coinpoker` CLI and pipeline wiring.
+## The building blocks
 
-## Requirements
+The code is split into small pieces, each with one job:
 
-- Rust 1.95+; `rust-toolchain.toml` pins 1.95.0 with `rustfmt` and `clippy`.
-- `--stdin` works on Windows, Linux, and macOS.
-- Live capture requires macOS 14+, Screen Recording permission, and a
-  discoverable CoinPoker window.
-- Local Gemma 4 MLX inference requires suitable Apple Silicon hardware and a
-  separate server that accepts OpenAI-compatible multimodal chat-completions.
+| Piece | What it does |
+| --- | --- |
+| `ingest` | Turns the real world into data: screenshots, noticing changes, asking the vision model to read the table, and turning the answer into a clean description. |
+| `core-engine` | The math: pot odds, the chance your hand wins, and the expected value of each move. |
+| `ghost-layer` | Makes the computer's choices look human: realistic bet sizes and timing. |
+| `opponent-model` | Keeps stats on opponents and guesses their playing style. |
+| `ui` | Formats the final suggestion as JSON lines (and has an optional, unfinished desktop window). |
+| `bin` | The `coinpoker` command-line program that wires everything together. |
 
-CI compiles and tests the workspace on Windows, Linux, and macOS. It does not
-exercise runtime ScreenCaptureKit permission prompts, live window discovery, or
-capture against the CoinPoker application.
+## What you need
 
-## CLI modes
+- Rust 1.95 or newer (the exact version is pinned so everyone builds the same way).
+- The `--stdin` mode works on Windows, Linux, and macOS.
+- Live screen capture needs macOS 14 or newer, permission to record the screen,
+  and a visible CoinPoker window.
+- The "read the table with AI" mode needs a suitable Apple Silicon Mac and a
+  separate local AI server running in the background.
+
+The project's automatic checks run on Windows, Linux, and macOS. They do not
+open a real game window or record a real screen — those parts are tested by a
+person on a Mac.
+
+## How to run it
 
 ```bash
-# macOS capture pipeline; emits recommendation JSON lines
+# Watch a live game on macOS and print suggestions
 cargo run --release --bin coinpoker
 
-# Cross-platform replay mode: GameState JSON lines in, recommendations out
+# Read table descriptions from a file or pipe (works anywhere)
 cargo run --release --bin coinpoker -- --stdin
 
-# macOS calibration: list all shareable windows
+# List the windows available to capture (macOS)
 cargo run --release --bin coinpoker -- --list-windows
 
-# Show supported options
+# See all options
 cargo run --release --bin coinpoker -- --help
 ```
 
-`--ui` is recognized but currently exits with status 2 because no live pipeline
-to the egui panel has been implemented. Use JSON-lines output instead.
+The `--ui` option is recognized but not finished yet, so it exits with an
+error. Use the JSON-lines output instead.
 
-## Screenshot and VLM data flow
+## How the vision mode works (and a privacy note)
 
-Capture mode takes a full image of the selected CoinPoker window. When change
-detection fires, the image is encoded as PNG, embedded in a data URL, and sent
-to the configured chat-completions endpoint. The default endpoint is local:
+In live mode, the program takes a full picture of the CoinPoker window. When the
+picture changes, it sends that picture to an AI that reads the table and
+describes it. By default the AI runs on your own computer at:
 
 ```text
 http://127.0.0.1:8080/v1/chat/completions
 ```
 
-Changing `COINPOKER_VLM_ENDPOINT` to a non-loopback address sends screenshots
-to that host. The CLI refuses remote endpoints by default. Remote use requires
-`COINPOKER_ALLOW_REMOTE_VLM=1` and an HTTPS endpoint; it can expose sensitive
-screen contents and should only be enabled with a trusted service, suitable
-authentication, and a reviewed retention policy. This client does not currently
-add an authorization header.
+Screenshots are private. For that reason the program refuses to send them
+anywhere except your own computer unless you take two deliberate steps: set
+`COINPOKER_ALLOW_REMOTE_VLM=1` **and** point `COINPOKER_VLM_ENDPOINT` at an
+HTTPS address you trust. Only do this if you understand that it can expose what
+is on your screen.
 
-The project does not bundle or start a VLM server. Confirm that the chosen
-server supports Gemma 4 vision input, the downloaded OptiQ layout, and the
-OpenAI-compatible image-message shape used by the client.
+The project does not download or start the AI server for you. You need a server
+that supports the Gemma 4 vision model and the image format this program sends.
 
-## Environment variables
+## Settings
 
-| Variable | Default | Purpose |
+| Setting | Default | What it does |
 | --- | --- | --- |
-| `COINPOKER_WINDOW_TITLE` | `CoinPoker` | Window-title substring used for capture selection |
-| `COINPOKER_APP_NAME` | `CoinPoker` | Owning-application substring used as a fallback capture match |
-| `COINPOKER_VLM_ENDPOINT` | `http://127.0.0.1:8080/v1/chat/completions` | Chat-completions endpoint used in capture mode |
-| `COINPOKER_VLM_MODEL` | `gemma-4-e2b-it-OptiQ-4bit` | Model name sent to the VLM server |
-| `COINPOKER_ALLOW_REMOTE_VLM` | unset | Set to `1` or `true` to permit a non-loopback HTTPS endpoint |
+| `COINPOKER_WINDOW_TITLE` | `CoinPoker` | Text used to find the right window |
+| `COINPOKER_APP_NAME` | `CoinPoker` | App name used as a fallback match |
+| `COINPOKER_VLM_ENDPOINT` | `http://127.0.0.1:8080/v1/chat/completions` | Where to send screenshots in live mode |
+| `COINPOKER_VLM_MODEL` | `gemma-4-e2b-it-OptiQ-4bit` | Model name sent to the AI server |
+| `COINPOKER_ALLOW_REMOTE_VLM` | unset | Set to `1` or `true` to allow sending screenshots to another computer |
 
-Empty values are ignored. Title matches are selected before application-name
-fallbacks. If several windows match the same selector, use `--list-windows` and
-a more specific `COINPOKER_WINDOW_TITLE`; matching within that tier selects the
-first on-screen result. If another model variant is served, set
-`COINPOKER_VLM_MODEL` to the name expected by that server.
+Empty values are ignored.
 
-## Pinned MLX models
+## Downloading the model
 
-`download-model.sh` downloads into `models/` using immutable Hugging Face
-revisions, verifies required configuration/tokenizer files, the vision sidecar,
-and every safetensors shard referenced by the index, then records provenance in
-`SOURCE_REVISION`.
+The script `download-model.sh` downloads the AI model into the `models/` folder,
+checks that all the files arrived correctly, and writes down exactly which
+version it downloaded.
 
 ```bash
 ./download-model.sh          # E2B OptiQ
@@ -115,90 +120,87 @@ and every safetensors shard referenced by the index, then records provenance in
 ./download-model.sh e2b-qat  # E2B QAT OptiQ
 ```
 
-The script requires Bash, Python 3, and preferably the current `hf` CLI
-(install with `curl -LsSf https://hf.co/cli/install.sh | bash -s`). A compatible
-deprecated `huggingface-cli` is retained only as a warned fallback.
-Downloads are large: allow roughly 5.3 GB for E2B/E2B-QAT or 7.5 GB for E4B,
-plus temporary working space.
+The download is large (about 5–7 GB). The script needs Bash, Python 3, and
+ideally the `hf` tool.
 
 | Variant | Revision | Terms |
 | --- | --- | --- |
 | E2B | `ffcf5c056bdd0df50627867ee8c7cba890eabe33` | Gemma Terms of Use |
 | E4B | `e1404a83551b6eb571dc5fb0de93e52310399bcd` | Gemma Terms of Use |
-| E2B QAT | `c6c6572580501e5fcb9248bf12040d25cfc71118` | Upstream metadata/card conflict; treat as Gemma terms pending clarification |
+| E2B QAT | `c6c6572580501e5fcb9248bf12040d25cfc71118` | Treat as Gemma terms pending clarification |
 
-Review `MODEL_LICENSES.md` before downloading or using weights. The repository's
-MIT license applies to source code, not to model artifacts.
+Read `MODEL_LICENSES.md` before downloading or using any weights. The MIT
+license covers this project's source code only — not the models.
 
-## Structured stdin mode
+## Feeding it a table by hand
 
-Each input line must be a complete `GameState` JSON object. `pot_size`,
-`to_call`, and `hero_chips` are required even when zero. Player names must not
-have surrounding whitespace, the exact `Hero` player's stack must match
-`hero_chips`, and actionable states require two hero cards plus at least one
-active opponent. States facing a bet must offer fold and call (or a short
-all-in), and exact `min_raise_to`/`max_raise_to` values are required whenever
-`raise` is offered. Invalid states are reported to stderr and skipped. If a
-recommendation is active, invalid input emits a `clear` record. A flop example
-is:
+In `--stdin` mode, each line is one description of a table. It must be valid
+JSON with the required fields. Here is a flop example:
 
 ```json
 {"game_phase":"flop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"K","suit":"hearts"}],"board":[{"rank":"A","suit":"diamonds"},{"rank":"7","suit":"clubs"},{"rank":"2","suit":"spades"}],"pot_size":1000,"to_call":500,"hero_chips":5000,"min_raise_to":1500,"max_raise_to":5000,"players":[{"name":"Hero","chips":5000,"last_action":"check","bet_amount":0},{"name":"Villain","chips":4500,"last_action":"bet","bet_amount":500}],"action_required":true,"available_actions":["fold","call","raise"]}
 ```
 
-## Current limitations
+If a line is wrong or incomplete, the program skips it and prints a warning.
 
-- The desktop UI feed is unavailable; `--ui` does not launch the panel.
-- Opponent-history accumulation is not integrated into the binary pipeline, so
-  live decisions currently classify the opponent as unknown.
-- Unknown-opponent equity uniformly samples distinct random holdings for every
-  visibly active opponent. It is multiway-aware for single-pot states, but it
-  is not yet conditioned on positions, action history, or learned/weighted
-  ranges. Multiway all-in states are suppressed until side-pot eligibility is
-  modeled.
-- The ghost-layer temporal sampler exists as a library primitive but is not
-  applied by the active CLI pipeline. Recommendations are emitted immediately
-  after calculation.
-- Capture, change detection, VLM inference, parsing, and decision output still
-  run serially. A post-inference capture suppresses results when the visible
-  frame changed during inference, but there is no cancellable latest-frame work
-  queue yet.
-- Change/freshness checks are pixel-threshold based and can miss semantically
-  important changes below that threshold.
-- Raise EV uses Hero's visible street contribution, exact raise-to bounds, and
-  an aggregate expected caller contribution. Until caller-count and
-  range-conditioned raise equity are modeled, the runtime does not recommend
-  raises with more than one visibly active opponent.
-- Headless consumers receive `{"event":"clear",...}` records when a prior
-  recommendation is no longer actionable; they must handle those invalidations.
-- The program provides recommendations only and does not execute actions.
+## How we keep the code healthy
 
-## Development validation
+Before any change is accepted, automated checks must pass. Run them all at once
+with one command (you need [just](https://github.com/casey/just) for this
+shortcut):
 
 ```bash
-cargo fmt --all -- --check
-cargo check --workspace --all-targets --all-features --locked
-cargo test --workspace --all-targets --all-features --locked
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-bash -n download-model.sh
+just validate
 ```
 
-See `CONTRIBUTING.md` for contribution expectations and `SECURITY.md` for
-private vulnerability reporting and screenshot-data guidance.
+Without `just`, run the checks one at a time:
 
-## Future experiments
+```bash
+cargo fmt --all -- --check                                     # is the formatting tidy?
+cargo check --workspace --all-targets --all-features --locked  # does it compile?
+cargo test --workspace --all-targets --all-features --locked   # do the tests pass?
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings  # does it follow best practices?
+cargo test --doc --workspace --all-features --locked           # do the examples in the docs work?
+bash -n download-model.sh                                      # is the download script written safely?
+```
 
-- Integrate observed hand history into opponent feature accumulation and
-  range-based equity estimation.
-- Wire an optional desktop feed without making it mandatory for headless use.
-- Add WebSocket transport for headless consumers.
-- Evaluate [Jev](https://typesafe.ai) only as an optional, feature-gated
-  shadow-mode semantic classifier for comparison, labeling, or diagnostics.
-  Jev is not intended to provide core poker mathematics, equity/EV calculations,
-  legality checks, or action selection, and any future integration must remain
-  non-authoritative until independently validated against a versioned dataset.
+Three kinds of tests keep the math honest:
+
+- **Rule tests** try thousands of random situations and check that the rules
+  always hold.
+- **Snapshot tests** save a copy of what the program produces, so any
+  unexpected change is obvious.
+- **End-to-end tests** run the finished program and check its real output.
+
+We also measure how much of the code the tests actually exercise. At least
+**80%** must be covered, or the change is rejected. Finally, we check that our
+dependencies have no known security problems:
+
+```bash
+cargo audit --locked   # needs the cargo-audit tool installed
+```
+
+See `CONTRIBUTING.md` for how to contribute and `SECURITY.md` for how to report
+problems privately.
+
+## What is not done yet
+
+- There is no finished desktop window; the `--ui` option does not open one.
+- Stats on opponents are not yet connected, so everyone is treated as
+  "unknown."
+- Some advanced poker situations are not modeled yet, such as side pots in
+  multi-way all-ins and ranges based on position and betting history.
+- The "human-like timing" feature exists but is not yet used in the live
+  pipeline.
+- The program only makes suggestions. It never plays for you.
+
+## What might come next
+
+- Learn from hands you have already played.
+- Finish the optional desktop window.
+- Add a WebSocket connection for other programs to subscribe to.
 
 ## License
 
-Source code is licensed under the MIT License. See `LICENSE`. Downloaded models
-have separate terms described in `MODEL_LICENSES.md`.
+The source code is licensed under the MIT License. See `LICENSE`. Downloaded
+models have their own terms, described in `MODEL_LICENSES.md`.

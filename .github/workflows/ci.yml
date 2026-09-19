@@ -17,8 +17,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
       - name: Install stable Rust
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
       - name: Formatting
         run: cargo +stable fmt --all -- --check
       - name: Check
@@ -27,20 +30,50 @@ jobs:
         run: cargo +stable test --workspace --all-targets --all-features --locked
       - name: Clippy
         run: cargo +stable clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Doc tests
+        run: cargo +stable test --doc --workspace --all-features --locked
 
   msrv:
     name: MSRV 1.95.0
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ hashFiles('**/Cargo.lock') }}
       - name: Install MSRV
-        run: rustup toolchain install 1.95.0 --profile minimal --component clippy
+        run: rustup toolchain install 1.95.0 --profile minimal --component clippy --component llvm-tools-preview
       - name: Check at MSRV
         run: cargo +1.95.0 check --workspace --all-targets --all-features --locked
       - name: Test at MSRV
         run: cargo +1.95.0 test --workspace --all-targets --all-features --locked
       - name: Strict clippy at MSRV
         run: cargo +1.95.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  coverage:
+    name: Coverage (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+      - name: Run coverage
+        run: cargo llvm-cov --workspace --all-targets --locked --fail-under-lines 80
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run audit
+        run: cargo audit --locked
 
   shell-syntax:
     name: Shell syntax
@@ -50,3 +83,10 @@ jobs:
       - name: Validate downloader syntax
         shell: bash
         run: bash -n download-model.sh
+      - name: Run shellcheck
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck download-model.sh
+          else
+            echo "shellcheck not installed, skipping (bash -n passed)"
+          fi

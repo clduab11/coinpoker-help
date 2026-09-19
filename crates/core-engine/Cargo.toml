@@ -16,3 +16,4 @@ rs_poker = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+proptest = { workspace = true }

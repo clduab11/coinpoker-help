@@ -1,0 +1,64 @@
+---
+source: crates/ingest/src/parser.rs
+expression: state
+---
+{
+  "game_phase": "river",
+  "hero_cards": [
+    {
+      "rank": "A",
+      "suit": "spades"
+    },
+    {
+      "rank": "A",
+      "suit": "hearts"
+    }
+  ],
+  "board": [
+    {
+      "rank": "A",
+      "suit": "diamonds"
+    },
+    {
+      "rank": "K",
+      "suit": "clubs"
+    },
+    {
+      "rank": "Q",
+      "suit": "hearts"
+    },
+    {
+      "rank": "J",
+      "suit": "spades"
+    },
+    {
+      "rank": "T",
+      "suit": "clubs"
+    }
+  ],
+  "pot_size": 5000,
+  "to_call": 2000,
+  "hero_chips": 2000,
+  "min_raise_to": 9000,
+  "max_raise_to": 7000,
+  "players": [
+    {
+      "name": "Hero",
+      "chips": 2000,
+      "last_action": "call",
+      "bet_amount": 5000
+    },
+    {
+      "name": "Villain",
+      "chips": 5000,
+      "last_action": "raise",
+      "bet_amount": 7000
+    }
+  ],
+  "action_required": true,
+  "available_actions": [
+    "fold",
+    "call",
+    "allin"
+  ]
+}
