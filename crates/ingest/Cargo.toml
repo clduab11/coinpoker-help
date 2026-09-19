@@ -14,7 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 image = { workspace = true }
 # Blocking HTTP client for the local MLX VLM server backend.
-ureq = { version = "2.12", features = ["json"] }
+ureq = { version = "3.4", features = ["json"] }
 base64 = "0.22"
 
 # macOS-only screen capture (ScreenCaptureKit bindings). The crate remains
