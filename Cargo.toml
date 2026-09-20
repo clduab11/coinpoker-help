@@ -37,7 +37,7 @@ rand_distr = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # NOTE: pinned to 4.1 with `arena` disabled — the `arena` feature requires a
 # nightly compiler (`#![feature(assert_matches)]`), and 5.x requires Rust 1.97+.
-rs_poker = { version = "4.1", default-features = false, features = ["serde"] }
+rs_poker = { version = "5.1", default-features = false, features = ["serde"] }
 egui = "0.36"
 eframe = "0.36"
 # Dev dependencies for property and snapshot testing (opt-in per crate)
