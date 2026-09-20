@@ -17,11 +17,7 @@ ingest = { path = "../crates/ingest" }
 core-engine = { path = "../crates/core-engine" }
 ghost-layer = { path = "../crates/ghost-layer" }
 opponent-model = { path = "../crates/opponent-model" }
-ui = { path = "../crates/ui" }
+ui = { path = "../crates/ui", features = ["desktop"] }
 rand = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
-
-[features]
-default = []
-desktop = ["ui/desktop"]

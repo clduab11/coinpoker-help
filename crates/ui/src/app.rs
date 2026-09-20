@@ -79,6 +79,7 @@ pub fn run_overlay(receiver: mpsc::Receiver<OverlayEvent>) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([crate::overlay::PANEL_SIZE.0, crate::overlay::PANEL_SIZE.1])
+            .with_position([0.0, 0.0])
             .with_title("CoinPoker Study Overlay")
             .with_transparent(true)
             .with_decorations(false)

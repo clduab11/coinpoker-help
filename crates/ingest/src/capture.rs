@@ -500,7 +500,22 @@ mod macos {
         }
 
         pub(super) fn bounds(&self) -> WindowBounds {
-            self.bounds
+            // The SCWindow used to create the stream has a startup-time frame.
+            // Refresh shareable content while the overlay is polling so table
+            // moves and resizes are reflected in subsequent position events.
+            SCShareableContent::get()
+                .ok()
+                .and_then(|content| find_window(&content, &self.config))
+                .and_then(|window| {
+                    let frame = window.frame();
+                    WindowBounds::from_cg_rect(
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height,
+                    )
+                })
+                .unwrap_or(self.bounds)
         }
 
         pub(super) fn take_stop_error(&self) -> Option<String> {
