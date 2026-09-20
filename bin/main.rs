@@ -9,12 +9,14 @@
 //!   on stdout.
 //! - `coinpoker --stdin`    — read `GameState` JSON lines from stdin and run
 //!   the decision pipeline (works on any host; used by tests and replay).
-//! - `coinpoker --ui`       — reserved; exits 2 until a live UI feed exists.
+//! - `coinpoker --ui`       — run the live pipeline and mirror decisions to a
+//!   transparent, click-through study overlay window.
 //! - `coinpoker --list-windows` — list capture candidates for calibration.
 
 use std::fmt;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
+use std::sync::mpsc;
 
 use coinpoker::cli::{parse_args, Mode, USAGE};
 use coinpoker::config::{capture_config_from_env, vlm_config_from_env};
@@ -26,6 +28,7 @@ use ingest::parser::{parse_vlm_output, validate_game_state, GameState};
 use ingest::prompt::build_analysis_prompt;
 use ingest::state_machine::{StateMachine, TableEvent};
 use ingest::vlm::{MlxServerBackend, VlmBackend};
+use ui::overlay::{OverlayEvent, TableBounds};
 
 #[derive(Debug)]
 enum RunError {
@@ -61,6 +64,7 @@ fn main() -> ExitCode {
         Mode::Capture => run_capture_pipeline(),
         Mode::Stdin => run_stdin_pipeline(),
         Mode::ListWindows => list_windows(),
+        Mode::Ui => run_ui_overlay(),
         Mode::Help => write!(io::stdout().lock(), "{USAGE}").map_err(RunError::from),
     };
 
@@ -69,7 +73,11 @@ fn main() -> ExitCode {
         Err(RunError::Io(error)) if error.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(error) => {
             let _ = writeln!(io::stderr().lock(), "{error}");
-            ExitCode::FAILURE
+            if matches!(mode, Mode::Ui) {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -151,10 +159,18 @@ fn run_stdin_pipeline() -> Result<(), RunError> {
     Ok(())
 }
 
-/// Capture-driven pipeline (macOS): consume SCStream frames, fire the VLM
-/// when a decision-relevant zone changes, require 2-of-3 consensus on the
-/// observed state, and emit decisions when the hero must act.
-fn run_capture_pipeline() -> Result<(), RunError> {
+/// A started live pipeline: capture, VLM backend, and per-observation state.
+struct LivePipeline {
+    capturer: WindowCapturer,
+    backend: MlxServerBackend,
+    zone_detector: ZoneChangeDetector,
+    consensus: ConsensusTracker,
+    state_machine: StateMachine,
+    pipeline: Pipeline,
+}
+
+/// Construct and start the capture pipeline, failing fast on startup errors.
+fn start_live_pipeline() -> Result<LivePipeline, RunError> {
     let mut capturer = WindowCapturer::new(capture_config_from_env()).map_err(|error| {
         RunError::Message(format!(
             "capture unavailable: {error}\nScreen capture requires macOS 14+ with Screen Recording permission granted in System Settings."
@@ -166,15 +182,37 @@ fn run_capture_pipeline() -> Result<(), RunError> {
 
     let config = vlm_config_from_env().map_err(RunError::Message)?;
     let backend = MlxServerBackend::new(config);
-    let mut zone_detector = ZoneChangeDetector::new(ZoneChangeDetectorConfig::default());
-    let mut consensus = ConsensusTracker::try_new(ConsensusConfig::default())
+    let zone_detector = ZoneChangeDetector::new(ZoneChangeDetectorConfig::default());
+    let consensus = ConsensusTracker::try_new(ConsensusConfig::default())
         .map_err(|error| RunError::Message(format!("consensus configuration invalid: {error}")))?;
-    let mut state_machine = StateMachine::new();
-    let pipeline = Pipeline::new();
-    let emitter = ui::headless::stdout();
 
+    Ok(LivePipeline {
+        capturer,
+        backend,
+        zone_detector,
+        consensus,
+        state_machine: StateMachine::new(),
+        pipeline: Pipeline::new(),
+    })
+}
+
+/// Run the live capture loop forever, forwarding events to `sink`.
+///
+/// Capture → zone change detection → VLM → 2-of-3 consensus → state machine
+/// → decision. The table window's on-screen bounds are polled each iteration
+/// and forwarded as position events so the overlay can track the table.
+fn run_live_loop(live: &mut LivePipeline, mut sink: impl FnMut(OverlayEvent)) -> ! {
     loop {
-        let frame = match capturer.latest_frame() {
+        if let Some(bounds) = live.capturer.window_bounds() {
+            sink(OverlayEvent::Position(TableBounds {
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height,
+            }));
+        }
+
+        let frame = match live.capturer.latest_frame() {
             Ok(Some(frame)) => frame,
             Ok(None) => {
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -182,34 +220,34 @@ fn run_capture_pipeline() -> Result<(), RunError> {
             }
             Err(error) => {
                 report_warning(format_args!("capture error: {error}"));
-                zone_detector.reset();
-                consensus.reset();
-                state_machine.reset();
-                emitter.emit_clear("capture-unavailable")?;
+                live.zone_detector.reset();
+                live.consensus.reset();
+                live.state_machine.reset();
+                sink(OverlayEvent::Clear("capture-unavailable".to_string()));
                 // The delegate-reported stop (window closed, permission
                 // revoked) needs a restart before frames flow again.
-                let _ = capturer.stop();
-                if capturer.start().is_err() {
+                let _ = live.capturer.stop();
+                if live.capturer.start().is_err() {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 }
                 continue;
             }
         };
 
-        if !zone_detector.detect(&frame).changed {
+        if !live.zone_detector.detect(&frame).changed {
             std::thread::sleep(std::time::Duration::from_millis(100));
             continue;
         }
 
         let prompt = build_analysis_prompt();
-        let output = match backend.analyze(&frame, &prompt) {
+        let output = match live.backend.analyze(&frame, &prompt) {
             Ok(output) => output,
             Err(error) => {
                 report_warning(format_args!("vlm error: {error}"));
-                zone_detector.reset();
-                consensus.reset();
-                state_machine.reset();
-                emitter.emit_clear("vlm-error")?;
+                live.zone_detector.reset();
+                live.consensus.reset();
+                live.state_machine.reset();
+                sink(OverlayEvent::Clear("vlm-error".to_string()));
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 continue;
             }
@@ -217,15 +255,17 @@ fn run_capture_pipeline() -> Result<(), RunError> {
 
         // Freshness check: a new frame arriving during inference that still
         // changes a decision-relevant zone invalidates the observation.
-        match capturer.latest_frame() {
+        match live.capturer.latest_frame() {
             Ok(Some(current_frame)) => {
-                if zone_detector.detect(&current_frame).changed {
+                if live.zone_detector.detect(&current_frame).changed {
                     report_warning(format_args!(
                         "decision suppressed: table changed during VLM inference"
                     ));
-                    consensus.reset();
-                    state_machine.reset();
-                    emitter.emit_clear("state-changed-during-inference")?;
+                    live.consensus.reset();
+                    live.state_machine.reset();
+                    sink(OverlayEvent::Clear(
+                        "state-changed-during-inference".to_string(),
+                    ));
                     continue;
                 }
             }
@@ -234,9 +274,9 @@ fn run_capture_pipeline() -> Result<(), RunError> {
                 report_warning(format_args!(
                     "freshness check failed after inference: {error}"
                 ));
-                consensus.reset();
-                state_machine.reset();
-                emitter.emit_clear("freshness-check-failed")?;
+                live.consensus.reset();
+                live.state_machine.reset();
+                sink(OverlayEvent::Clear("freshness-check-failed".to_string()));
                 continue;
             }
         }
@@ -245,10 +285,10 @@ fn run_capture_pipeline() -> Result<(), RunError> {
             Ok(state) => state,
             Err(error) => {
                 report_warning(format_args!("parse error: {error}"));
-                zone_detector.reset();
-                consensus.reset();
-                state_machine.reset();
-                emitter.emit_clear("invalid-observation")?;
+                live.zone_detector.reset();
+                live.consensus.reset();
+                live.state_machine.reset();
+                sink(OverlayEvent::Clear("invalid-observation".to_string()));
                 continue;
             }
         };
@@ -260,16 +300,16 @@ fn run_capture_pipeline() -> Result<(), RunError> {
                 report_warning(format_args!(
                     "observation discarded: perception confidence {confidence:.2} is below the minimum {MIN_PERCEPTION_CONFIDENCE}"
                 ));
-                consensus.reset();
-                state_machine.reset();
-                emitter.emit_clear("low-confidence")?;
+                live.consensus.reset();
+                live.state_machine.reset();
+                sink(OverlayEvent::Clear("low-confidence".to_string()));
                 continue;
             }
         }
 
         // 2-of-N consensus: only states confirmed by repeated observation
         // reach the state machine.
-        let confirmed = match consensus.observe(state) {
+        let confirmed = match live.consensus.observe(state) {
             ConsensusOutcome::Accepted(state) => state,
             ConsensusOutcome::Pending => {
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -277,31 +317,60 @@ fn run_capture_pipeline() -> Result<(), RunError> {
             }
         };
 
-        match state_machine.update(confirmed) {
+        match live.state_machine.update(confirmed) {
             TableEvent::ActionRequired(state) | TableEvent::StateChanged(state)
                 if state.action_required =>
             {
-                let view = match pipeline.decide(&state) {
+                let view = match live.pipeline.decide(&state) {
                     Ok(view) => view,
                     Err(error) => {
                         report_warning(format_args!("decision suppressed: {error}"));
-                        zone_detector.reset();
-                        consensus.reset();
-                        state_machine.reset();
-                        emitter.emit_clear("decision-suppressed")?;
+                        live.zone_detector.reset();
+                        live.consensus.reset();
+                        live.state_machine.reset();
+                        sink(OverlayEvent::Clear("decision-suppressed".to_string()));
                         continue;
                     }
                 };
-                emitter.emit_decision(&view)?;
+                sink(OverlayEvent::Decision(view));
             }
             TableEvent::StateChanged(_) | TableEvent::Showdown(_) => {
-                emitter.emit_clear("action-not-required")?;
+                sink(OverlayEvent::Clear("action-not-required".to_string()));
             }
             TableEvent::NoChange | TableEvent::ActionRequired(_) => {}
         }
 
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+}
+
+/// Headless capture pipeline: forward decisions as JSON lines on stdout.
+fn run_capture_pipeline() -> Result<(), RunError> {
+    let mut pipeline = start_live_pipeline()?;
+    let emitter = ui::headless::stdout();
+    run_live_loop(&mut pipeline, |event| match event {
+        OverlayEvent::Decision(view) => {
+            let _ = emitter.emit_decision(&view);
+        }
+        OverlayEvent::Clear(reason) => {
+            let _ = emitter.emit_clear(&reason);
+        }
+        OverlayEvent::Position(_) => {}
+    })
+}
+
+/// Live pipeline with a desktop study overlay.
+fn run_ui_overlay() -> Result<(), RunError> {
+    let mut pipeline = start_live_pipeline()?;
+    let (tx, rx) = mpsc::channel::<OverlayEvent>();
+    std::thread::spawn(move || {
+        run_live_loop(&mut pipeline, |event| {
+            let _ = tx.send(event);
+        });
+    });
+    ui::app::run_overlay(rx)
+        .map_err(|error| RunError::Message(format!("overlay failed: {error}")))?;
+    Ok(())
 }
 
 fn report_warning(arguments: fmt::Arguments<'_>) {

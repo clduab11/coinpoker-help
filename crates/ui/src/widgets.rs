@@ -72,36 +72,225 @@ impl DecisionView {
     }
 }
 
-/// Render the decision panel into an egui frame.
+/// A point in panel-local coordinates (y grows downward, matching egui).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point {
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+/// Clamp a value into the unit interval, mapping non-finite values to zero.
+pub fn clamp_unit(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// Map a unit fraction to a sweep angle in radians (a full turn at `1.0`).
+pub fn sweep_for_fraction(fraction: f64) -> f32 {
+    clamp_unit(fraction) as f32 * std::f32::consts::TAU
+}
+
+/// Sample `segments + 1` points along a circular arc.
+///
+/// `start_angle` and `sweep` are in radians. Angle `0` points right
+/// (3 o'clock) and positive angles sweep clockwise, matching egui's
+/// y-down coordinate system. `segments` is clamped to at least `2`.
+pub fn arc_points(
+    center: Point,
+    radius: f32,
+    start_angle: f32,
+    sweep: f32,
+    segments: usize,
+) -> Vec<Point> {
+    let segments = segments.max(2);
+    (0..=segments)
+        .map(|index| {
+            let t = index as f32 / segments as f32;
+            let angle = start_angle + sweep * t;
+            Point::new(
+                center.x + radius * angle.cos(),
+                center.y + radius * angle.sin(),
+            )
+        })
+        .collect()
+}
+
+/// The action badge label for a decision (for example `RAISE 750`).
+///
+/// The amount is appended only when the action moves chips.
+pub fn action_badge(action: &str, amount: u32) -> String {
+    let action = action.trim().to_ascii_uppercase();
+    if amount > 0 {
+        format!("{action} {amount}")
+    } else {
+        action
+    }
+}
+
+/// Render the overlay panel for one decision point.
 #[cfg(feature = "desktop")]
-pub fn render_panel(ui: &mut egui::Ui, view: &DecisionView) {
-    egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
-        .show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                let recommendation = if view.amount > 0 {
-                    format!("{} {}", view.action.to_uppercase(), view.amount)
-                } else {
-                    view.action.to_uppercase()
-                };
-                ui.label(egui::RichText::new(recommendation).size(32.0).strong());
-                ui.add_space(8.0);
-                ui.heading(format!("EV {}", view.ev_label()));
-                ui.add_space(6.0);
-                ui.label(format!("Equity: {}", view.equity_percent()));
-                if let Some(be) = view.break_even_percent() {
-                    ui.label(format!("Break-even: {be}"));
-                }
-                if let Some(odds) = view.pot_odds_ratio_label() {
-                    ui.label(format!("Pot odds: {odds}"));
-                }
-                if let (Some(opponent), Some(confidence)) = (&view.opponent, view.confidence) {
-                    ui.add_space(4.0);
-                    ui.label(format!("Opponent: {opponent}"));
-                    ui.label(format!("Confidence: {:.0}%", confidence * 100.0));
-                }
-            });
-        });
+pub fn render_overlay(ui: &mut egui::Ui, view: &DecisionView) {
+    let rect = ui.max_rect().shrink(16.0);
+    let painter = ui.painter();
+
+    painter.rect_filled(rect, 12.0, egui::Color32::from_black_alpha(150));
+
+    painter.text(
+        rect.left_top() + egui::vec2(0.0, 8.0),
+        egui::Align2::LEFT_TOP,
+        action_badge(&view.action, view.amount),
+        egui::FontId::proportional(30.0),
+        action_color(&view.action),
+    );
+
+    let metrics = rect.left_top() + egui::vec2(0.0, 52.0);
+    painter.text(
+        metrics,
+        egui::Align2::LEFT_TOP,
+        format!("EV {}", view.ev_label()),
+        egui::FontId::proportional(16.0),
+        egui::Color32::from_gray(230),
+    );
+    painter.text(
+        metrics + egui::vec2(0.0, 22.0),
+        egui::Align2::LEFT_TOP,
+        format!(
+            "Pot odds: {}",
+            view.pot_odds_ratio_label()
+                .unwrap_or_else(|| "-".to_string())
+        ),
+        egui::FontId::proportional(16.0),
+        egui::Color32::from_gray(230),
+    );
+    if let Some(break_even) = view.break_even_percent() {
+        painter.text(
+            metrics + egui::vec2(0.0, 44.0),
+            egui::Align2::LEFT_TOP,
+            format!("Break-even: {break_even}"),
+            egui::FontId::proportional(16.0),
+            egui::Color32::from_gray(230),
+        );
+    }
+
+    let equity_center = egui::pos2(rect.left() + 72.0, rect.bottom() - 64.0);
+    draw_equity_arc(painter, equity_center, 56.0, view.equity);
+    painter.text(
+        equity_center + egui::vec2(0.0, 8.0),
+        egui::Align2::CENTER_CENTER,
+        view.equity_percent(),
+        egui::FontId::proportional(16.0),
+        egui::Color32::from_gray(240),
+    );
+
+    if let Some(confidence) = view.confidence {
+        let ring_center = egui::pos2(rect.right() - 52.0, rect.bottom() - 52.0);
+        draw_confidence_ring(painter, ring_center, 40.0, confidence);
+        painter.text(
+            ring_center + egui::vec2(0.0, 12.0),
+            egui::Align2::CENTER_CENTER,
+            format!("{:.0}%", confidence * 100.0),
+            egui::FontId::proportional(13.0),
+            egui::Color32::from_gray(230),
+        );
+    }
+
+    if let Some(opponent) = &view.opponent {
+        painter.text(
+            rect.left_bottom() + egui::vec2(0.0, -8.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("Opponent: {opponent}"),
+            egui::FontId::proportional(14.0),
+            egui::Color32::from_gray(200),
+        );
+    }
+}
+
+/// Color for an action badge.
+#[cfg(feature = "desktop")]
+fn action_color(action: &str) -> egui::Color32 {
+    match action.trim().to_ascii_lowercase().as_str() {
+        "fold" => egui::Color32::from_rgb(230, 90, 90),
+        "check" => egui::Color32::from_rgb(120, 200, 120),
+        "call" => egui::Color32::from_rgb(240, 200, 90),
+        "raise" => egui::Color32::from_rgb(240, 150, 70),
+        "allin" => egui::Color32::from_rgb(210, 90, 220),
+        _ => egui::Color32::from_gray(200),
+    }
+}
+
+/// Paint a 270-degree equity gauge arc filled proportionally to `equity`.
+#[cfg(feature = "desktop")]
+fn draw_equity_arc(painter: &egui::Painter, center: egui::Pos2, radius: f32, equity: f64) {
+    const START: f32 = -std::f32::consts::FRAC_PI_2;
+    const FULL_SWEEP: f32 = std::f32::consts::TAU * 0.75;
+    let background = arc_points(
+        Point::new(center.x, center.y),
+        radius,
+        START,
+        FULL_SWEEP,
+        64,
+    );
+    let filled = arc_points(
+        Point::new(center.x, center.y),
+        radius,
+        START,
+        sweep_for_fraction(equity) * 0.75,
+        64,
+    );
+    painter.add(egui::Shape::line(
+        to_pos2(&background),
+        egui::Stroke::new(10.0, egui::Color32::from_gray(60)),
+    ));
+    painter.add(egui::Shape::line(
+        to_pos2(&filled),
+        egui::Stroke::new(10.0, egui::Color32::from_rgb(90, 190, 255)),
+    ));
+}
+
+/// Paint a full-circle confidence ring filled proportionally to `confidence`.
+#[cfg(feature = "desktop")]
+fn draw_confidence_ring(painter: &egui::Painter, center: egui::Pos2, radius: f32, confidence: f64) {
+    const START: f32 = -std::f32::consts::FRAC_PI_2;
+    let background = arc_points(
+        Point::new(center.x, center.y),
+        radius,
+        START,
+        std::f32::consts::TAU,
+        64,
+    );
+    let filled = arc_points(
+        Point::new(center.x, center.y),
+        radius,
+        START,
+        sweep_for_fraction(confidence),
+        64,
+    );
+    painter.add(egui::Shape::line(
+        to_pos2(&background),
+        egui::Stroke::new(6.0, egui::Color32::from_gray(60)),
+    ));
+    painter.add(egui::Shape::line(
+        to_pos2(&filled),
+        egui::Stroke::new(6.0, egui::Color32::from_rgb(150, 240, 150)),
+    ));
+}
+
+/// Convert panel-space points into egui positions.
+#[cfg(feature = "desktop")]
+fn to_pos2(points: &[Point]) -> Vec<egui::Pos2> {
+    points
+        .iter()
+        .map(|point| egui::pos2(point.x, point.y))
+        .collect()
 }
 
 #[cfg(test)]
@@ -160,6 +349,59 @@ mod tests {
         v.action = "raise".to_string();
         v.amount = 750;
         assert!(v.summary().starts_with("raise 750"));
+    }
+
+    #[test]
+    fn clamp_unit_bounds_and_defuses_non_finite() {
+        assert_eq!(clamp_unit(-0.5), 0.0);
+        assert_eq!(clamp_unit(0.0), 0.0);
+        assert_eq!(clamp_unit(0.5), 0.5);
+        assert_eq!(clamp_unit(1.0), 1.0);
+        assert_eq!(clamp_unit(1.5), 1.0);
+        assert_eq!(clamp_unit(f64::NAN), 0.0);
+        assert_eq!(clamp_unit(f64::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn sweep_for_fraction_maps_a_full_turn() {
+        assert_eq!(sweep_for_fraction(0.0), 0.0);
+        assert_eq!(sweep_for_fraction(1.0), std::f32::consts::TAU);
+        assert_eq!(sweep_for_fraction(0.25), std::f32::consts::FRAC_PI_2);
+        assert_eq!(sweep_for_fraction(-1.0), 0.0);
+        assert_eq!(sweep_for_fraction(2.0), std::f32::consts::TAU);
+    }
+
+    #[test]
+    fn arc_points_trace_a_quarter_turn_from_twelve_o_clock() {
+        let points = arc_points(
+            Point::new(0.0, 0.0),
+            1.0,
+            -std::f32::consts::FRAC_PI_2,
+            std::f32::consts::FRAC_PI_2,
+            4,
+        );
+        assert_eq!(points.len(), 5);
+        let first = points.first().expect("first");
+        let last = points.last().expect("last");
+        assert!(first.x.abs() < 1e-6 && (first.y + 1.0).abs() < 1e-6);
+        assert!((last.x - 1.0).abs() < 1e-6 && last.y.abs() < 1e-6);
+    }
+
+    #[test]
+    fn arc_points_respects_radius_and_clamps_segments() {
+        let points = arc_points(Point::new(10.0, 20.0), 5.0, 0.0, std::f32::consts::TAU, 1);
+        assert_eq!(points.len(), 3);
+        let first = points.first().expect("first");
+        assert!((first.x - 15.0).abs() < 1e-6 && (first.y - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn action_badge_appends_amount_only_for_chip_moving_actions() {
+        assert_eq!(action_badge("raise", 750), "RAISE 750");
+        assert_eq!(action_badge("  call ", 500), "CALL 500");
+        assert_eq!(action_badge("allin", 5000), "ALLIN 5000");
+        assert_eq!(action_badge("fold", 0), "FOLD");
+        assert_eq!(action_badge("check", 0), "CHECK");
     }
 }
 
@@ -221,5 +463,46 @@ mod snapshot_tests {
         v.opponent = None;
         v.confidence = None;
         assert_json_snapshot!(v);
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod render_tests {
+    use super::*;
+
+    fn view() -> DecisionView {
+        DecisionView {
+            action: "raise".to_string(),
+            amount: 750,
+            ev: 1.23,
+            pot_odds: Some(0.238),
+            equity: 0.55,
+            break_even: Some(0.238),
+            opponent: Some("tag".to_string()),
+            confidence: Some(0.9),
+        }
+    }
+
+    #[test]
+    fn overlay_renders_headlessly() {
+        let ctx = egui::Context::default();
+        let view = view();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            render_overlay(ui, &view);
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn overlay_renders_without_confidence() {
+        let ctx = egui::Context::default();
+        let mut view = view();
+        view.confidence = None;
+        view.opponent = None;
+        view.break_even = None;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            render_overlay(ui, &view);
+        });
+        output.drop_without_applying_deltas();
     }
 }

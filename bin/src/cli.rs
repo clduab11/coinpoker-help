@@ -7,7 +7,7 @@ Options:\n\
   (no option)      Run the macOS capture pipeline\n\
   --stdin          Read GameState JSON lines from stdin\n\
   --list-windows   List windows available for capture\n\
-  --ui             Reserved; exits 2 because the interactive feed is not implemented\n\
+  --ui             Run the live pipeline with a desktop study overlay\n\
   -h, --help       Print this help\n";
 
 /// The execution mode selected by the command line.
@@ -19,6 +19,8 @@ pub enum Mode {
     Stdin,
     /// List capture candidates for calibration.
     ListWindows,
+    /// Live pipeline with a desktop study overlay.
+    Ui,
     /// Print the usage text.
     Help,
 }
@@ -35,13 +37,8 @@ pub fn parse_args(args: impl IntoIterator<Item = impl Into<String>>) -> Result<M
         [] => Ok(Mode::Capture),
         [arg] if arg == "--stdin" => Ok(Mode::Stdin),
         [arg] if arg == "--list-windows" => Ok(Mode::ListWindows),
+        [arg] if arg == "--ui" => Ok(Mode::Ui),
         [arg] if arg == "--help" || arg == "-h" => Ok(Mode::Help),
-        // Exit status 2 is deliberate: the option is recognized but its live
-        // pipeline-to-window feed has not been implemented.
-        [arg] if arg == "--ui" => Err(
-            "--ui is unavailable: the interactive feed is not implemented; use --stdin for JSON-lines output"
-                .to_string(),
-        ),
         [arg] => Err(format!("unknown option: {arg}")),
         [_, extra, ..] => Err(format!("unexpected extra argument: {extra}")),
     }
@@ -60,14 +57,9 @@ mod tests {
     fn known_flags_select_their_modes() {
         assert_eq!(parse_args(["--stdin"]), Ok(Mode::Stdin));
         assert_eq!(parse_args(["--list-windows"]), Ok(Mode::ListWindows));
+        assert_eq!(parse_args(["--ui"]), Ok(Mode::Ui));
         assert_eq!(parse_args(["--help"]), Ok(Mode::Help));
         assert_eq!(parse_args(["-h"]), Ok(Mode::Help));
-    }
-
-    #[test]
-    fn ui_flag_reports_the_reserved_exit_status() {
-        let error = parse_args(["--ui"]).expect_err("reserved mode");
-        assert!(error.contains("--ui is unavailable"));
     }
 
     #[test]

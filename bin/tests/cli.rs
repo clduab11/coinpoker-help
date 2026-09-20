@@ -36,6 +36,7 @@ fn help_prints_usage_and_succeeds() {
     assert!(stdout.contains("Usage: coinpoker [OPTION]"));
     assert!(stdout.contains("--stdin"));
     assert!(stdout.contains("--list-windows"));
+    assert!(stdout.contains("--ui"));
 }
 
 #[test]
@@ -46,15 +47,6 @@ fn unknown_and_extra_arguments_exit_with_usage() {
         let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
         assert!(stderr.contains("Usage: coinpoker [OPTION]"));
     }
-}
-
-#[test]
-fn ui_option_truthfully_reports_unimplemented_feed() {
-    let output = run(&["--ui"]);
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
-    assert!(stderr.contains("interactive feed is not implemented"));
-    assert!(stderr.contains("--stdin"));
 }
 
 #[test]
