@@ -10,9 +10,12 @@
 //! - `widgets`  — decision view, geometry helpers, and overlay rendering
 //! - `overlay`  — overlay event model and headless state transitions
 //! - `headless` — JSON-lines stdout output
+//! - `ws`       — optional localhost WebSocket event mirror (`ws` feature)
 
 #[cfg(feature = "desktop")]
 pub mod app;
 pub mod headless;
 pub mod overlay;
 pub mod widgets;
+#[cfg(feature = "ws")]
+pub mod ws;

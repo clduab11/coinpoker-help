@@ -29,6 +29,8 @@ use ingest::prompt::build_analysis_prompt;
 use ingest::state_machine::{StateMachine, TableEvent};
 use ingest::vlm::{MlxServerBackend, VlmBackend};
 use ui::overlay::{OverlayEvent, TableBounds};
+#[cfg(feature = "ws")]
+use ui::ws::EventMirrorServer;
 
 #[derive(Debug)]
 enum RunError {
@@ -364,8 +366,21 @@ fn run_capture_pipeline() -> Result<(), RunError> {
 fn run_ui_overlay(settings: ui::overlay::OverlaySettings) -> Result<(), RunError> {
     let mut pipeline = start_live_pipeline()?;
     let (tx, rx) = mpsc::channel::<OverlayEvent>();
+    #[cfg(feature = "ws")]
+    let mirror = EventMirrorServer::bind()
+        .map_err(|error| RunError::Message(format!("WebSocket mirror failed: {error}")))?;
+    #[cfg(feature = "ws")]
+    let publisher = {
+        eprintln!(
+            "WebSocket overlay mirror listening on ws://{}",
+            mirror.local_addr()
+        );
+        mirror.publisher()
+    };
     std::thread::spawn(move || {
         run_live_loop(&mut pipeline, |event| {
+            #[cfg(feature = "ws")]
+            publisher.publish(&event);
             let _ = tx.send(event);
         });
     });

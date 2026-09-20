@@ -11,6 +11,7 @@ publish = false
 [features]
 default = []
 desktop = ["dep:egui", "dep:eframe"]
+ws = []
 
 [dependencies]
 serde = { workspace = true }
@@ -20,3 +21,8 @@ eframe = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+
+[[test]]
+name = "ws"
+path = "tests/ws.rs"
+required-features = ["ws"]

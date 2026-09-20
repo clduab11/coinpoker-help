@@ -61,7 +61,7 @@ impl OverlaySettings {
 }
 
 /// The captured table window's on-screen bounds in display points.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct TableBounds {
     pub x: f64,
     pub y: f64,
@@ -70,7 +70,8 @@ pub struct TableBounds {
 }
 
 /// An event sent from the live capture loop to the overlay.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "event", content = "payload", rename_all = "snake_case")]
 pub enum OverlayEvent {
     /// A decision to display.
     Decision(DecisionView),

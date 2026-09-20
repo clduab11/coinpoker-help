@@ -95,6 +95,14 @@ Overlay options are only valid with `--ui`:
 | `--overlay-opacity <0.0..=1.0>` | `0.9` | Opacity applied to the complete overlay. |
 | `--overlay-position <right\|left\|above\|below>` | `right` | Side of the table used to place the overlay. |
 
+For local automation, compile the optional loopback WebSocket mirror. It binds
+an ephemeral `127.0.0.1` port and writes the `ws://` address to stderr; each
+client receives JSON-serialized overlay events as text frames.
+
+```bash
+cargo run --release --features ws --bin coinpoker -- --ui
+```
+
 ## How the vision mode works (and a privacy note)
 
 In live mode, the program takes a full picture of the CoinPoker window. When the

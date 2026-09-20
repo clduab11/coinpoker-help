@@ -21,3 +21,6 @@ ui = { path = "../crates/ui", features = ["desktop"] }
 rand = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
+
+[features]
+ws = ["ui/ws"]
