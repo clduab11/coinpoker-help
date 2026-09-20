@@ -1,5 +1,6 @@
 ---
 source: crates/ingest/src/parser.rs
+assertion_line: 922
 expression: state
 ---
 {
@@ -26,5 +27,6 @@ expression: state
     }
   ],
   "action_required": false,
-  "available_actions": []
+  "available_actions": [],
+  "confidence": null
 }

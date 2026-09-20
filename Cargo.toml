@@ -27,7 +27,9 @@ description = "A modular decision-support framework for stochastic gaming enviro
 # under `[target.'cfg(target_os = "macos")'.dependencies]`.
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip` makes f64 parsing exact (serde_json's fast parser can be
+# 1 ULP off on long literals); GameState carries an optional f64 confidence.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 url = "2"
 thiserror = "2"
 rand = "0.8"

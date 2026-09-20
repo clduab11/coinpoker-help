@@ -1,5 +1,6 @@
 ---
 source: crates/ingest/src/parser.rs
+assertion_line: 951
 expression: state
 ---
 {
@@ -60,5 +61,6 @@ expression: state
     "fold",
     "call",
     "allin"
-  ]
+  ],
+  "confidence": null
 }

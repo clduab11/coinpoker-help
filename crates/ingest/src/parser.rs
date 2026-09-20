@@ -70,7 +70,10 @@ pub struct PlayerState {
 }
 
 /// Structured description of the visible table state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Derives `PartialEq` only: the optional `confidence` is an `f64`, which
+/// has no `Eq` implementation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameState {
     pub game_phase: GamePhase,
     #[serde(default)]
@@ -90,6 +93,12 @@ pub struct GameState {
     pub action_required: bool,
     #[serde(default)]
     pub available_actions: Vec<String>,
+    /// Model-reported confidence that this observation is correct (0.0..=1.0).
+    ///
+    /// VLM output is untrusted: the value is validated like every other
+    /// field, and callers must suppress decisions when it is low.
+    #[serde(default)]
+    pub confidence: Option<f64>,
 }
 
 /// Parse and validate a [`VlmOutput`] into a [`GameState`].
@@ -170,6 +179,16 @@ pub fn validate_game_state(state: &GameState) -> Result<(), ParseError> {
             expected,
             state.board.len()
         )));
+    }
+
+    // VLM output is untrusted: an out-of-range confidence is treated as a
+    // hallucination indicator and rejected like any other invalid field.
+    if let Some(confidence) = state.confidence {
+        if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
+            return Err(ParseError::InvalidState(format!(
+                "confidence must be between 0.0 and 1.0, got {confidence}"
+            )));
+        }
     }
 
     let mut seen_cards = HashSet::new();
@@ -819,6 +838,37 @@ mod tests {
         assert_eq!(GamePhase::River.expected_board_cards(), 5);
         assert_eq!(GamePhase::Showdown.expected_board_cards(), 5);
     }
+
+    #[test]
+    fn confidence_defaults_to_none_and_deserializes_when_present() {
+        let state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
+        assert_eq!(state.confidence, None);
+
+        let with_confidence = VALID_STATE.replace(
+            "\"action_required\": true",
+            "\"action_required\": true, \"confidence\": 0.85",
+        );
+        let state = parse_vlm_output(&output(&with_confidence)).expect("valid state");
+        assert_eq!(state.confidence, Some(0.85));
+    }
+
+    #[test]
+    fn rejects_out_of_range_confidence() {
+        for bad in [1.5, -0.1, f64::NAN, f64::INFINITY] {
+            let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
+            state.confidence = Some(bad);
+            assert!(matches!(
+                validate_game_state(&state),
+                Err(ParseError::InvalidState(message)) if message.contains("confidence")
+            ));
+        }
+
+        for good in [0.0, 0.5, 1.0] {
+            let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
+            state.confidence = Some(good);
+            validate_game_state(&state).expect("in-range confidence is valid");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1012,9 +1062,18 @@ mod proptests {
                         players,
                         action_required,
                         available_actions,
+                        confidence: None,
                     }
                 },
             )
+            // Layer the optional confidence on top so the roundtrip test
+            // also covers `Some` values without growing the tuple.
+            .prop_flat_map(|state| {
+                prop::option::of(0.0f64..=1.0).prop_map(move |confidence| GameState {
+                    confidence,
+                    ..state.clone()
+                })
+            })
     }
 
     proptest! {
@@ -1101,6 +1160,7 @@ mod proptests {
                 } else {
                     vec![]
                 },
+                confidence: None,
             };
 
             let result = validate_game_state(&state);

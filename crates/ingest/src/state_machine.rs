@@ -110,6 +110,7 @@ mod tests {
             } else {
                 vec![]
             },
+            confidence: None,
         }
     }
 
@@ -292,6 +293,7 @@ mod proptests {
                     } else {
                         vec![]
                     },
+                    confidence: None,
                 }
             })
     }
@@ -374,7 +376,7 @@ mod proptests {
                 return Ok(());
             }
             let mut sm = StateMachine::new();
-            let mut from_state = GameState {
+            let from_state = GameState {
                 game_phase: from_phase,
                 hero_cards: vec![],
                 board: vec![],
@@ -386,6 +388,7 @@ mod proptests {
                 players: vec![],
                 action_required: false,
                 available_actions: vec![],
+                confidence: None,
             };
             let mut to_state = from_state.clone();
             to_state.game_phase = to_phase;
