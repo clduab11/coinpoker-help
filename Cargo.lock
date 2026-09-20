@@ -665,7 +665,7 @@ dependencies = [
  "ghost-layer",
  "ingest",
  "opponent-model",
- "rand 0.8.8",
+ "rand 0.9.5",
  "serde_json",
  "ui",
  "url",
@@ -715,7 +715,7 @@ name = "core-engine"
 version = "0.1.0"
 dependencies = [
  "proptest",
- "rand 0.8.8",
+ "rand 0.9.5",
  "rs_poker",
  "serde",
  "serde_json",
@@ -1322,7 +1322,7 @@ version = "0.1.0"
 dependencies = [
  "insta",
  "proptest",
- "rand 0.8.8",
+ "rand 0.9.5",
  "rand_distr",
  "serde",
  "serde_json",
