@@ -18,7 +18,7 @@ use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 use std::sync::mpsc;
 
-use coinpoker::cli::{parse_args, Mode, USAGE};
+use coinpoker::cli::{parse_options, Mode, USAGE};
 use coinpoker::config::{capture_config_from_env, vlm_config_from_env};
 use coinpoker::pipeline::{Pipeline, MIN_PERCEPTION_CONFIDENCE};
 use ingest::capture::WindowCapturer;
@@ -52,19 +52,20 @@ impl From<io::Error> for RunError {
 }
 
 fn main() -> ExitCode {
-    let mode = match parse_args(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+    let options = match parse_options(std::env::args().skip(1)) {
+        Ok(options) => options,
         Err(message) => {
             let _ = writeln!(io::stderr().lock(), "{message}\n\n{USAGE}");
             return ExitCode::from(2);
         }
     };
+    let mode = options.mode;
 
     let result = match mode {
         Mode::Capture => run_capture_pipeline(),
         Mode::Stdin => run_stdin_pipeline(),
         Mode::ListWindows => list_windows(),
-        Mode::Ui => run_ui_overlay(),
+        Mode::Ui => run_ui_overlay(options.overlay_settings),
         Mode::Help => write!(io::stdout().lock(), "{USAGE}").map_err(RunError::from),
     };
 
@@ -98,7 +99,7 @@ fn list_windows() -> Result<(), RunError> {
 
 /// Read `GameState` JSON lines from stdin and emit decision JSON lines.
 fn run_stdin_pipeline() -> Result<(), RunError> {
-    let pipeline = Pipeline::new();
+    let mut pipeline = Pipeline::new();
     let emitter = ui::headless::stdout();
     let mut state_machine = StateMachine::new();
     let mut decision_active = false;
@@ -360,7 +361,7 @@ fn run_capture_pipeline() -> Result<(), RunError> {
 }
 
 /// Live pipeline with a desktop study overlay.
-fn run_ui_overlay() -> Result<(), RunError> {
+fn run_ui_overlay(settings: ui::overlay::OverlaySettings) -> Result<(), RunError> {
     let mut pipeline = start_live_pipeline()?;
     let (tx, rx) = mpsc::channel::<OverlayEvent>();
     std::thread::spawn(move || {
@@ -368,7 +369,7 @@ fn run_ui_overlay() -> Result<(), RunError> {
             let _ = tx.send(event);
         });
     });
-    ui::app::run_overlay(rx)
+    ui::app::run_overlay(rx, settings)
         .map_err(|error| RunError::Message(format!("overlay failed: {error}")))?;
     Ok(())
 }

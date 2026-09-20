@@ -117,6 +117,7 @@ fn cross_crate_pipeline_produces_a_decision_view() {
     let view = DecisionView {
         action: format!("{:?}", decision.action).to_lowercase(),
         amount,
+        sizing_provenance: None,
         ev: decision.ev,
         pot_odds: decision.pot_odds,
         equity: decision.equity,

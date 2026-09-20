@@ -66,7 +66,7 @@ fn cycle(backend: &MockVlm) -> Duration {
     let mut consensus =
         ConsensusTracker::try_new(ConsensusConfig::default()).expect("valid consensus config");
     let mut state_machine = StateMachine::new();
-    let pipeline = Pipeline::new();
+    let mut pipeline = Pipeline::new();
 
     let start = Instant::now();
     let mut decision: Option<DecisionView> = None;

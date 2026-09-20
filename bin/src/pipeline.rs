@@ -3,12 +3,15 @@
 //! Shared by every input mode (stdin replay, capture, overlay UI) so the
 //! decision logic cannot drift between them.
 
+use std::collections::HashMap;
+
 use core_engine::decision::{Action, DecisionEngine, DecisionInput};
 use core_engine::equity::{Card, EquityConfig, EquityEstimator, Rank, Suit};
 use ghost_layer::betting_entropy::{BettingEntropy, BettingEntropyConfig};
-use ingest::parser::GameState;
-use opponent_model::classifier::Archetype;
+use ingest::parser::{GamePhase, GameState};
+use opponent_model::classifier::{Archetype, Classification, Classifier, ClassifierConfig};
 use opponent_model::exploit::ExploitEngine;
+use opponent_model::features::StatsAccumulator;
 use ui::widgets::DecisionView;
 
 /// Minimum model-reported confidence for a state to drive a decision.
@@ -17,12 +20,79 @@ use ui::widgets::DecisionView;
 /// suppressed rather than acted on.
 pub const MIN_PERCEPTION_CONFIDENCE: f64 = 0.5;
 
+/// Accumulates the opponent observations exposed by successive game states.
+#[derive(Debug, Default)]
+struct OpponentTracker {
+    stats: HashMap<String, StatsAccumulator>,
+    last_preflop_hand: Option<String>,
+    last_actions: HashMap<String, (GamePhase, Option<String>, u32)>,
+}
+
+impl OpponentTracker {
+    fn observe(&mut self, state: &GameState) {
+        if state.game_phase == GamePhase::Preflop {
+            let hand = state
+                .hero_cards
+                .iter()
+                .map(|card| format!("{}:{}", card.rank, card.suit))
+                .collect::<Vec<_>>()
+                .join("|");
+            if self.last_preflop_hand.as_deref() != Some(hand.as_str()) {
+                self.last_preflop_hand = Some(hand);
+                for player in state.players.iter().filter(|player| player.name != "Hero") {
+                    let action = player.last_action.as_deref().unwrap_or_default();
+                    self.stats
+                        .entry(player.name.clone())
+                        .or_default()
+                        .observe_hand(
+                            matches!(action, "call" | "raise" | "allin" | "bet"),
+                            matches!(action, "raise" | "allin"),
+                        );
+                }
+            }
+        }
+
+        for player in state.players.iter().filter(|player| player.name != "Hero") {
+            let observation = (
+                state.game_phase,
+                player.last_action.clone(),
+                player.bet_amount,
+            );
+            if self.last_actions.get(&player.name) == Some(&observation) {
+                continue;
+            }
+            self.last_actions.insert(player.name.clone(), observation);
+
+            if state.game_phase == GamePhase::Preflop {
+                continue;
+            }
+            let stats = self.stats.entry(player.name.clone()).or_default();
+            match player.last_action.as_deref().unwrap_or_default() {
+                "bet" | "raise" | "allin" => stats.observe_aggressive_action(),
+                "call" => stats.observe_passive_call(),
+                _ => {}
+            }
+        }
+    }
+
+    fn classify(&self, name: &str, classifier: &Classifier) -> Classification {
+        let stats = self
+            .stats
+            .get(name)
+            .map(StatsAccumulator::stats)
+            .unwrap_or_default();
+        classifier.classify(&stats)
+    }
+}
+
 /// The decision pipeline shared by all input modes.
 pub struct Pipeline {
     engine: DecisionEngine,
     exploit: ExploitEngine,
     estimator: EquityEstimator,
     betting: BettingEntropy,
+    classifier: Classifier,
+    opponents: OpponentTracker,
 }
 
 impl Pipeline {
@@ -33,6 +103,8 @@ impl Pipeline {
             exploit: ExploitEngine::new(),
             estimator: EquityEstimator::new(EquityConfig { iterations: 5_000 }),
             betting: BettingEntropy::new(BettingEntropyConfig::default()),
+            classifier: Classifier::new(ClassifierConfig::default()),
+            opponents: OpponentTracker::default(),
         }
     }
 
@@ -43,7 +115,7 @@ impl Pipeline {
     /// Returns a human-readable reason when the state must not drive a
     /// decision: low model confidence, unreadable cards, multiway all-in
     /// side-pot risk, or an illegal engine recommendation.
-    pub fn decide(&self, state: &GameState) -> Result<DecisionView, String> {
+    pub fn decide(&mut self, state: &GameState) -> Result<DecisionView, String> {
         // Low model-reported confidence suppresses output entirely.
         if let Some(confidence) = state.confidence {
             if confidence < MIN_PERCEPTION_CONFIDENCE {
@@ -52,11 +124,6 @@ impl Pipeline {
                 ));
             }
         }
-
-        // Opponent-history accumulation is not connected yet, so all active
-        // opponents use the explicit Unknown profile.
-        let archetype = Archetype::Unknown;
-        let adjustment = self.exploit.adjust(archetype);
 
         let hero = convert_cards(&state.hero_cards)?;
         if hero.len() != 2 {
@@ -92,6 +159,13 @@ impl Pipeline {
             );
         }
 
+        self.opponents.observe(state);
+        let classification = active_opponents
+            .first()
+            .map(|player| self.opponents.classify(&player.name, &self.classifier))
+            .unwrap_or_else(|| self.classifier.classify(&Default::default()));
+        let adjustment = self.exploit.adjust(classification.archetype);
+
         let equity = self
             .estimator
             .estimate_against_unknown(&hero, active_opponents.len(), &board)
@@ -124,6 +198,7 @@ impl Pipeline {
         let target_increment = (f64::from(state.pot_size) * 0.75 * adjustment.raise_size_multiplier)
             .round()
             .max(1.0) as u32;
+        let mut sizing_provenance = None;
         let raise_to = if can_raise {
             if !has_action("raise") {
                 all_in_raise_to
@@ -131,9 +206,9 @@ impl Pipeline {
                 let min_increment = min_raise_to.saturating_sub(hero_contribution);
                 let max_increment = max_raise_to.saturating_sub(hero_contribution);
                 let mut rng = rand::thread_rng();
-                let increment = self
+                let size = self
                     .betting
-                    .humanize_bounded(
+                    .humanize_bounded_with_provenance(
                         &mut rng,
                         target_increment,
                         state.pot_size,
@@ -141,7 +216,8 @@ impl Pipeline {
                         max_increment,
                     )
                     .map_err(|error| format!("raise humanization failed: {error}"))?;
-                hero_contribution.saturating_add(increment)
+                sizing_provenance = Some(size.provenance.annotation().to_string());
+                hero_contribution.saturating_add(size.amount)
             }
         } else {
             0
@@ -198,17 +274,29 @@ impl Pipeline {
                 return Err("decision engine selected an unavailable fold".to_string());
             }
         };
+        let sizing_provenance = (action == "raise").then_some(sizing_provenance).flatten();
 
         Ok(DecisionView {
             action,
             amount,
+            sizing_provenance,
             ev: decision.ev,
             pot_odds: decision.pot_odds,
             equity: decision.equity,
             break_even: decision.break_even,
-            opponent: Some(format!("{archetype:?}").to_lowercase()),
-            confidence: Some(0.0),
+            opponent: Some(archetype_label(classification.archetype).to_string()),
+            confidence: Some(classification.confidence),
         })
+    }
+}
+
+fn archetype_label(archetype: Archetype) -> &'static str {
+    match archetype {
+        Archetype::Lag => "lag",
+        Archetype::Tag => "tag",
+        Archetype::LoosePassive => "loose-passive",
+        Archetype::TightPassive => "tight-passive",
+        Archetype::Unknown => "unknown",
     }
 }
 
@@ -283,6 +371,7 @@ mod tests {
         ));
         assert!(view.equity > 0.0);
         assert_eq!(view.opponent.as_deref(), Some("unknown"));
+        assert_eq!(view.confidence, Some(0.0));
     }
 
     #[test]
@@ -390,5 +479,41 @@ mod tests {
             GamePhase::Flop,
             "fixture must remain a flop state"
         );
+    }
+
+    #[test]
+    fn observed_opponent_history_drives_a_real_classification() {
+        let classifier = Classifier::new(ClassifierConfig::default());
+        let mut tracker = OpponentTracker::default();
+        let mut state = actionable_state();
+        state.game_phase = GamePhase::Preflop;
+        state.board.clear();
+        state.players[1].last_action = Some("call".to_string());
+
+        for hand in 0..20 {
+            state.hero_cards[0].rank = format!("hand-{hand}");
+            tracker.observe(&state);
+            state.game_phase = GamePhase::Flop;
+            state.players[1].last_action = Some("raise".to_string());
+            tracker.observe(&state);
+            state.game_phase = GamePhase::Preflop;
+            state.players[1].last_action = Some("call".to_string());
+        }
+
+        let classification = tracker.classify("Villain", &classifier);
+        assert_eq!(classification.archetype, Archetype::Lag);
+        assert!(classification.confidence > 0.5);
+    }
+
+    #[test]
+    fn raise_recommendations_expose_ghost_sizing_provenance() {
+        let mut state = actionable_state();
+        state.available_actions = vec!["raise".to_string()];
+        let view = Pipeline::new().decide(&state).expect("forced raise");
+        assert_eq!(view.action, "raise");
+        assert!(matches!(
+            view.sizing_provenance.as_deref(),
+            Some("ghost-menu") | Some("ghost-off-grid")
+        ));
     }
 }

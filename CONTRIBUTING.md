@@ -35,7 +35,7 @@ just validate
 The individual checks are:
 
 ```bash
-cargo fmt --all -- --check                                     # formatting
+cargo fmt --all --check                                        # formatting
 cargo check --workspace --all-targets --all-features --locked  # does it compile?
 cargo test --workspace --all-targets --all-features --locked   # unit + integration tests
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings  # lints; warnings fail
@@ -49,12 +49,13 @@ CI fails a pull request when line coverage on default features falls below
 **80%**. Check it locally:
 
 ```bash
-cargo llvm-cov --workspace --all-targets --locked
+rustup run 1.95.0 cargo llvm-cov --workspace --all-targets --locked
 ```
 
-Coverage is measured on default features only, because the optional `desktop`
-UI panel is not wired up and has no tests. That feature is still compiled and
-linted through the `--all-features` steps above.
+Coverage is measured on default features. The desktop overlay is part of the
+default binary build and has headless state and rendering tests, so no GPU is
+needed for CI. Test live screen capture and overlay placement manually on a
+supported macOS host after changing those integrations.
 
 ### Dependency audit (enforced)
 

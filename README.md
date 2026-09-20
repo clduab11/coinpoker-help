@@ -24,7 +24,7 @@ flowchart TB
     H --> K["decision engine<br/>pick fold, check, call, or raise"]
     I --> K
     J --> K
-    K --> L["JSON lines out<br/>one recommendation per line"]
+    K --> L["JSON lines out or<br/>the --ui study overlay"]
 ```
 
 In plain words: the program turns a poker table into a clean description, works
@@ -42,7 +42,7 @@ The code is split into small pieces, each with one job:
 | `core-engine` | The math: pot odds, the chance your hand wins, and the expected value of each move. |
 | `ghost-layer` | Makes the computer's choices look human: realistic bet sizes and timing. |
 | `opponent-model` | Keeps stats on opponents and guesses their playing style. |
-| `ui` | Formats the final suggestion as JSON lines (and has an optional, unfinished desktop window). |
+| `ui` | Formats suggestions as JSON lines and renders the optional desktop study overlay. |
 | `bin` | The `coinpoker` command-line program that wires everything together. |
 
 ## What you need
@@ -51,6 +51,9 @@ The code is split into small pieces, each with one job:
 - The `--stdin` mode works on Windows, Linux, and macOS.
 - Live screen capture needs macOS 14 or newer, permission to record the screen,
   and a visible CoinPoker window.
+- The `--ui` study overlay uses the same live-capture requirements and opens a
+  transparent, click-through macOS window beside the table. It does not take
+  focus or interact with the game client.
 - The "read the table with AI" mode needs a suitable Apple Silicon Mac and a
   separate local AI server running in the background.
 
@@ -70,12 +73,27 @@ cargo run --release --bin coinpoker -- --stdin
 # List the windows available to capture (macOS)
 cargo run --release --bin coinpoker -- --list-windows
 
+# Show live suggestions in the click-through study overlay (macOS)
+cargo run --release --bin coinpoker -- --ui
+
+# Place a dimmer overlay on the left side of the table
+cargo run --release --bin coinpoker -- --ui --overlay-opacity 0.65 --overlay-position left
+
 # See all options
 cargo run --release --bin coinpoker -- --help
 ```
 
-The `--ui` option is recognized but not finished yet, so it exits with an
-error. Use the JSON-lines output instead.
+`--ui` starts the capture, VLM, consensus, and decision pipeline in a
+background thread. The overlay updates beside the captured table only when a
+stable decision is available. Startup failures, such as missing screen-recording
+permission, are printed to stderr and exit with status 2.
+
+Overlay options are only valid with `--ui`:
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `--overlay-opacity <0.0..=1.0>` | `0.9` | Opacity applied to the complete overlay. |
+| `--overlay-position <right\|left\|above\|below>` | `right` | Side of the table used to place the overlay. |
 
 ## How the vision mode works (and a privacy note)
 
@@ -156,7 +174,7 @@ just validate
 Without `just`, run the checks one at a time:
 
 ```bash
-cargo fmt --all -- --check                                     # is the formatting tidy?
+cargo fmt --all --check                                        # is the formatting tidy?
 cargo check --workspace --all-targets --all-features --locked  # does it compile?
 cargo test --workspace --all-targets --all-features --locked   # do the tests pass?
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings  # does it follow best practices?
@@ -185,11 +203,11 @@ problems privately.
 
 ## What is not done yet
 
-- There is no finished desktop window; the `--ui` option does not open one.
-- Stats on opponents are not yet connected, so everyone is treated as
-  "unknown."
 - Some advanced poker situations are not modeled yet, such as side pots in
   multi-way all-ins and ranges based on position and betting history.
+- Opponent classifications are session-local observations. The tool starts with
+  an `unknown` profile and needs enough observed hands before showing an
+  archetype.
 - The "human-like timing" feature exists but is not yet used in the live
   pipeline.
 - The program only makes suggestions. It never plays for you.
@@ -197,7 +215,6 @@ problems privately.
 ## What might come next
 
 - Learn from hands you have already played.
-- Finish the optional desktop window.
 - Add a WebSocket connection for other programs to subscribe to.
 
 ## License

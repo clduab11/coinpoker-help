@@ -78,6 +78,7 @@ mod tests {
         DecisionView {
             action: "raise".to_string(),
             amount: 750,
+            sizing_provenance: None,
             ev: 0.67,
             pot_odds: Some(0.238),
             equity: 0.412,

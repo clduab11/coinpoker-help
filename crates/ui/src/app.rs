@@ -8,21 +8,31 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::overlay::{panel_position, OverlayEvent, OverlayState};
+use crate::overlay::{panel_position_for, OverlayEvent, OverlaySettings, OverlayState};
 use crate::widgets::render_overlay;
 
 /// The egui overlay application.
 pub struct DecisionApp {
     state: OverlayState,
     receiver: mpsc::Receiver<OverlayEvent>,
+    settings: OverlaySettings,
     last_position: Option<egui::Pos2>,
 }
 
 impl DecisionApp {
     pub fn new(receiver: mpsc::Receiver<OverlayEvent>) -> Self {
+        Self::with_settings(receiver, OverlaySettings::default())
+    }
+
+    /// Construct the overlay with validated presentation settings.
+    pub fn with_settings(
+        receiver: mpsc::Receiver<OverlayEvent>,
+        settings: OverlaySettings,
+    ) -> Self {
         Self {
             state: OverlayState::new(),
             receiver,
+            settings,
             last_position: None,
         }
     }
@@ -39,12 +49,17 @@ impl DecisionApp {
         &self.state
     }
 
+    /// The configured presentation settings.
+    pub const fn settings(&self) -> OverlaySettings {
+        self.settings
+    }
+
     /// Move the overlay window next to the table, deduplicating repeats.
     fn reposition(&mut self, ctx: &egui::Context) {
         let Some(table) = self.state.table() else {
             return;
         };
-        let (x, y) = panel_position(&table);
+        let (x, y) = panel_position_for(&table, self.settings.position);
         let position = egui::Pos2::new(x, y);
         if self.last_position != Some(position) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
@@ -63,11 +78,8 @@ impl eframe::App for DecisionApp {
         self.drain_events();
         self.reposition(ui.ctx());
 
-        match self.state.view() {
-            Some(view) => render_overlay(ui, view),
-            None => {
-                ui.label("Waiting for a decision point…");
-            }
+        if let Some(view) = self.state.view() {
+            render_overlay(ui, view, self.settings.opacity);
         }
 
         ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -75,7 +87,10 @@ impl eframe::App for DecisionApp {
 }
 
 /// Run the overlay window.
-pub fn run_overlay(receiver: mpsc::Receiver<OverlayEvent>) -> eframe::Result {
+pub fn run_overlay(
+    receiver: mpsc::Receiver<OverlayEvent>,
+    settings: OverlaySettings,
+) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([crate::overlay::PANEL_SIZE.0, crate::overlay::PANEL_SIZE.1])
@@ -93,7 +108,7 @@ pub fn run_overlay(receiver: mpsc::Receiver<OverlayEvent>) -> eframe::Result {
     eframe::run_native(
         "coinpoker-help-overlay",
         options,
-        Box::new(move |_cc| Ok(Box::new(DecisionApp::new(receiver)))),
+        Box::new(move |_cc| Ok(Box::new(DecisionApp::with_settings(receiver, settings)))),
     )
 }
 
@@ -108,6 +123,7 @@ mod tests {
         DecisionView {
             action: "call".to_string(),
             amount: 0,
+            sizing_provenance: None,
             ev: 0.42,
             pot_odds: Some(0.238),
             equity: 0.412,
@@ -173,5 +189,25 @@ mod tests {
             app.clear_color(&egui::Visuals::dark()),
             [0.0, 0.0, 0.0, 0.0]
         );
+    }
+
+    #[test]
+    fn settings_drive_headless_positioning() {
+        let (_, rx) = mpsc::channel();
+        let settings = OverlaySettings {
+            opacity: 0.5,
+            position: crate::overlay::PositionPreset::Left,
+        };
+        let mut app = DecisionApp::with_settings(rx, settings);
+        app.state.apply(&OverlayEvent::Position(TableBounds {
+            x: 500.0,
+            y: 400.0,
+            width: 800.0,
+            height: 600.0,
+        }));
+        let ctx = egui::Context::default();
+        app.reposition(&ctx);
+        assert_eq!(app.settings(), settings);
+        assert_eq!(app.last_position, Some(egui::Pos2::new(156.0, 490.0)));
     }
 }

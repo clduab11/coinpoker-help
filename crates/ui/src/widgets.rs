@@ -13,6 +13,9 @@ pub struct DecisionView {
     pub action: String,
     /// Recommended total amount for a raise; 0 otherwise.
     pub amount: u32,
+    /// Ghost-layer path used to derive a raise size, when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizing_provenance: Option<String>,
     /// Expected value of the recommended action, in chips.
     pub ev: f64,
     /// Pot odds as a fraction of the final pot (None when facing no bet).
@@ -56,11 +59,12 @@ impl DecisionView {
 
     /// A single-line summary for logging and headless output.
     pub fn summary(&self) -> String {
-        let action = if self.amount > 0 {
-            format!("{} {}", self.action, self.amount)
-        } else {
-            self.action.clone()
-        };
+        let action = action_badge_with_provenance(
+            &self.action,
+            self.amount,
+            self.sizing_provenance.as_deref(),
+        )
+        .to_ascii_lowercase();
         format!(
             "{} | EV {} | equity {} | pot odds {}",
             action,
@@ -136,20 +140,37 @@ pub fn action_badge(action: &str, amount: u32) -> String {
     }
 }
 
+/// The action badge with its ghost-layer sizing provenance, when available.
+pub fn action_badge_with_provenance(
+    action: &str,
+    amount: u32,
+    sizing_provenance: Option<&str>,
+) -> String {
+    let badge = action_badge(action, amount);
+    match sizing_provenance {
+        Some(provenance) => format!("{badge} [{provenance}]"),
+        None => badge,
+    }
+}
+
 /// Render the overlay panel for one decision point.
 #[cfg(feature = "desktop")]
-pub fn render_overlay(ui: &mut egui::Ui, view: &DecisionView) {
+pub fn render_overlay(ui: &mut egui::Ui, view: &DecisionView, opacity: f32) {
     let rect = ui.max_rect().shrink(16.0);
     let painter = ui.painter();
 
-    painter.rect_filled(rect, 12.0, egui::Color32::from_black_alpha(150));
+    painter.rect_filled(
+        rect,
+        12.0,
+        with_opacity(egui::Color32::from_black_alpha(150), opacity),
+    );
 
     painter.text(
         rect.left_top() + egui::vec2(0.0, 8.0),
         egui::Align2::LEFT_TOP,
-        action_badge(&view.action, view.amount),
+        action_badge_with_provenance(&view.action, view.amount, view.sizing_provenance.as_deref()),
         egui::FontId::proportional(30.0),
-        action_color(&view.action),
+        with_opacity(action_color(&view.action), opacity),
     );
 
     let metrics = rect.left_top() + egui::vec2(0.0, 52.0);
@@ -158,7 +179,7 @@ pub fn render_overlay(ui: &mut egui::Ui, view: &DecisionView) {
         egui::Align2::LEFT_TOP,
         format!("EV {}", view.ev_label()),
         egui::FontId::proportional(16.0),
-        egui::Color32::from_gray(230),
+        with_opacity(egui::Color32::from_gray(230), opacity),
     );
     painter.text(
         metrics + egui::vec2(0.0, 22.0),
@@ -169,7 +190,7 @@ pub fn render_overlay(ui: &mut egui::Ui, view: &DecisionView) {
                 .unwrap_or_else(|| "-".to_string())
         ),
         egui::FontId::proportional(16.0),
-        egui::Color32::from_gray(230),
+        with_opacity(egui::Color32::from_gray(230), opacity),
     );
     if let Some(break_even) = view.break_even_percent() {
         painter.text(
@@ -177,29 +198,29 @@ pub fn render_overlay(ui: &mut egui::Ui, view: &DecisionView) {
             egui::Align2::LEFT_TOP,
             format!("Break-even: {break_even}"),
             egui::FontId::proportional(16.0),
-            egui::Color32::from_gray(230),
+            with_opacity(egui::Color32::from_gray(230), opacity),
         );
     }
 
     let equity_center = egui::pos2(rect.left() + 72.0, rect.bottom() - 64.0);
-    draw_equity_arc(painter, equity_center, 56.0, view.equity);
+    draw_equity_arc(painter, equity_center, 56.0, view.equity, opacity);
     painter.text(
         equity_center + egui::vec2(0.0, 8.0),
         egui::Align2::CENTER_CENTER,
         view.equity_percent(),
         egui::FontId::proportional(16.0),
-        egui::Color32::from_gray(240),
+        with_opacity(egui::Color32::from_gray(240), opacity),
     );
 
     if let Some(confidence) = view.confidence {
         let ring_center = egui::pos2(rect.right() - 52.0, rect.bottom() - 52.0);
-        draw_confidence_ring(painter, ring_center, 40.0, confidence);
+        draw_confidence_ring(painter, ring_center, 40.0, confidence, opacity);
         painter.text(
             ring_center + egui::vec2(0.0, 12.0),
             egui::Align2::CENTER_CENTER,
             format!("{:.0}%", confidence * 100.0),
             egui::FontId::proportional(13.0),
-            egui::Color32::from_gray(230),
+            with_opacity(egui::Color32::from_gray(230), opacity),
         );
     }
 
@@ -209,7 +230,7 @@ pub fn render_overlay(ui: &mut egui::Ui, view: &DecisionView) {
             egui::Align2::LEFT_BOTTOM,
             format!("Opponent: {opponent}"),
             egui::FontId::proportional(14.0),
-            egui::Color32::from_gray(200),
+            with_opacity(egui::Color32::from_gray(200), opacity),
         );
     }
 }
@@ -227,9 +248,27 @@ fn action_color(action: &str) -> egui::Color32 {
     }
 }
 
+/// Apply the user-selected opacity to a color, safely handling invalid input.
+#[cfg(feature = "desktop")]
+fn with_opacity(color: egui::Color32, opacity: f32) -> egui::Color32 {
+    let opacity = if opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let alpha = (f32::from(color.a()) * opacity).round() as u8;
+    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+}
+
 /// Paint a 270-degree equity gauge arc filled proportionally to `equity`.
 #[cfg(feature = "desktop")]
-fn draw_equity_arc(painter: &egui::Painter, center: egui::Pos2, radius: f32, equity: f64) {
+fn draw_equity_arc(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    equity: f64,
+    opacity: f32,
+) {
     const START: f32 = -std::f32::consts::FRAC_PI_2;
     const FULL_SWEEP: f32 = std::f32::consts::TAU * 0.75;
     let background = arc_points(
@@ -248,17 +287,26 @@ fn draw_equity_arc(painter: &egui::Painter, center: egui::Pos2, radius: f32, equ
     );
     painter.add(egui::Shape::line(
         to_pos2(&background),
-        egui::Stroke::new(10.0, egui::Color32::from_gray(60)),
+        egui::Stroke::new(10.0, with_opacity(egui::Color32::from_gray(60), opacity)),
     ));
     painter.add(egui::Shape::line(
         to_pos2(&filled),
-        egui::Stroke::new(10.0, egui::Color32::from_rgb(90, 190, 255)),
+        egui::Stroke::new(
+            10.0,
+            with_opacity(egui::Color32::from_rgb(90, 190, 255), opacity),
+        ),
     ));
 }
 
 /// Paint a full-circle confidence ring filled proportionally to `confidence`.
 #[cfg(feature = "desktop")]
-fn draw_confidence_ring(painter: &egui::Painter, center: egui::Pos2, radius: f32, confidence: f64) {
+fn draw_confidence_ring(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    confidence: f64,
+    opacity: f32,
+) {
     const START: f32 = -std::f32::consts::FRAC_PI_2;
     let background = arc_points(
         Point::new(center.x, center.y),
@@ -276,11 +324,14 @@ fn draw_confidence_ring(painter: &egui::Painter, center: egui::Pos2, radius: f32
     );
     painter.add(egui::Shape::line(
         to_pos2(&background),
-        egui::Stroke::new(6.0, egui::Color32::from_gray(60)),
+        egui::Stroke::new(6.0, with_opacity(egui::Color32::from_gray(60), opacity)),
     ));
     painter.add(egui::Shape::line(
         to_pos2(&filled),
-        egui::Stroke::new(6.0, egui::Color32::from_rgb(150, 240, 150)),
+        egui::Stroke::new(
+            6.0,
+            with_opacity(egui::Color32::from_rgb(150, 240, 150), opacity),
+        ),
     ));
 }
 
@@ -301,6 +352,7 @@ mod tests {
         DecisionView {
             action: "call".to_string(),
             amount: 0,
+            sizing_provenance: None,
             ev: 0.42,
             pot_odds: Some(0.238),
             equity: 0.412,
@@ -402,6 +454,10 @@ mod tests {
         assert_eq!(action_badge("allin", 5000), "ALLIN 5000");
         assert_eq!(action_badge("fold", 0), "FOLD");
         assert_eq!(action_badge("check", 0), "CHECK");
+        assert_eq!(
+            action_badge_with_provenance("raise", 750, Some("ghost-menu")),
+            "RAISE 750 [ghost-menu]"
+        );
     }
 }
 
@@ -414,6 +470,7 @@ mod snapshot_tests {
         DecisionView {
             action: "call".to_string(),
             amount: 0,
+            sizing_provenance: None,
             ev: 0.42,
             pot_odds: Some(0.238),
             equity: 0.412,
@@ -474,6 +531,7 @@ mod render_tests {
         DecisionView {
             action: "raise".to_string(),
             amount: 750,
+            sizing_provenance: Some("ghost-menu".to_string()),
             ev: 1.23,
             pot_odds: Some(0.238),
             equity: 0.55,
@@ -488,7 +546,7 @@ mod render_tests {
         let ctx = egui::Context::default();
         let view = view();
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            render_overlay(ui, &view);
+            render_overlay(ui, &view, 0.9);
         });
         output.drop_without_applying_deltas();
     }
@@ -501,8 +559,14 @@ mod render_tests {
         view.opponent = None;
         view.break_even = None;
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            render_overlay(ui, &view);
+            render_overlay(ui, &view, 0.5);
         });
         output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn opacity_scales_alpha_and_defuses_invalid_values() {
+        assert_eq!(with_opacity(egui::Color32::WHITE, 0.5).a(), 128);
+        assert_eq!(with_opacity(egui::Color32::WHITE, f32::NAN).a(), 0);
     }
 }
