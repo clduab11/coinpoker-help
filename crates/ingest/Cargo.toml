@@ -15,7 +15,7 @@ thiserror = { workspace = true }
 image = { workspace = true }
 # Blocking HTTP client for the local MLX VLM server backend.
 ureq = { version = "2.12", features = ["json"] }
-base64 = "0.22"
+base64 = "0.23"
 
 # macOS-only screen capture (ScreenCaptureKit bindings). The crate remains
 # buildable on other hosts; capturer construction fails fast there.
