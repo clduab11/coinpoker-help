@@ -1,9 +1,8 @@
 # Rust build output
 /target/
 
-# Downloaded MLX model repositories. Keep root-level model documentation and
-# manifests trackable; downloaded repository directories remain ignored by
-# models/.gitignore.
+# Downloaded model and runtime assets. Keep root-level model documentation and
+# manifests trackable; downloaded binaries remain ignored by models/.gitignore.
 /models/*
 !/models/.gitignore
 !/models/README.md
@@ -16,8 +15,17 @@
 .env.*
 !.env.example
 
+# Private evaluation images, reports, calibrated identities and local runtimes
+/.local/
+.venv/
+venv/
+/dist/
+# Scratch output from packaging dry-runs and other temp work
+cpk-dryrun/
+__pycache__/
+*.pyc
+
 # Editor / OS noise
-.DS_Store
 *.swp
 .idea/
 .vscode/

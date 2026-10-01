@@ -1,0 +1,128 @@
+name: Prepare Windows candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: Sign the candidate executable with configured Authenticode secrets
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Validate candidate source
+        shell: pwsh
+        run: |
+          cargo +1.95.0 fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Rust formatting failed' }
+          cargo +1.95.0 check --workspace --all-targets --all-features --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Rust check failed' }
+          cargo +1.95.0 test --workspace --all-targets --all-features --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed' }
+          cargo +1.95.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }
+          python -m unittest discover -s scripts/tests -v
+          if ($LASTEXITCODE -ne 0) { throw 'Python tests failed' }
+          $paths = @((Resolve-Path 'download-model.ps1').Path) + @(Get-ChildItem scripts -Filter '*.ps1' -File | ForEach-Object FullName)
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { throw "PowerShell syntax errors in $path`: $($errors -join '; ')" }
+          }
+          cargo +1.95.0 build --release --locked --bin coinpoker
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+          & .\target\release\coinpoker.exe --evaluate fixtures/synthetic/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic evaluation failed' }
+      - name: Stage explicit candidate allowlist
+        shell: pwsh
+        run: |
+          $bundle = 'dist/coinpoker-help'
+          if (Test-Path -LiteralPath $bundle) {
+            throw "Candidate staging directory already exists: $bundle. Use a clean workspace so no stale files enter the archive."
+          }
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+          $files = @(
+            @{ from = 'target/release/coinpoker.exe'; to = 'coinpoker.exe' }
+            @{ from = 'README.md'; to = 'README.md' }
+            @{ from = 'CONTRIBUTING.md'; to = 'CONTRIBUTING.md' }
+            @{ from = 'SECURITY.md'; to = 'SECURITY.md' }
+            @{ from = 'LICENSE'; to = 'LICENSE' }
+            @{ from = 'MODEL_LICENSES.md'; to = 'MODEL_LICENSES.md' }
+            @{ from = 'download-model.ps1'; to = 'download-model.ps1' }
+            @{ from = 'docs/INSTALL_WINDOWS.md'; to = 'docs/INSTALL_WINDOWS.md' }
+            @{ from = 'docs/WINDOWS_ACCEPTANCE_V1.md'; to = 'docs/WINDOWS_ACCEPTANCE_V1.md' }
+            @{ from = 'docs/VLM_COMPATIBILITY.md'; to = 'docs/VLM_COMPATIBILITY.md' }
+            @{ from = 'docs/VISUAL_EVALUATION_V2.md'; to = 'docs/VISUAL_EVALUATION_V2.md' }
+            @{ from = 'docs/EVENTS_V2.md'; to = 'docs/EVENTS_V2.md' }
+            @{ from = 'scripts/doctor.py'; to = 'scripts/doctor.py' }
+            @{ from = 'scripts/setup-windows.ps1'; to = 'scripts/setup-windows.ps1' }
+            @{ from = 'scripts/start-vlm.ps1'; to = 'scripts/start-vlm.ps1' }
+            @{ from = 'scripts/vlm-pins.json'; to = 'scripts/vlm-pins.json' }
+            @{ from = 'scripts/windows-acceptance.ps1'; to = 'scripts/windows-acceptance.ps1' }
+            @{ from = 'fixtures/synthetic/manifest.json'; to = 'fixtures/synthetic/manifest.json' }
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file.from -PathType Leaf)) { throw "Missing allowlisted file: $($file.from)" }
+            $destination = Join-Path $bundle $file.to
+            New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
+            Copy-Item -LiteralPath $file.from -Destination $destination
+          }
+          'Candidate only. Physical Windows acceptance and real-image accuracy have not been established by this workflow.' |
+            Set-Content -LiteralPath (Join-Path $bundle 'CANDIDATE.txt') -Encoding UTF8
+          if (Get-ChildItem -LiteralPath $bundle -Recurse -File | Where-Object { $_.Name -match '\.pyc$|^__pycache__$' }) {
+            throw 'Private/generated files entered candidate bundle'
+          }
+      - name: Optional Authenticode signature
+        if: ${{ inputs.sign }}
+        shell: pwsh
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:CERTIFICATE_BASE64 -or -not $env:CERTIFICATE_PASSWORD) {
+            throw 'Signing requested but WINDOWS_SIGNING_CERTIFICATE_BASE64 or WINDOWS_SIGNING_CERTIFICATE_PASSWORD is missing'
+          }
+          $kit = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $signTool = Get-ChildItem -LiteralPath $kit -Filter signtool.exe -Recurse -File |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]signtool\.exe$' } |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signTool) { throw 'Windows SDK SignTool not found' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'coinpoker-candidate.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+            & $signTool.FullName sign /f $pfx /p $env:CERTIFICATE_PASSWORD /fd SHA256 'dist/coinpoker-help/coinpoker.exe'
+            if ($LASTEXITCODE -ne 0) { throw 'Authenticode signing failed' }
+            $signature = Get-AuthenticodeSignature 'dist/coinpoker-help/coinpoker.exe'
+            if ($signature.Status -ne 'Valid') { throw "Signed candidate verification failed: $($signature.Status)" }
+          } finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+          }
+      - name: Archive and checksum
+        shell: pwsh
+        run: |
+          $archive = 'dist/coinpoker-help-windows-x64-candidate.zip'
+          Compress-Archive -LiteralPath 'dist/coinpoker-help' -DestinationPath $archive -Force
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  coinpoker-help-windows-x64-candidate.zip" |
+            Set-Content -LiteralPath 'dist/SHA256SUMS' -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coinpoker-help-windows-x64-candidate
+          path: |
+            dist/coinpoker-help-windows-x64-candidate.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

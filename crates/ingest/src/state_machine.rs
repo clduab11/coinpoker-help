@@ -5,7 +5,74 @@
 //! changes. Downstream consumers (decision engine, UI) subscribe to these
 //! events rather than polling raw states.
 
-use crate::parser::{GamePhase, GameState};
+use crate::parser::{validate_game_state, GamePhase, GameState};
+
+/// Check a transition on the screen gate's accepted table timeline.
+///
+/// This guard deliberately does not change [`StateMachine::update`]: stdin and
+/// replay callers retain their existing event semantics. Screen observations
+/// must pass both poker validation and this temporal check before acceptance.
+///
+/// Streets cannot be skipped, even during a non-action all-in runout; without
+/// the intervening observations we cannot establish continuity. A new hand
+/// requires an accepted showdown or an explicitly witnessed, empty, non-action
+/// preflop state. Empty refers to cards, not the pot: blinds may already be posted.
+/// The screen gate additionally requires readable evidence and fresh consensus
+/// for that marker, so unreadable cards must never be represented as empty ones.
+/// Within a hand, hero cards are immutable and the board must retain its prefix.
+/// This is intentionally conservative about folded/mucked or newly readable cards.
+pub fn validate_transition(previous: &GameState, next: &GameState) -> Result<(), &'static str> {
+    validate_game_state(previous).map_err(|_| "previous table state is invalid")?;
+    validate_game_state(next).map_err(|_| "next table state is invalid")?;
+
+    let street = |phase| match phase {
+        GamePhase::Lobby => None,
+        GamePhase::Preflop => Some(0),
+        GamePhase::Flop => Some(1),
+        GamePhase::Turn => Some(2),
+        GamePhase::River => Some(3),
+        GamePhase::Showdown => Some(4),
+    };
+    let previous_street = street(previous.game_phase).ok_or("previous screen is not a table")?;
+    let next_street = street(next.game_phase).ok_or("next screen is not a table")?;
+
+    if is_inter_hand_marker(next)
+        || (previous.game_phase == GamePhase::Showdown && next.game_phase == GamePhase::Preflop)
+    {
+        return Ok(());
+    }
+    if is_inter_hand_marker(previous) {
+        return if next.game_phase == GamePhase::Preflop {
+            Ok(())
+        } else {
+            Err("dealt preflop must be observed after the inter-hand marker")
+        };
+    }
+    if next_street < previous_street {
+        return Err("phase regressed without an inter-hand marker or showdown");
+    }
+    if next_street > previous_street + 1 {
+        return Err("street was skipped on the accepted timeline");
+    }
+    if previous.hero_cards != next.hero_cards {
+        return Err("hero cards changed within a hand");
+    }
+    if !next.board.starts_with(&previous.board) {
+        return Err("board does not preserve the accepted prefix");
+    }
+    Ok(())
+}
+
+fn is_inter_hand_marker(state: &GameState) -> bool {
+    state.game_phase == GamePhase::Preflop
+        && state.hero_cards.is_empty()
+        && state.board.is_empty()
+        && !state.action_required
+        && state.available_actions.is_empty()
+        && state.to_call == 0
+        && state.min_raise_to.is_none()
+        && state.max_raise_to.is_none()
+}
 
 /// Events emitted by the state machine.
 #[derive(Debug, Clone, PartialEq)]
@@ -238,5 +305,223 @@ mod tests {
         sm.reset();
         let event = sm.update(state(GamePhase::Preflop, false, 100, 0));
         assert!(matches!(event, TableEvent::StateChanged(_)));
+    }
+
+    #[test]
+    fn initial_showdown_is_emitted_once_and_later_changes_are_reported() {
+        let mut sm = StateMachine::new();
+        let initial = state(GamePhase::Showdown, false, 500, 5);
+        assert_eq!(
+            sm.update(initial.clone()),
+            TableEvent::Showdown(initial.clone())
+        );
+        assert_eq!(sm.update(initial.clone()), TableEvent::NoChange);
+        let mut changed = initial;
+        changed.pot_size = 600;
+        assert_eq!(
+            sm.update(changed.clone()),
+            TableEvent::StateChanged(changed)
+        );
+    }
+
+    #[test]
+    fn last_state_tracks_changes_and_reset_clears_it() {
+        let mut sm = StateMachine::new();
+        assert_eq!(sm.last_state(), None);
+        let observed = state(GamePhase::Flop, false, 250, 3);
+        sm.update(observed.clone());
+        assert_eq!(sm.last_state(), Some(&observed));
+        sm.reset();
+        assert_eq!(sm.last_state(), None);
+    }
+
+    #[test]
+    fn update_keeps_replay_semantics_without_the_screen_transition_guard() {
+        let mut sm = StateMachine::new();
+        sm.update(state(GamePhase::River, false, 500, 5));
+        let next = state(GamePhase::Preflop, true, 100, 0);
+        assert_eq!(sm.update(next.clone()), TableEvent::ActionRequired(next));
+    }
+
+    fn tracked_state(phase: GamePhase, action: bool) -> GameState {
+        let mut observed = state(phase, action, 100, phase.expected_board_cards());
+        observed.hero_cards = vec![
+            Card {
+                rank: "A".to_string(),
+                suit: "spades".to_string(),
+            },
+            Card {
+                rank: "K".to_string(),
+                suit: "hearts".to_string(),
+            },
+        ];
+        observed.hero_chips = 1_000;
+        observed.players = ["Hero", "Seat1"]
+            .into_iter()
+            .map(|name| PlayerState {
+                name: name.to_string(),
+                chips: 1_000,
+                last_action: None,
+                bet_amount: 0,
+            })
+            .collect();
+        observed.available_actions = if action {
+            vec!["check".to_string()]
+        } else {
+            vec![]
+        };
+        validate_game_state(&observed).expect("valid temporal fixture");
+        observed
+    }
+
+    fn inter_hand_marker() -> GameState {
+        let mut marker = tracked_state(GamePhase::Preflop, false);
+        marker.hero_cards.clear();
+        marker
+    }
+
+    #[test]
+    fn temporal_guard_allows_stable_states_actions_and_adjacent_streets() {
+        let phases = [
+            GamePhase::Preflop,
+            GamePhase::Flop,
+            GamePhase::Turn,
+            GamePhase::River,
+            GamePhase::Showdown,
+        ];
+        for phase in phases {
+            let observed = tracked_state(phase, false);
+            assert_eq!(validate_transition(&observed, &observed), Ok(()));
+            let mut changed = observed.clone();
+            changed.pot_size += 50;
+            if phase != GamePhase::Showdown {
+                changed.action_required = true;
+                changed.available_actions.push("check".to_string());
+            }
+            assert_eq!(validate_transition(&observed, &changed), Ok(()));
+        }
+        for pair in phases.windows(2) {
+            assert_eq!(
+                validate_transition(
+                    &tracked_state(pair[0], false),
+                    &tracked_state(pair[1], false)
+                ),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn temporal_guard_rejects_regressions_and_direct_actionable_hand_resets() {
+        for (previous, next) in [
+            (GamePhase::Flop, GamePhase::Preflop),
+            (GamePhase::Turn, GamePhase::Flop),
+            (GamePhase::River, GamePhase::Turn),
+            (GamePhase::Showdown, GamePhase::River),
+        ] {
+            for action in [false, true] {
+                assert!(validate_transition(
+                    &tracked_state(previous, false),
+                    &tracked_state(next, action)
+                )
+                .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn temporal_guard_rejects_all_skipped_streets_including_all_in_runouts() {
+        let phases = [
+            GamePhase::Preflop,
+            GamePhase::Flop,
+            GamePhase::Turn,
+            GamePhase::River,
+            GamePhase::Showdown,
+        ];
+        for (index, previous) in phases.iter().enumerate() {
+            for next in phases.iter().skip(index + 2) {
+                let mut all_in = tracked_state(*previous, false);
+                all_in.hero_chips = 0;
+                all_in.players[0].chips = 0;
+                all_in.players[0].last_action = Some("allin".to_string());
+                let mut runout = all_in.clone();
+                runout.game_phase = *next;
+                runout.board = tracked_state(*next, false).board;
+                assert_eq!(
+                    validate_transition(&all_in, &runout),
+                    Err("street was skipped on the accepted timeline")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn temporal_guard_rejects_card_mutation_and_board_prefix_changes() {
+        let previous = tracked_state(GamePhase::Flop, false);
+        let mut next = tracked_state(GamePhase::Turn, false);
+        next.hero_cards[0].rank = "T".to_string();
+        assert_eq!(
+            validate_transition(&previous, &next),
+            Err("hero cards changed within a hand")
+        );
+        next.hero_cards.clear();
+        assert!(validate_transition(&previous, &next).is_err());
+        next.hero_cards = previous.hero_cards.clone();
+        next.board[0].rank = "8".to_string();
+        assert_eq!(
+            validate_transition(&previous, &next),
+            Err("board does not preserve the accepted prefix")
+        );
+        next = previous.clone();
+        next.board.swap(0, 1);
+        assert!(validate_transition(&previous, &next).is_err());
+    }
+
+    #[test]
+    fn temporal_guard_allows_a_new_hand_only_after_a_clear_boundary() {
+        let previous = tracked_state(GamePhase::River, false);
+        let marker = inter_hand_marker();
+        let mut dealt = tracked_state(GamePhase::Preflop, true);
+        dealt.hero_cards[0].rank = "T".to_string();
+        assert!(validate_transition(&previous, &dealt).is_err());
+        assert_eq!(validate_transition(&previous, &marker), Ok(()));
+        assert_eq!(validate_transition(&marker, &dealt), Ok(()));
+        assert_eq!(
+            validate_transition(&tracked_state(GamePhase::Showdown, false), &dealt),
+            Ok(())
+        );
+        assert!(validate_transition(&marker, &tracked_state(GamePhase::Flop, false)).is_err());
+    }
+
+    #[test]
+    fn temporal_guard_does_not_treat_uncleared_preflop_states_as_a_marker() {
+        let previous = tracked_state(GamePhase::River, false);
+        let mut marker = inter_hand_marker();
+        marker.to_call = 50;
+        assert!(validate_transition(&previous, &marker).is_err());
+        marker.to_call = 0;
+        marker.min_raise_to = Some(100);
+        assert!(validate_transition(&previous, &marker).is_err());
+        marker.min_raise_to = None;
+        marker.hero_cards = tracked_state(GamePhase::Preflop, false).hero_cards;
+        assert!(validate_transition(&previous, &marker).is_err());
+    }
+
+    #[test]
+    fn temporal_guard_rejects_invalid_poker_states_and_lobby_states() {
+        let previous = tracked_state(GamePhase::Flop, false);
+        let mut invalid = previous.clone();
+        invalid.board.clear();
+        assert_eq!(
+            validate_transition(&previous, &invalid),
+            Err("next table state is invalid")
+        );
+        assert_eq!(
+            validate_transition(&invalid, &previous),
+            Err("previous table state is invalid")
+        );
+        let lobby = state(GamePhase::Lobby, false, 0, 0);
+        assert!(validate_transition(&previous, &lobby).is_err());
+        assert!(validate_transition(&lobby, &previous).is_err());
     }
 }

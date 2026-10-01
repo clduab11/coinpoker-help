@@ -13,40 +13,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable Rust
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - name: Formatting
-        run: cargo +stable fmt --all -- --check
+        run: cargo +1.95.0 fmt --all -- --check
       - name: Check
-        run: cargo +stable check --workspace --all-targets --all-features --locked
-      - name: Test
-        run: cargo +stable test --workspace --all-targets --all-features --locked
-      - name: Clippy
-        run: cargo +stable clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-  msrv:
-    name: MSRV 1.95.0
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install MSRV
-        run: rustup toolchain install 1.95.0 --profile minimal --component clippy
-      - name: Check at MSRV
         run: cargo +1.95.0 check --workspace --all-targets --all-features --locked
-      - name: Test at MSRV
+      - name: Test
         run: cargo +1.95.0 test --workspace --all-targets --all-features --locked
-      - name: Strict clippy at MSRV
+      - name: Clippy
         run: cargo +1.95.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-  shell-syntax:
-    name: Shell syntax
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate downloader syntax
-        shell: bash
-        run: bash -n download-model.sh
+      - name: Python diagnostics
+        run: python -m unittest discover -s scripts/tests -v
+      - name: Synthetic evaluation
+        run: cargo +1.95.0 run --locked --bin coinpoker -- --evaluate fixtures/synthetic/manifest.json
+      - name: PowerShell script syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $paths = @((Resolve-Path 'download-model.ps1').Path) + @(Get-ChildItem scripts -Filter '*.ps1' -File | ForEach-Object FullName)
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { throw "PowerShell syntax errors in $path`: $($errors -join '; ')" }
+          }

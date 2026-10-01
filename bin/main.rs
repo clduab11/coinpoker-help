@@ -1,10 +1,10 @@
 //! `coinpoker` — binary entrypoint.
 //!
 //! Wires the ingestion, decision, mimicry, modeling, and UI crates into a
-//! single semi-autonomous decision-support process.
+//! single read-only, human-controlled decision-support process.
 //!
 //! Modes:
-//! - `coinpoker`            — headless capture pipeline (macOS): capture →
+//! - `coinpoker`            — headless capture pipeline (Windows): capture →
 //!   change detection → VLM → decision → JSON lines on stdout.
 //! - `coinpoker --stdin`    — read `GameState` JSON lines from stdin and run
 //!   the decision pipeline (works on any host; used by tests and replay).
@@ -18,32 +18,15 @@ use std::process::ExitCode;
 use core_engine::decision::{Action, DecisionEngine, DecisionInput};
 use core_engine::equity::{Card, EquityConfig, EquityEstimator, Rank, Suit};
 use ghost_layer::betting_entropy::{BettingEntropy, BettingEntropyConfig};
-use ingest::capture::{CaptureConfig, WindowCapturer};
-use ingest::change_detect::{ChangeDetector, ChangeDetectorConfig};
-use ingest::parser::{parse_vlm_output, validate_game_state, GameState};
-use ingest::prompt::build_analysis_prompt;
+use ingest::parser::{validate_game_state, GameState};
 use ingest::state_machine::{StateMachine, TableEvent};
-use ingest::vlm::{MlxServerBackend, VlmBackend, VlmConfig};
+mod config;
+mod evaluation;
+mod live;
+use config::{Mode, USAGE};
 use opponent_model::classifier::Archetype;
 use opponent_model::exploit::ExploitEngine;
 use ui::widgets::DecisionView;
-
-const USAGE: &str = "Usage: coinpoker [OPTION]\n\
-\n\
-Options:\n\
-  (no option)      Run the macOS capture pipeline\n\
-  --stdin          Read GameState JSON lines from stdin\n\
-  --list-windows   List windows available for capture\n\
-  --ui             Reserved; exits 2 because the interactive feed is not implemented\n\
-  -h, --help       Print this help\n";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Capture,
-    Stdin,
-    ListWindows,
-    Help,
-}
 
 #[derive(Debug)]
 enum RunError {
@@ -67,18 +50,20 @@ impl From<io::Error> for RunError {
 }
 
 fn main() -> ExitCode {
-    let mode = match parse_args(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+    let options = match config::parse(std::env::args().skip(1), |key| std::env::var(key).ok()) {
+        Ok(options) => options,
         Err(message) => {
             let _ = writeln!(io::stderr().lock(), "{message}\n\n{USAGE}");
             return ExitCode::from(2);
         }
     };
 
-    let result = match mode {
-        Mode::Capture => run_capture_pipeline(),
+    let result = match options.mode.clone() {
+        Mode::Capture => live::run(options),
         Mode::Stdin => run_stdin_pipeline(),
-        Mode::ListWindows => list_windows(),
+        Mode::ListWindows => live::list_windows(),
+        Mode::Doctor => live::doctor(options),
+        Mode::Evaluate(path) => evaluation::run(&path, options.vlm),
         Mode::Help => write!(io::stdout().lock(), "{USAGE}").map_err(RunError::from),
     };
 
@@ -90,38 +75,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
-    let args: Vec<String> = args.into_iter().collect();
-    match args.as_slice() {
-        [] => Ok(Mode::Capture),
-        [arg] if arg == "--stdin" => Ok(Mode::Stdin),
-        [arg] if arg == "--list-windows" => Ok(Mode::ListWindows),
-        [arg] if arg == "--help" || arg == "-h" => Ok(Mode::Help),
-        // Exit status 2 is deliberate: the option is recognized but its live
-        // pipeline-to-window feed has not been implemented.
-        [arg] if arg == "--ui" => Err(
-            "--ui is unavailable: the interactive feed is not implemented; use --stdin for JSON-lines output"
-                .to_string(),
-        ),
-        [arg] => Err(format!("unknown option: {arg}")),
-        [_, extra, ..] => Err(format!("unexpected extra argument: {extra}")),
-    }
-}
-
-fn list_windows() -> Result<(), RunError> {
-    let windows = WindowCapturer::list_windows()
-        .map_err(|error| RunError::Message(format!("list windows failed: {error}")))?;
-    let mut output = io::stdout().lock();
-    for window in windows {
-        writeln!(
-            output,
-            "title={:?} app={:?} on_screen={}",
-            window.title, window.app_name, window.on_screen
-        )?;
-    }
-    Ok(())
 }
 
 /// The decision pipeline shared by all input modes.
@@ -298,7 +251,7 @@ impl Pipeline {
             equity: decision.equity,
             break_even: decision.break_even,
             opponent: Some(format!("{archetype:?}").to_lowercase()),
-            confidence: Some(0.0),
+            confidence: None,
         })
     }
 }
@@ -350,6 +303,7 @@ fn run_stdin_pipeline() -> Result<(), RunError> {
             Ok(state) => state,
             Err(error) => {
                 report_warning(format_args!("invalid state line: {error}"));
+                state_machine.reset();
                 if decision_active {
                     emitter.emit_clear("invalid-state")?;
                     decision_active = false;
@@ -359,6 +313,7 @@ fn run_stdin_pipeline() -> Result<(), RunError> {
         };
         if let Err(error) = validate_game_state(&state) {
             report_warning(format_args!("invalid state line: {error}"));
+            state_machine.reset();
             if decision_active {
                 emitter.emit_clear("invalid-state")?;
                 decision_active = false;
@@ -397,183 +352,13 @@ fn run_stdin_pipeline() -> Result<(), RunError> {
     Ok(())
 }
 
-/// Capture-driven pipeline (macOS): poll frames, fire the VLM on change,
-/// and emit decisions when the hero must act.
-fn run_capture_pipeline() -> Result<(), RunError> {
-    let capturer = WindowCapturer::new(capture_config_from_env()).map_err(|error| {
-        RunError::Message(format!(
-            "capture unavailable: {error}\nScreen capture requires macOS 14+ with Screen Recording permission granted in System Settings."
-        ))
-    })?;
-
-    let config = vlm_config_from_env().map_err(RunError::Message)?;
-    let backend = MlxServerBackend::new(config);
-    let mut detector = ChangeDetector::new(ChangeDetectorConfig::default());
-    let mut state_machine = StateMachine::new();
-    let pipeline = Pipeline::new();
-    let emitter = ui::headless::stdout();
-
-    loop {
-        let frame = match capturer.capture_frame() {
-            Ok(frame) => frame,
-            Err(error) => {
-                report_warning(format_args!("capture error: {error}"));
-                detector.reset();
-                state_machine.reset();
-                emitter.emit_clear("capture-unavailable")?;
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                continue;
-            }
-        };
-
-        if !detector.detect(&frame).is_changed() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            continue;
-        }
-
-        let prompt = build_analysis_prompt();
-        let output = match backend.analyze(&frame, &prompt) {
-            Ok(output) => output,
-            Err(error) => {
-                report_warning(format_args!("vlm error: {error}"));
-                detector.reset();
-                state_machine.reset();
-                emitter.emit_clear("vlm-error")?;
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                continue;
-            }
-        };
-
-        let current_frame = match capturer.capture_frame() {
-            Ok(frame) => frame,
-            Err(error) => {
-                report_warning(format_args!(
-                    "freshness check failed after inference: {error}"
-                ));
-                detector.reset();
-                state_machine.reset();
-                emitter.emit_clear("freshness-check-failed")?;
-                continue;
-            }
-        };
-        if detector.detect(&current_frame).is_changed() {
-            report_warning(format_args!(
-                "decision suppressed: table changed during VLM inference"
-            ));
-            detector.reset();
-            state_machine.reset();
-            emitter.emit_clear("state-changed-during-inference")?;
-            continue;
-        }
-
-        let state = match parse_vlm_output(&output) {
-            Ok(state) => state,
-            Err(error) => {
-                report_warning(format_args!("parse error: {error}"));
-                detector.reset();
-                state_machine.reset();
-                emitter.emit_clear("invalid-observation")?;
-                continue;
-            }
-        };
-
-        match state_machine.update(state) {
-            TableEvent::ActionRequired(state) | TableEvent::StateChanged(state)
-                if state.action_required =>
-            {
-                let view = match pipeline.decide(&state) {
-                    Ok(view) => view,
-                    Err(error) => {
-                        report_warning(format_args!("decision suppressed: {error}"));
-                        detector.reset();
-                        state_machine.reset();
-                        emitter.emit_clear("decision-suppressed")?;
-                        continue;
-                    }
-                };
-                emitter.emit_decision(&view)?;
-            }
-            TableEvent::StateChanged(_) | TableEvent::Showdown(_) => {
-                emitter.emit_clear("action-not-required")?;
-            }
-            TableEvent::NoChange | TableEvent::ActionRequired(_) => {}
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-}
-
-fn capture_config_from_env() -> CaptureConfig {
-    let mut config = CaptureConfig::default();
-    if let Ok(title) = std::env::var("COINPOKER_WINDOW_TITLE") {
-        if !title.trim().is_empty() {
-            config.window_title = title;
-        }
-    }
-    if let Ok(app_name) = std::env::var("COINPOKER_APP_NAME") {
-        if !app_name.trim().is_empty() {
-            config.app_name = app_name;
-        }
-    }
-    config
-}
-
-fn vlm_config_from_env() -> Result<VlmConfig, String> {
-    let mut config = VlmConfig::default();
-    if let Ok(endpoint) = std::env::var("COINPOKER_VLM_ENDPOINT") {
-        if !endpoint.trim().is_empty() {
-            config.endpoint = endpoint;
-        }
-    }
-    if let Ok(model) = std::env::var("COINPOKER_VLM_MODEL") {
-        if !model.trim().is_empty() {
-            config.model = model;
-        }
-    }
-
-    let remote_allowed = std::env::var("COINPOKER_ALLOW_REMOTE_VLM")
-        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    validate_vlm_endpoint(&config.endpoint, remote_allowed)?;
-
-    Ok(config)
-}
-
-fn validate_vlm_endpoint(endpoint: &str, remote_allowed: bool) -> Result<(), String> {
-    let parsed = url::Url::parse(endpoint)
-        .map_err(|error| format!("invalid COINPOKER_VLM_ENDPOINT: {error}"))?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("VLM endpoint must use HTTP or HTTPS".to_string());
-    }
-    let loopback = match parsed.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => return Err("VLM endpoint must include a host".to_string()),
-    };
-
-    if loopback {
-        return Ok(());
-    }
-    if !remote_allowed {
-        return Err(
-            "refusing non-loopback COINPOKER_VLM_ENDPOINT; set COINPOKER_ALLOW_REMOTE_VLM=1 only after reviewing screenshot privacy"
-                .to_string(),
-        );
-    }
-    if parsed.scheme() != "https" {
-        return Err("remote VLM endpoints must use HTTPS".to_string());
-    }
-    Ok(())
-}
-
 fn report_warning(arguments: fmt::Arguments<'_>) {
     let _ = writeln!(io::stderr().lock(), "{arguments}");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_vlm_endpoint;
+    use super::config::validate_vlm_endpoint;
 
     #[test]
     fn local_vlm_endpoints_are_allowed_without_opt_in() {

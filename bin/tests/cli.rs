@@ -35,6 +35,8 @@ fn help_prints_usage_and_succeeds() {
     assert!(stdout.contains("Usage: coinpoker [OPTION]"));
     assert!(stdout.contains("--stdin"));
     assert!(stdout.contains("--list-windows"));
+    assert!(stdout.contains("--exe-name"));
+    assert!(stdout.contains("--window-hwnd"));
 }
 
 #[test]
@@ -143,6 +145,50 @@ fn invalid_stdin_state_invalidates_an_active_decision() {
 
     let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
     assert!(stderr.contains("do not match hero_chips"));
+}
+
+#[test]
+fn a_valid_state_recovers_after_invalid_input_without_duplicate_clears() {
+    let input = format!("{ACTION_STATE}\n{{invalid}}\n{{invalid}}\n{ACTION_STATE}\n");
+    let output = run_with_stdin(&["--stdin"], &input);
+    assert!(output.status.success());
+    let events: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(events.len(), 3);
+    assert!(events[0]["action"].is_string());
+    assert_eq!(events[1]["event"], "clear");
+    assert!(events[2]["action"].is_string());
+}
+
+#[test]
+fn evaluates_synthetic_image_contracts_without_a_server() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../fixtures/synthetic/manifest.json");
+    let output = run(&["--evaluate", manifest.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["format"], 2);
+    assert_eq!(report["beta_acceptance"], false);
+    assert_eq!(report["critical_actionable_false_positives"], 0);
+    assert_eq!(report["stale_result_suppression_failures"], 0);
+    assert_eq!(report["source"], "synthetic");
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn non_windows_live_capture_fails_actionably() {
+    let output = run(&[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("Windows"));
 }
 
 #[test]

@@ -6,11 +6,14 @@
 //! static table: capture runs at ~10fps, but the VLM fires only when the
 //! score exceeds the configured threshold.
 //!
-//! The detector is intentionally pure (no clocks, no I/O); debouncing and
-//! minimum fire intervals are the caller's concern.
+//! All pixels also participate in a local tile check, so a small card digit or
+//! action control is not averaged away by the whole window. Thresholds are
+//! conservative engineering defaults, not visually calibrated accuracy claims.
+
+use serde::Serialize;
 
 /// Configuration for the change detector.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ChangeDetectorConfig {
     /// Sample every Nth pixel (1 = compare every pixel).
     pub sample_stride: u32,
@@ -18,15 +21,37 @@ pub struct ChangeDetectorConfig {
     pub channel_delta: u8,
     /// Fraction of sampled pixels that must differ to report a change.
     pub changed_fraction: f64,
+    /// Local tiles compare every pixel, independently of the global sample stride.
+    pub tile_size: u32,
+    /// Fraction within any tile that invalidates the frame.
+    pub local_changed_fraction: f64,
 }
 
 impl Default for ChangeDetectorConfig {
     fn default() -> Self {
         Self {
-            sample_stride: 4,
-            channel_delta: 24,
-            changed_fraction: 0.005,
+            sample_stride: 1,
+            channel_delta: 8,
+            changed_fraction: 0.001,
+            tile_size: 16,
+            local_changed_fraction: 0.003,
         }
+    }
+}
+
+impl ChangeDetectorConfig {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !(1..=64).contains(&self.sample_stride)
+            || !(1..=128).contains(&self.channel_delta)
+            || !(8..=128).contains(&self.tile_size)
+            || !self.changed_fraction.is_finite()
+            || !self.local_changed_fraction.is_finite()
+            || !(0.000001..=1.0).contains(&self.changed_fraction)
+            || !(0.000001..=1.0).contains(&self.local_changed_fraction)
+        {
+            return Err("invalid change thresholds: stride 1..64, delta 1..128, tile 8..128, fractions 0.000001..1");
+        }
+        Ok(())
     }
 }
 
@@ -75,7 +100,7 @@ impl ChangeDetector {
     pub fn detect(&mut self, frame: &super::capture::Frame) -> ChangeResult {
         // Malformed buffers are unsafe to compare and must never suppress
         // inference or replace a known-good baseline.
-        if frame.validate().is_err() {
+        if frame.validate().is_err() || frame.width == 0 || frame.height == 0 {
             return ChangeResult::Changed { score: 1.0 };
         }
 
@@ -95,9 +120,9 @@ impl ChangeDetector {
             return ChangeResult::Changed { score: 1.0 };
         }
 
-        let score = diff_score(baseline, frame, &self.config);
+        let (score, local_change) = diff_score(baseline, frame, &self.config);
 
-        if score >= self.config.changed_fraction {
+        if score >= self.config.changed_fraction || local_change {
             self.baseline = Some(frame.clone());
             ChangeResult::Changed { score }
         } else {
@@ -117,33 +142,125 @@ fn diff_score(
     a: &super::capture::Frame,
     b: &super::capture::Frame,
     config: &ChangeDetectorConfig,
-) -> f64 {
+) -> (f64, bool) {
     let stride = config.sample_stride.max(1) as usize;
     let delta = config.channel_delta;
 
     let mut sampled = 0usize;
     let mut changed = 0usize;
+    let tile = config.tile_size.max(1) as usize;
+    let columns = (a.width as usize).div_ceil(tile);
+    let rows = (a.height as usize).div_ceil(tile);
+    let mut tiles = vec![(0usize, 0usize); columns * rows];
 
-    for (pa, pb) in a
+    for (index, (pa, pb)) in a
         .rgba
         .chunks_exact(4)
         .zip(b.rgba.chunks_exact(4))
-        .step_by(stride)
+        .enumerate()
     {
-        sampled += 1;
         let differs = pa
             .iter()
             .zip(pb.iter())
             .any(|(x, y)| x.abs_diff(*y) > delta);
-        if differs {
-            changed += 1;
+        if index % stride == 0 {
+            sampled += 1;
+            changed += usize::from(differs);
         }
+        let x = index % a.width as usize;
+        let y = index / a.width as usize;
+        let entry = &mut tiles[(y / tile) * columns + x / tile];
+        entry.0 += usize::from(differs);
+        entry.1 += 1;
     }
 
-    if sampled == 0 {
+    let score = if sampled == 0 {
         0.0
     } else {
         changed as f64 / sampled as f64
+    };
+    let local = tiles.iter().any(|(changed, total)| {
+        *total > 0 && *changed as f64 / *total as f64 >= config.local_changed_fraction
+    });
+    (score, local)
+}
+
+/// Caller-supplied monotonic time makes stabilization deterministic in tests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StabilityConfig {
+    pub stable_ms: u64,
+    pub stable_captures: u32,
+}
+
+impl Default for StabilityConfig {
+    fn default() -> Self {
+        Self {
+            stable_ms: 300,
+            stable_captures: 3,
+        }
+    }
+}
+
+impl StabilityConfig {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !(100..=5_000).contains(&self.stable_ms) || !(2..=50).contains(&self.stable_captures) {
+            return Err("stability requires 100..5000 ms and 2..50 captures");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameProgress {
+    pub changed: bool,
+    pub stable: bool,
+}
+
+pub struct FrameTracker {
+    detector: ChangeDetector,
+    config: StabilityConfig,
+    since: Option<u64>,
+    count: u32,
+}
+
+impl FrameTracker {
+    pub fn new(change: ChangeDetectorConfig, stability: StabilityConfig) -> Self {
+        Self {
+            detector: ChangeDetector::new(change),
+            config: stability,
+            since: None,
+            count: 0,
+        }
+    }
+
+    pub fn observe(&mut self, frame: &super::capture::Frame, now_ms: u64) -> FrameProgress {
+        if frame.validate().is_err() || frame.width == 0 || frame.height == 0 {
+            self.reset();
+            return FrameProgress {
+                changed: true,
+                stable: false,
+            };
+        }
+        let changed = self.detector.detect(frame).is_changed();
+        if changed || self.since.is_none_or(|since| now_ms < since) {
+            self.since = Some(now_ms);
+            self.count = 1;
+        } else {
+            self.count = self.count.saturating_add(1);
+        }
+        FrameProgress {
+            changed,
+            stable: self.count >= self.config.stable_captures
+                && self
+                    .since
+                    .is_some_and(|since| now_ms.saturating_sub(since) >= self.config.stable_ms),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.detector.reset();
+        self.since = None;
+        self.count = 0;
     }
 }
 
@@ -194,6 +311,8 @@ mod tests {
             sample_stride: 1,
             channel_delta: 24,
             changed_fraction: 0.5,
+            local_changed_fraction: 1.0,
+            ..ChangeDetectorConfig::default()
         };
         let mut detector = ChangeDetector::new(config);
         let mut frame = solid_frame(16, 16, 128);
@@ -212,6 +331,8 @@ mod tests {
             sample_stride: 1,
             channel_delta: 24,
             changed_fraction: 0.5,
+            local_changed_fraction: 1.0,
+            ..ChangeDetectorConfig::default()
         };
         let mut detector = ChangeDetector::new(config);
         let baseline = solid_frame(4, 1, 0);
@@ -234,6 +355,8 @@ mod tests {
             sample_stride: 1,
             channel_delta: 24,
             changed_fraction: 0.5,
+            local_changed_fraction: 1.0,
+            ..ChangeDetectorConfig::default()
         };
         let mut detector = ChangeDetector::new(config);
         let mut frame = solid_frame(16, 16, 128);
@@ -267,6 +390,68 @@ mod tests {
         let result = detector.detect(&baseline);
         assert!(!result.is_changed());
         assert_eq!(result.score(), 0.0);
+    }
+
+    #[test]
+    fn local_pixel_outside_global_sample_grid_triggers() {
+        let mut detector = ChangeDetector::new(ChangeDetectorConfig {
+            sample_stride: 64,
+            ..ChangeDetectorConfig::default()
+        });
+        let mut frame = solid_frame(320, 240, 64);
+        detector.detect(&frame);
+        frame.rgba[4 * 37] = 255;
+        assert!(detector.detect(&frame).is_changed());
+    }
+
+    #[test]
+    fn animation_cannot_become_stable_until_it_stops() {
+        let mut tracker =
+            FrameTracker::new(ChangeDetectorConfig::default(), StabilityConfig::default());
+        for step in 0..10 {
+            let result = tracker.observe(&solid_frame(160, 120, (step * 30) as u8), step * 100);
+            assert!(!result.stable);
+        }
+        let frame = solid_frame(160, 120, 50);
+        assert!(!tracker.observe(&frame, 1_000).stable);
+        assert!(!tracker.observe(&frame, 1_100).stable);
+        assert!(!tracker.observe(&frame, 1_200).stable);
+        assert!(tracker.observe(&frame, 1_300).stable);
+        tracker.reset();
+        assert!(!tracker.observe(&frame, 1_400).stable);
+    }
+
+    #[test]
+    fn malformed_and_size_changes_break_stability() {
+        let mut tracker =
+            FrameTracker::new(ChangeDetectorConfig::default(), StabilityConfig::default());
+        let frame = solid_frame(160, 120, 50);
+        tracker.observe(&frame, 0);
+        tracker.observe(&frame, 100);
+        assert!(tracker.observe(&frame, 300).stable);
+        let mut malformed = frame.clone();
+        malformed.rgba.pop();
+        assert!(!tracker.observe(&malformed, 400).stable);
+        assert!(!tracker.observe(&frame, 500).stable);
+        assert!(!tracker.observe(&solid_frame(320, 240, 50), 800).stable);
+    }
+
+    #[test]
+    fn validated_bounds_reject_nonfinite_and_unsafe_thresholds() {
+        for fraction in [f64::NAN, f64::INFINITY, 0.0, -1.0, 1.1] {
+            assert!(ChangeDetectorConfig {
+                changed_fraction: fraction,
+                ..ChangeDetectorConfig::default()
+            }
+            .validate()
+            .is_err());
+        }
+        assert!(StabilityConfig {
+            stable_ms: 0,
+            stable_captures: 1
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]

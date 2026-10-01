@@ -13,12 +13,28 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 image = { workspace = true }
-# Blocking HTTP client for the local MLX VLM server backend.
+# Blocking HTTP client for the local VLM server backend.
 ureq = { version = "2.12", features = ["json"] }
 base64 = "0.22"
+url = { workspace = true }
 
-# macOS-only screen capture (ScreenCaptureKit bindings). The crate remains
-# buildable on other hosts; capturer construction fails fast there.
-# `macos_14_0` enables the single-frame screenshot API (SCScreenshotManager).
-[target.'cfg(target_os = "macos")'.dependencies]
-screencapturekit = { version = "10.0", features = ["macos_14_0"] }
+# Window-only Windows Graphics Capture and Win32 process/window discovery.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Foundation",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_WindowsAndMessaging",
+] }

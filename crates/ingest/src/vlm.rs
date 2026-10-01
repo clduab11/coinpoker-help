@@ -1,38 +1,18 @@
 //! Multimodal inference for structured game-state extraction.
 //!
-//! # Deployment constraint: MLX format
-//!
-//! The Gemma 4 E2B model is obtained in **MLX format** (Apple's framework
-//! layout), not GGUF. llama.cpp does not load MLX-format weights, so this
-//! module does not use llama.cpp.
-//!
-//! # Runtime strategy (verified against the current ecosystem)
-//!
-//! - [`mlxrs`] (safe Rust bindings to MLX via the `mlx-c` FFI) ships a `vlm`
-//!   feature, but per-model architectures are opt-in and Gemma 4 is not yet
-//!   among them (qwen3 and lfm2-vl only). In-process Gemma 4 E2B inference
-//!   from Rust is therefore not available today.
-//! - Rust-native MLX servers that run MLX-format weights directly on Metal
-//!   (e.g. `rMLX`, `mlxcel`) expose an OpenAI-compatible HTTP API with image
-//!   input, and the Python reference `mlx-vlm` server does the same.
-//!
-//! Consequently this module defines a backend-agnostic [`VlmBackend`] trait
-//! and ships [`MlxServerBackend`], an OpenAI-compatible HTTP client that
-//! targets a local MLX VLM server. The pipeline is unchanged if an
-//! in-process `mlxrs` backend is added later.
-//!
-//! # Model note
-//!
-//! Early MLX quantizations of Gemma 4 produced garbage output because PLE
-//! (per-layer embedding) layers were quantized incorrectly. Use the
-//! PLE-safe `OptiQ` variants, e.g. `mlx-community/gemma-4-e2b-it-OptiQ-4bit`.
+//! The local llama.cpp server loads a revision-pinned Gemma 4 E2B GGUF and its
+//! separate vision projector. [`OpenAiServerBackend`] sends a non-streaming
+//! OpenAI-compatible request with one PNG data URL. Model, projector, and server
+//! provenance are checked by the Windows setup scripts. API compatibility alone
+//! does not establish poker-table extraction accuracy; see the visual evaluation.
 
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::time::Duration;
 
 use base64::Engine;
 use serde::Deserialize;
 use thiserror::Error;
+use url::{Host, Url};
 
 use crate::capture::Frame;
 use crate::prompt::SYSTEM_PROMPT;
@@ -40,6 +20,9 @@ use crate::prompt::SYSTEM_PROMPT;
 /// Errors produced by the VLM layer.
 #[derive(Debug, Error)]
 pub enum VlmError {
+    /// The endpoint failed the screenshot transport policy.
+    #[error("invalid VLM endpoint: {0}")]
+    InvalidEndpoint(&'static str),
     /// No backend is configured or the configured backend is unavailable.
     #[error("VLM backend unavailable: {0}")]
     Unavailable(String),
@@ -47,7 +30,7 @@ pub enum VlmError {
     #[error("VLM server request failed: {0}")]
     Request(String),
     /// The VLM server responded with a non-success status.
-    #[error("VLM server error (status {status}): {body}")]
+    #[error("VLM server error (status {status}); response body omitted for screenshot privacy")]
     Server { status: u16, body: String },
     /// The response body could not be parsed.
     #[error("VLM response parse error: {0}")]
@@ -63,8 +46,10 @@ pub enum VlmError {
 /// Configuration for the VLM backend.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VlmConfig {
-    /// Base URL of the local MLX VLM server (OpenAI-compatible).
+    /// Chat completions URL of the OpenAI-compatible VLM server.
     pub endpoint: String,
+    /// Explicitly permit a non-loopback HTTPS endpoint to receive screenshots.
+    pub allow_remote: bool,
     /// Model name as registered on the server.
     pub model: String,
     /// Sampling temperature; kept low for deterministic structured output.
@@ -79,7 +64,8 @@ impl Default for VlmConfig {
     fn default() -> Self {
         Self {
             endpoint: "http://127.0.0.1:8080/v1/chat/completions".to_string(),
-            model: "gemma-4-e2b-it-OptiQ-4bit".to_string(),
+            allow_remote: false,
+            model: "coinpoker-gemma-4-e2b".to_string(),
             temperature: 0.1,
             max_tokens: 1024,
             timeout_secs: 30,
@@ -94,32 +80,36 @@ pub struct VlmOutput {
     pub text: String,
 }
 
-/// Abstraction over VLM runtimes so the pipeline can switch between an
-/// in-process MLX engine and a local MLX server without changes.
+/// Abstraction over VLM runtimes; the pipeline depends only on this contract.
 pub trait VlmBackend {
     /// Analyze a captured frame with the given prompt and return raw text.
     fn analyze(&self, frame: &Frame, prompt: &str) -> Result<VlmOutput, VlmError>;
 }
 
-/// OpenAI-compatible HTTP client for a local MLX VLM server.
+/// OpenAI-compatible HTTP client for a multimodal VLM server.
 ///
-/// Works with any server that accepts the multimodal chat-completions
-/// format (data-URL images), including Rust-native MLX servers (`rMLX`,
-/// `mlxcel`) and the `mlx-vlm` reference server.
-pub struct MlxServerBackend {
+/// Requires the exact tested message/response contract, including PNG data URLs
+/// and non-streaming text with a `stop` finish reason. Model/runtime compatibility
+/// must be validated independently against the pinned GGUF and projector.
+pub struct OpenAiServerBackend {
     config: VlmConfig,
     agent: ureq::Agent,
 }
 
-impl MlxServerBackend {
-    pub fn new(config: VlmConfig) -> Self {
+impl OpenAiServerBackend {
+    pub fn new(mut config: VlmConfig) -> Result<Self, VlmError> {
+        // Validate at the library boundary, including callers that bypass the CLI.
+        // Send the parsed URL so validation and transport use one interpretation.
+        config.endpoint = validate_endpoint(&config.endpoint, config.allow_remote)?.into();
         let agent = ureq::AgentBuilder::new()
+            // Even feature unification must not route local screenshots through
+            // an HTTP_PROXY/HTTPS_PROXY configured elsewhere in the process.
+            .try_proxy_from_env(false)
             .timeout(Duration::from_secs(config.timeout_secs))
-            // The endpoint policy is validated before construction. Following
-            // redirects could otherwise escape an approved loopback endpoint.
+            // A redirect could escape the approved endpoint.
             .redirects(0)
             .build();
-        Self { config, agent }
+        Ok(Self { config, agent })
     }
 
     /// The endpoint this backend targets.
@@ -128,7 +118,38 @@ impl MlxServerBackend {
     }
 }
 
-impl VlmBackend for MlxServerBackend {
+fn validate_endpoint(endpoint: &str, allow_remote: bool) -> Result<Url, VlmError> {
+    let parsed = Url::parse(endpoint).map_err(|_| VlmError::InvalidEndpoint("invalid URL"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(VlmError::InvalidEndpoint("HTTP or HTTPS required"));
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(VlmError::InvalidEndpoint(
+            "credentials, query strings, and fragments are forbidden",
+        ));
+    }
+    let loopback = match parsed.host() {
+        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        None => return Err(VlmError::InvalidEndpoint("host required")),
+    };
+    if !loopback && !allow_remote {
+        return Err(VlmError::InvalidEndpoint(
+            "remote screenshots require explicit opt-in",
+        ));
+    }
+    if !loopback && parsed.scheme() != "https" {
+        return Err(VlmError::InvalidEndpoint("remote HTTPS required"));
+    }
+    Ok(parsed)
+}
+
+impl VlmBackend for OpenAiServerBackend {
     fn analyze(&self, frame: &Frame, prompt: &str) -> Result<VlmOutput, VlmError> {
         let data_url = encode_frame_as_png_data_url(frame)?;
 
@@ -136,6 +157,7 @@ impl VlmBackend for MlxServerBackend {
             "model": self.config.model,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
+            "stream": false,
             "messages": [
                 {
                     "role": "system",
@@ -151,34 +173,46 @@ impl VlmBackend for MlxServerBackend {
             ]
         });
 
-        // ureq 2.x surfaces 4xx/5xx statuses as `Error::Status`, so handle
-        // that variant explicitly to preserve the server's error body.
+        // Servers can echo entire requests (including screenshots) in error bodies.
+        // Never retain or log them, and never follow redirects to another host.
         let response = match self.agent.post(&self.config.endpoint).send_json(body) {
             Ok(response) => response,
-            Err(ureq::Error::Status(status, response)) => {
-                let body = response
-                    .into_string()
-                    .map_err(|e| VlmError::Request(e.to_string()))?;
-                return Err(VlmError::Server { status, body });
+            Err(ureq::Error::Status(status, _)) => {
+                return Err(VlmError::Server {
+                    status,
+                    body: String::new(),
+                });
             }
-            Err(e) => return Err(VlmError::Request(e.to_string())),
+            Err(_) => {
+                return Err(VlmError::Request(
+                    "connection or request timeout; check the local server".into(),
+                ))
+            }
         };
 
         // With redirects disabled, ureq returns 3xx responses directly rather
         // than as `Error::Status`; surface them before parsing the body.
         let status = response.status();
         if !(200..300).contains(&status) {
-            let body = response
-                .into_string()
-                .map_err(|e| VlmError::Request(e.to_string()))?;
-            return Err(VlmError::Server { status, body });
+            return Err(VlmError::Server {
+                status,
+                body: String::new(),
+            });
         }
 
-        let text = response
-            .into_string()
-            .map_err(|e| VlmError::Request(e.to_string()))?;
-
-        parse_chat_response(&text)
+        const MAX_RESPONSE: u64 = 1_048_576;
+        let mut bytes = Vec::new();
+        response
+            .into_reader()
+            .take(MAX_RESPONSE + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| VlmError::Request("response read failed or timed out".into()))?;
+        if bytes.len() as u64 > MAX_RESPONSE {
+            return Err(VlmError::Parse("response exceeds 1 MiB".into()));
+        }
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| VlmError::Parse("response is not UTF-8".into()))?;
+        parse_chat_response(text)
     }
 }
 
@@ -214,8 +248,8 @@ struct ChatMessage {
 }
 
 fn parse_chat_response(body: &str) -> Result<VlmOutput, VlmError> {
-    let parsed: ChatResponse =
-        serde_json::from_str(body).map_err(|e| VlmError::Parse(e.to_string()))?;
+    let parsed: ChatResponse = serde_json::from_str(body)
+        .map_err(|_| VlmError::Parse("invalid chat-completions response schema".into()))?;
     let choice = parsed
         .choices
         .into_iter()
@@ -228,6 +262,12 @@ fn parse_chat_response(body: &str) -> Result<VlmOutput, VlmError> {
     ) {
         return Err(VlmError::Truncated(
             choice.finish_reason.unwrap_or_default(),
+        ));
+    }
+
+    if choice.finish_reason.as_deref() != Some("stop") {
+        return Err(VlmError::Parse(
+            "missing or unsupported completion finish reason".into(),
         ));
     }
 
@@ -409,22 +449,75 @@ mod tests {
     }
 
     #[test]
-    fn request_to_closed_port_fails_cleanly() {
-        // Bind a port and drop the listener so nothing is listening.
-        let port = {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-            listener.local_addr().expect("addr").port()
+    fn backend_rejects_remote_without_opt_in_or_https() {
+        let remote_https = VlmConfig {
+            endpoint: "https://example.com/v1/chat/completions".into(),
+            ..VlmConfig::default()
         };
+        assert!(matches!(
+            OpenAiServerBackend::new(remote_https.clone()),
+            Err(VlmError::InvalidEndpoint(_))
+        ));
+        let remote_http = VlmConfig {
+            endpoint: "http://example.com/v1/chat/completions".into(),
+            allow_remote: true,
+            ..VlmConfig::default()
+        };
+        assert!(matches!(
+            OpenAiServerBackend::new(remote_http),
+            Err(VlmError::InvalidEndpoint(_))
+        ));
+        assert!(OpenAiServerBackend::new(VlmConfig {
+            allow_remote: true,
+            ..remote_https
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn backend_allows_local_http_and_rejects_ambiguous_urls() {
+        for endpoint in [
+            "http://localhost:8080/v1/chat/completions",
+            "http://127.0.0.2:8080/v1/chat/completions",
+            "http://[::1]:8080/v1/chat/completions",
+        ] {
+            assert!(OpenAiServerBackend::new(VlmConfig {
+                endpoint: endpoint.into(),
+                ..VlmConfig::default()
+            })
+            .is_ok());
+        }
+        for endpoint in [
+            "http://user:password@127.0.0.1:8080/v1/chat/completions",
+            "http://127.0.0.1:8080/v1/chat/completions?token=x",
+            "http://127.0.0.1:8080/v1/chat/completions#fragment",
+            "file:///tmp/screenshot",
+        ] {
+            assert!(matches!(
+                OpenAiServerBackend::new(VlmConfig {
+                    endpoint: endpoint.into(),
+                    ..VlmConfig::default()
+                }),
+                Err(VlmError::InvalidEndpoint(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn request_to_closed_port_fails_cleanly() {
+        // Port zero cannot be a listening TCP endpoint. Releasing a random
+        // bound port here is racy: another parallel test can claim it before
+        // this request, changing the error into a server response.
         let config = VlmConfig {
-            endpoint: format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            endpoint: "http://127.0.0.1:0/v1/chat/completions".to_string(),
             timeout_secs: 2,
             ..VlmConfig::default()
         };
-        let backend = MlxServerBackend::new(config);
+        let backend = OpenAiServerBackend::new(config).expect("valid loopback endpoint");
         let err = backend
             .analyze(&tiny_frame(), "test")
             .expect_err("must fail");
-        assert!(matches!(err, VlmError::Request(_)));
+        assert!(matches!(err, VlmError::Request(_)), "got {err:?}");
     }
 
     #[test]
@@ -439,7 +532,7 @@ mod tests {
             timeout_secs: 5,
             ..VlmConfig::default()
         };
-        let backend = MlxServerBackend::new(config);
+        let backend = OpenAiServerBackend::new(config).expect("valid loopback endpoint");
         let out = backend
             .analyze(&tiny_frame(), "describe the table")
             .expect("mock server responds");
@@ -464,10 +557,10 @@ mod tests {
 
     #[test]
     fn redirects_are_surfaced_instead_of_followed() {
-        let target_port = {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-            listener.local_addr().expect("addr").port()
-        };
+        // Keep the redirect target reserved until after the assertion so a
+        // parallel mock cannot reuse the endpoint.
+        let target_listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let target_port = target_listener.local_addr().expect("addr").port();
         let port =
             mock_redirect_server(format!("http://127.0.0.1:{target_port}/unapproved-target"));
         let config = VlmConfig {
@@ -475,11 +568,55 @@ mod tests {
             timeout_secs: 2,
             ..VlmConfig::default()
         };
-        let backend = MlxServerBackend::new(config);
+        let backend = OpenAiServerBackend::new(config).expect("valid loopback endpoint");
         let err = backend
             .analyze(&tiny_frame(), "describe the table")
             .expect_err("redirect must not be followed");
-        assert!(matches!(err, VlmError::Server { status: 302, .. }));
+        assert!(
+            matches!(err, VlmError::Server { status: 302, .. }),
+            "got {err:?}"
+        );
+        drop(target_listener);
+    }
+
+    #[test]
+    fn timeout_is_bounded_without_a_sleeping_mock() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let (release, blocked) = mpsc::sync_channel::<()>(1);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            let _ = blocked.recv_timeout(Duration::from_secs(5));
+        });
+        let backend = OpenAiServerBackend::new(VlmConfig {
+            endpoint: format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            timeout_secs: 1,
+            ..VlmConfig::default()
+        })
+        .expect("valid loopback endpoint");
+        assert!(matches!(
+            backend.analyze(&tiny_frame(), "test"),
+            Err(VlmError::Request(_))
+        ));
+        let _ = release.send(());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn errors_never_echo_screenshot_payloads() {
+        let (port, _request) = mock_server(
+            "500 Internal Server Error",
+            "data:image/png;base64,PRIVATE_SCREENSHOT",
+        );
+        let backend = OpenAiServerBackend::new(VlmConfig {
+            endpoint: format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            ..VlmConfig::default()
+        })
+        .expect("valid loopback endpoint");
+        let error = backend.analyze(&tiny_frame(), "test").unwrap_err();
+        assert!(!format!("{error:?} {error}").contains("PRIVATE_SCREENSHOT"));
+        assert!(!format!("{error:?} {error}").contains("data:image"));
     }
 
     #[test]
@@ -491,7 +628,7 @@ mod tests {
             timeout_secs: 5,
             ..VlmConfig::default()
         };
-        let backend = MlxServerBackend::new(config);
+        let backend = OpenAiServerBackend::new(config).expect("valid loopback endpoint");
         let err = backend
             .analyze(&tiny_frame(), "describe the table")
             .expect_err("404 must error");

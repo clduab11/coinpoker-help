@@ -1,0 +1,3080 @@
+{
+  "format": 2,
+  "source": "synthetic",
+  "cases": [
+    {
+      "id": "lobby",
+      "sequence": "lobby",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "lobby_title",
+      "expected_kind": "lobby",
+      "expected_state": null,
+      "recommendation_allowed": false,
+      "tags": [
+        "lobby"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "lobby",
+        "evidence": {
+          "table_layout": false,
+          "hero_cards": false,
+          "board_area": false,
+          "pot": false,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": null
+      },
+      "freshness": null
+    },
+    {
+      "id": "dialog",
+      "sequence": "dialog",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "candidate",
+      "expected_kind": "other_coin_poker_window",
+      "expected_state": null,
+      "recommendation_allowed": false,
+      "tags": [
+        "dialog"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "other_coin_poker_window",
+        "evidence": {
+          "table_layout": false,
+          "hero_cards": false,
+          "board_area": false,
+          "pot": false,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": null
+      },
+      "freshness": null
+    },
+    {
+      "id": "ambiguous-screen",
+      "sequence": "ambiguous-screen",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "candidate",
+      "expected_kind": "unknown",
+      "expected_state": null,
+      "recommendation_allowed": false,
+      "tags": [
+        "unknown",
+        "obscured"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "unknown",
+        "evidence": {
+          "table_layout": false,
+          "hero_cards": false,
+          "board_area": false,
+          "pot": false,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": null
+      },
+      "freshness": null
+    },
+    {
+      "id": "preflop-waiting1",
+      "sequence": "preflop-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "preflop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "preflop",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "preflop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "preflop-waiting2",
+      "sequence": "preflop-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "preflop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "preflop",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "preflop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "preflop-hero1",
+      "sequence": "preflop-hero",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "preflop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "preflop",
+        "cash",
+        "hero_turn"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "preflop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "preflop-hero2",
+      "sequence": "preflop-hero",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "preflop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": true,
+      "tags": [
+        "preflop",
+        "cash",
+        "hero_turn"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "preflop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "flop-waiting1",
+      "sequence": "flop-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "flop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "flop",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "flop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "flop-waiting2",
+      "sequence": "flop-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "flop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "flop",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "flop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "flop-hero1",
+      "sequence": "flop-hero",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "flop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "flop",
+        "cash",
+        "hero_turn"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "flop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "flop-hero2",
+      "sequence": "flop-hero",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "flop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": true,
+      "tags": [
+        "flop",
+        "cash",
+        "hero_turn"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "flop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "turn-waiting1",
+      "sequence": "turn-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "turn",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "turn",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "turn",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "turn-waiting2",
+      "sequence": "turn-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "turn",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "turn",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "turn",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "turn-hero1",
+      "sequence": "turn-hero",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "turn",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "turn",
+        "cash",
+        "hero_turn"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "turn",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "turn-hero2",
+      "sequence": "turn-hero",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "turn",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": true,
+      "tags": [
+        "turn",
+        "cash",
+        "hero_turn"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "turn",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "river-waiting1",
+      "sequence": "river-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "river",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          },
+          {
+            "rank": "J",
+            "suit": "clubs"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "river",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "river",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            },
+            {
+              "rank": "J",
+              "suit": "clubs"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "river-waiting2",
+      "sequence": "river-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "river",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          },
+          {
+            "rank": "J",
+            "suit": "clubs"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "river",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "river",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            },
+            {
+              "rank": "J",
+              "suit": "clubs"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "river-hero1",
+      "sequence": "river-hero",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "river",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          },
+          {
+            "rank": "J",
+            "suit": "clubs"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "river",
+        "cash",
+        "hero_turn"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "river",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            },
+            {
+              "rank": "J",
+              "suit": "clubs"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "river-hero2",
+      "sequence": "river-hero",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "river",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          },
+          {
+            "rank": "J",
+            "suit": "clubs"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": true,
+      "tags": [
+        "river",
+        "cash",
+        "hero_turn"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "river",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            },
+            {
+              "rank": "J",
+              "suit": "clubs"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "showdown-waiting1",
+      "sequence": "showdown-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "showdown",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          },
+          {
+            "rank": "J",
+            "suit": "clubs"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "showdown",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "showdown",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            },
+            {
+              "rank": "J",
+              "suit": "clubs"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "showdown-waiting2",
+      "sequence": "showdown-waiting",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "table_title",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "showdown",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          },
+          {
+            "rank": "2",
+            "suit": "spades"
+          },
+          {
+            "rank": "9",
+            "suit": "hearts"
+          },
+          {
+            "rank": "J",
+            "suit": "clubs"
+          }
+        ],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": null,
+        "max_raise_to": null,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": false,
+        "available_actions": []
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "showdown",
+        "tournament",
+        "non_hero_turn",
+        "high_dpi"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 640,
+        "height": 480,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": false,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "showdown",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [
+            {
+              "rank": "Q",
+              "suit": "clubs"
+            },
+            {
+              "rank": "7",
+              "suit": "diamonds"
+            },
+            {
+              "rank": "2",
+              "suit": "spades"
+            },
+            {
+              "rank": "9",
+              "suit": "hearts"
+            },
+            {
+              "rank": "J",
+              "suit": "clubs"
+            }
+          ],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": null,
+          "max_raise_to": null,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": false,
+          "available_actions": []
+        }
+      },
+      "freshness": null
+    },
+    {
+      "id": "unreadable-table",
+      "sequence": "unreadable-table",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "candidate",
+      "expected_kind": "poker_table",
+      "expected_state": null,
+      "recommendation_allowed": false,
+      "tags": [
+        "unreadable",
+        "animation"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": false,
+          "board_area": false,
+          "pot": false,
+          "action_controls": false,
+          "readable": false
+        },
+        "state": null
+      },
+      "freshness": null
+    },
+    {
+      "id": "stale-generation",
+      "sequence": "stale-generation",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "candidate",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "preflop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "stale",
+        "inference_change"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "preflop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": {
+        "generation": 1,
+        "current_generation": 2,
+        "epoch": 1,
+        "current_epoch": 1,
+        "age_ms": 100,
+        "current_identity": {
+          "exe_name": "Synthetic.exe",
+          "process_id": 42,
+          "hwnd": "0x7"
+        },
+        "fresh_capture": true,
+        "expected_fresh": false
+      }
+    },
+    {
+      "id": "stale-identity",
+      "sequence": "stale-identity",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "candidate",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "preflop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "stale",
+        "closed_reopened"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "preflop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": {
+        "generation": 1,
+        "current_generation": 1,
+        "epoch": 1,
+        "current_epoch": 1,
+        "age_ms": 100,
+        "current_identity": {
+          "exe_name": "Synthetic.exe",
+          "process_id": 42,
+          "hwnd": "0x63"
+        },
+        "fresh_capture": true,
+        "expected_fresh": false
+      }
+    },
+    {
+      "id": "stale-age",
+      "sequence": "stale-age",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "candidate",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "preflop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "stale",
+        "inference_change"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "preflop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": {
+        "generation": 1,
+        "current_generation": 1,
+        "epoch": 1,
+        "current_epoch": 1,
+        "age_ms": 5001,
+        "current_identity": {
+          "exe_name": "Synthetic.exe",
+          "process_id": 42,
+          "hwnd": "0x7"
+        },
+        "fresh_capture": true,
+        "expected_fresh": false
+      }
+    },
+    {
+      "id": "stale-capture",
+      "sequence": "stale-capture",
+      "identity": {
+        "exe_name": "Synthetic.exe",
+        "process_id": 42,
+        "hwnd": "0x7"
+      },
+      "metadata": "candidate",
+      "expected_kind": "poker_table",
+      "expected_state": {
+        "game_phase": "preflop",
+        "hero_cards": [
+          {
+            "rank": "A",
+            "suit": "spades"
+          },
+          {
+            "rank": "K",
+            "suit": "hearts"
+          }
+        ],
+        "board": [],
+        "pot_size": 1000,
+        "to_call": 0,
+        "hero_chips": 5000,
+        "min_raise_to": 500,
+        "max_raise_to": 5000,
+        "players": [
+          {
+            "name": "Hero",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          },
+          {
+            "name": "Seat1",
+            "chips": 5000,
+            "last_action": "check",
+            "bet_amount": 0
+          }
+        ],
+        "action_required": true,
+        "available_actions": [
+          "check",
+          "raise"
+        ]
+      },
+      "recommendation_allowed": false,
+      "tags": [
+        "stale",
+        "inference_change"
+      ],
+      "image": null,
+      "synthetic_image": {
+        "width": 320,
+        "height": 240,
+        "seed": 7
+      },
+      "response": {
+        "screen_kind": "poker_table",
+        "evidence": {
+          "table_layout": true,
+          "hero_cards": true,
+          "board_area": true,
+          "pot": true,
+          "action_controls": true,
+          "readable": true
+        },
+        "state": {
+          "game_phase": "preflop",
+          "hero_cards": [
+            {
+              "rank": "A",
+              "suit": "spades"
+            },
+            {
+              "rank": "K",
+              "suit": "hearts"
+            }
+          ],
+          "board": [],
+          "pot_size": 1000,
+          "to_call": 0,
+          "hero_chips": 5000,
+          "min_raise_to": 500,
+          "max_raise_to": 5000,
+          "players": [
+            {
+              "name": "Hero",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            },
+            {
+              "name": "Seat1",
+              "chips": 5000,
+              "last_action": "check",
+              "bet_amount": 0
+            }
+          ],
+          "action_required": true,
+          "available_actions": [
+            "check",
+            "raise"
+          ]
+        }
+      },
+      "freshness": {
+        "generation": 1,
+        "current_generation": 1,
+        "epoch": 1,
+        "current_epoch": 1,
+        "age_ms": 100,
+        "current_identity": {
+          "exe_name": "Synthetic.exe",
+          "process_id": 42,
+          "hwnd": "0x7"
+        },
+        "fresh_capture": false,
+        "expected_fresh": false
+      }
+    }
+  ]
+}
