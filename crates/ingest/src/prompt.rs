@@ -12,6 +12,7 @@ Classification rules:
 - screen_kind must be one of: lobby, poker_table, other_coin_poker_window, unknown.
 - lobby means a visible CoinPoker lobby or game/tournament listing, not a live table view.
 - poker_table means a visible live poker table with seats and a board/pot region. A table listing, card icon, thumbnail, title, or logo alone is not enough.
+- An empty hero seat is still a poker_table. A game label at the top left of the felt, such as NLH followed by a table id, marks that live table. The same text in a listing row is still a lobby. Do not copy the table id into the JSON.
 - other_coin_poker_window means an identifiable CoinPoker window that is neither a lobby nor a table, such as settings, cashier, or a dialog.
 - unknown means the screen cannot be reliably classified or is not identifiable as a CoinPoker screen.
 - For lobby, other_coin_poker_window, and unknown, return state as null. Do not invent a GameState for a non-table screen. No table recommendations are permitted for non-table screens.
@@ -34,6 +35,7 @@ Poker state rules (only for poker_table with a non-null state):
 - game_phase is one of: preflop, flop, turn, river, showdown. Lobby is a screen_kind, not a table game_phase.
 - Cards use short rank names: A, K, Q, J, T, 9..2. Suits are one of: spades, hearts, diamonds, clubs. No card can appear twice across hero_cards and board.
 - hero_cards must contain exactly two readable cards, or an empty array only when visibly absent and action_required is false.
+- When Hero is not seated, leave hero_cards empty, set action_required false, and still report every visible community card.
 - Board counts are exact: preflop 0, flop 3, turn 4, river 5, showdown 5. Preserve the left-to-right board order and hero-card order.
 - All numeric amounts are integers in chips (no commas, no decimals). Zero means visibly zero, not unknown. If an amount cannot be read exactly, use readable false and state null instead of filling in a default.
 - Pseudo-anonymize players: use Hero for the clearly identifiable hero and Seat1, Seat2, etc. for other seats. Assign seat numbers by fixed clockwise screen position starting at the topmost seat; do not renumber after folds or empty seats. Never transcribe nicknames, account identifiers, or other personal data. Emit Hero first, then the other players in seat order.
@@ -201,5 +203,8 @@ mod tests {
         assert!(SYSTEM_PROMPT.contains("Never transcribe nicknames, account identifiers"));
         assert!(SYSTEM_PROMPT.contains("do not renumber after folds or empty seats"));
         assert!(SYSTEM_PROMPT.contains("preflop 0, flop 3, turn 4, river 5, showdown 5"));
+        assert!(SYSTEM_PROMPT.contains("An empty hero seat is still a poker_table"));
+        assert!(SYSTEM_PROMPT.contains("still report every visible community card"));
+        assert!(SYSTEM_PROMPT.contains("Do not copy the table id into the JSON"));
     }
 }

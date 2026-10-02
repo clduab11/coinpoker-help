@@ -248,17 +248,19 @@ impl Drop for Apartment {
     }
 }
 
+/// Field order is drop order. The session and frame pool must be released
+/// before the D3D device, and COM must be released before `RoUninitialize`.
 pub(crate) struct WindowsCapturer {
-    selected: WindowInfo,
-    item: GraphicsCaptureItem,
-    direct3d: IDirect3DDevice,
-    device: ID3D11Device,
-    context: ID3D11DeviceContext,
-    pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
+    pool: Direct3D11CaptureFramePool,
+    context: ID3D11DeviceContext,
+    device: ID3D11Device,
+    direct3d: IDirect3DDevice,
+    item: GraphicsCaptureItem,
     frame_event: i64,
     arrived: Receiver<()>,
     seen_frame: bool,
+    selected: WindowInfo,
     _apartment: Apartment,
 }
 
@@ -355,8 +357,8 @@ impl WindowsCapturer {
         let _ = self.session.Close();
         let _ = self.pool.Close();
         let (pool, session, frame_event, arrived) = start_session(&self.direct3d, &self.item)?;
-        self.pool = pool;
         self.session = session;
+        self.pool = pool;
         self.frame_event = frame_event;
         self.arrived = arrived;
         Ok(())
@@ -462,9 +464,9 @@ fn start_session(
 
 impl Drop for WindowsCapturer {
     fn drop(&mut self) {
+        // Unsubscribe before field drop releases the pool. The session and pool
+        // wrappers release themselves, and they are declared ahead of the device.
         let _ = self.pool.RemoveFrameArrived(self.frame_event);
-        let _ = self.session.Close();
-        let _ = self.pool.Close();
     }
 }
 

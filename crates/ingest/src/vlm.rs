@@ -33,14 +33,63 @@ pub enum VlmError {
     #[error("VLM server error (status {status}); response body omitted for screenshot privacy")]
     Server { status: u16, body: String },
     /// The response body could not be parsed.
-    #[error("VLM response parse error: {0}")]
-    Parse(String),
+    #[error("{0}")]
+    Parse(VlmResponseError),
     /// The frame could not be encoded for submission.
     #[error("image encoding failed: {0}")]
     ImageEncoding(String),
     /// The model stopped because the generation budget was exhausted.
-    #[error("VLM response was truncated (finish_reason: {0})")]
-    Truncated(String),
+    #[error("truncated")]
+    Truncated,
+}
+
+/// Closed response failures with no backend-authored diagnostic payloads.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum VlmResponseError {
+    #[error("invalid-vlm-schema")]
+    Schema,
+    #[error("invalid-vlm-choices")]
+    Choices,
+    #[error("finish-reason")]
+    FinishReason,
+    #[error("invalid-vlm-empty")]
+    EmptyContent,
+    #[error("invalid-vlm-encoding")]
+    Encoding,
+    #[error("invalid-vlm-size")]
+    Size,
+}
+
+impl VlmResponseError {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Schema => "invalid-vlm-schema",
+            Self::Choices => "invalid-vlm-choices",
+            Self::FinishReason => "finish-reason",
+            Self::EmptyContent => "invalid-vlm-empty",
+            Self::Encoding => "invalid-vlm-encoding",
+            Self::Size => "invalid-vlm-size",
+        }
+    }
+}
+
+impl VlmError {
+    /// Safe classification for output boundaries, independent of error formatting.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Server {
+                status: 400 | 404 | 422,
+                ..
+            } => "unsupported-model-api",
+            Self::Truncated => "truncated",
+            Self::Parse(error) => error.code(),
+            Self::InvalidEndpoint(_)
+            | Self::Unavailable(_)
+            | Self::Request(_)
+            | Self::Server { .. }
+            | Self::ImageEncoding(_) => "vlm-unavailable",
+        }
+    }
 }
 
 /// Configuration for the VLM backend.
@@ -67,7 +116,7 @@ impl Default for VlmConfig {
             allow_remote: false,
             model: "coinpoker-gemma-4-e2b".to_string(),
             temperature: 0.1,
-            max_tokens: 1024,
+            max_tokens: 2048,
             timeout_secs: 30,
         }
     }
@@ -208,10 +257,10 @@ impl VlmBackend for OpenAiServerBackend {
             .read_to_end(&mut bytes)
             .map_err(|_| VlmError::Request("response read failed or timed out".into()))?;
         if bytes.len() as u64 > MAX_RESPONSE {
-            return Err(VlmError::Parse("response exceeds 1 MiB".into()));
+            return Err(VlmError::Parse(VlmResponseError::Size));
         }
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|_| VlmError::Parse("response is not UTF-8".into()))?;
+        let text =
+            std::str::from_utf8(&bytes).map_err(|_| VlmError::Parse(VlmResponseError::Encoding))?;
         parse_chat_response(text)
     }
 }
@@ -248,33 +297,27 @@ struct ChatMessage {
 }
 
 fn parse_chat_response(body: &str) -> Result<VlmOutput, VlmError> {
-    let parsed: ChatResponse = serde_json::from_str(body)
-        .map_err(|_| VlmError::Parse("invalid chat-completions response schema".into()))?;
+    let parsed: ChatResponse =
+        serde_json::from_str(body).map_err(|_| VlmError::Parse(VlmResponseError::Schema))?;
     let choice = parsed
         .choices
         .into_iter()
         .next()
-        .ok_or_else(|| VlmError::Parse("response contained no choices".to_string()))?;
+        .ok_or(VlmError::Parse(VlmResponseError::Choices))?;
 
     if matches!(
         choice.finish_reason.as_deref(),
         Some("length" | "max_tokens")
     ) {
-        return Err(VlmError::Truncated(
-            choice.finish_reason.unwrap_or_default(),
-        ));
+        return Err(VlmError::Truncated);
     }
 
     if choice.finish_reason.as_deref() != Some("stop") {
-        return Err(VlmError::Parse(
-            "missing or unsupported completion finish reason".into(),
-        ));
+        return Err(VlmError::Parse(VlmResponseError::FinishReason));
     }
 
     if choice.message.content.trim().is_empty() {
-        return Err(VlmError::Parse(
-            "response contained empty message content".to_string(),
-        ));
+        return Err(VlmError::Parse(VlmResponseError::EmptyContent));
     }
 
     Ok(VlmOutput {
@@ -405,6 +448,40 @@ mod tests {
     }
 
     #[test]
+    fn safe_category_finish_reason() {
+        let body = serde_json::json!({"choices": [{
+            "message": {"content": "SYNTHETIC_RESPONSE_SENTINEL"},
+            "finish_reason": "SYNTHETIC_FINISH_SENTINEL"
+        }]});
+        let diagnostic = parse_chat_response(&body.to_string())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(diagnostic, "finish-reason");
+        let record = serde_json::json!({"reason": diagnostic}).to_string();
+        assert!(!record.contains("SYNTHETIC_RESPONSE_SENTINEL"));
+        assert!(!record.contains("SYNTHETIC_FINISH_SENTINEL"));
+        assert!(!record.contains("completion finish reason"));
+    }
+
+    #[test]
+    fn safe_category_truncated() {
+        for reason in ["length", "max_tokens"] {
+            let body = serde_json::json!({"choices": [{
+                "message": {"content": "SYNTHETIC_RESPONSE_SENTINEL"},
+                "finish_reason": reason
+            }]});
+            let diagnostic = parse_chat_response(&body.to_string())
+                .unwrap_err()
+                .to_string();
+            assert_eq!(diagnostic, "truncated");
+            let record = serde_json::json!({"reason": diagnostic}).to_string();
+            assert!(!record.contains("SYNTHETIC_RESPONSE_SENTINEL"));
+            assert!(!record.contains("finish_reason"));
+            assert!(!record.contains(reason));
+        }
+    }
+
+    #[test]
     fn parse_error_on_empty_choices() {
         let body = r#"{"choices": []}"#;
         assert!(matches!(parse_chat_response(body), Err(VlmError::Parse(_))));
@@ -420,7 +497,7 @@ mod tests {
         }"#;
         assert!(matches!(
             parse_chat_response(body),
-            Err(VlmError::Truncated(reason)) if reason == "length"
+            Err(VlmError::Truncated)
         ));
     }
 

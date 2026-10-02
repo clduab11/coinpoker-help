@@ -157,18 +157,12 @@ where
 pub fn parse_screen_output(output: &VlmOutput) -> Result<ScreenObservation, ParseError> {
     let text = output.text.trim();
     let json = if let Some(fenced) = text.strip_prefix("```") {
-        let (language, body) = fenced.split_once('\n').ok_or_else(|| {
-            ParseError::Malformed("screen envelope fence is incomplete".to_string())
-        })?;
+        let (language, body) = fenced.split_once('\n').ok_or(ParseError::Malformed)?;
         if !matches!(language.trim(), "" | "json") {
-            return Err(ParseError::Malformed(
-                "expected a JSON or plain fence".to_string(),
-            ));
+            return Err(ParseError::Malformed);
         }
         body.strip_suffix("```")
-            .ok_or_else(|| {
-                ParseError::Malformed("screen envelope fence is not closed".to_string())
-            })?
+            .ok_or(ParseError::Malformed)?
             .trim()
     } else {
         text
@@ -176,8 +170,7 @@ pub fn parse_screen_output(output: &VlmOutput) -> Result<ScreenObservation, Pars
     if json.is_empty() {
         return Err(ParseError::NoJson);
     }
-    let observation: ScreenObservation =
-        serde_json::from_str(json).map_err(|error| ParseError::Malformed(error.to_string()))?;
+    let observation: ScreenObservation = serde_json::from_str(json).map_err(ParseError::from)?;
     validate_observation(&observation)?;
     Ok(observation)
 }
@@ -192,32 +185,24 @@ fn validate_observation(observation: &ScreenObservation) -> Result<(), ParseErro
     }
     let Some(state) = observation.state.as_ref() else {
         return if observation.evidence.readable {
-            Err(ParseError::InvalidState(
-                "readable table is missing its state".to_string(),
-            ))
+            Err(ParseError::InvalidState)
         } else {
             Ok(())
         };
     };
     validate_game_state(state)?;
     if state.game_phase == GamePhase::Lobby {
-        return Err(ParseError::InvalidState(
-            "poker_table cannot have lobby game_phase".to_string(),
-        ));
+        return Err(ParseError::InvalidState);
     }
     if observation.evidence.hero_cards != (state.hero_cards.len() == 2) {
-        return Err(ParseError::InvalidState(
-            "hero-card evidence contradicts the table state".to_string(),
-        ));
+        return Err(ParseError::HeroCards);
     }
     if state.action_required
         && !(has_table_evidence(&observation.evidence)
             && observation.evidence.hero_cards
             && observation.evidence.action_controls)
     {
-        return Err(ParseError::InvalidState(
-            "actionable table requires all visibility evidence".to_string(),
-        ));
+        return Err(ParseError::ActionRequired);
     }
     if !state
         .available_actions
@@ -225,9 +210,7 @@ fn validate_observation(observation: &ScreenObservation) -> Result<(), ParseErro
         .any(|action| action == "raise")
         && (state.min_raise_to.is_some() || state.max_raise_to.is_some())
     {
-        return Err(ParseError::InvalidState(
-            "raise bounds must be null when raise is not offered".to_string(),
-        ));
+        return Err(ParseError::InvalidState);
     }
     Ok(())
 }
@@ -279,6 +262,8 @@ pub fn inspect_frame(frame: &Frame) -> VisualEvidence {
 pub struct GateOutcome {
     pub kind: ScreenKind,
     pub accepted_state: Option<GameState>,
+    /// Community cards agreed across two reads. This is not advice.
+    pub visible_cards: Option<GameState>,
     pub reason: &'static str,
 }
 
@@ -390,20 +375,34 @@ impl TableGate {
                 return self.reject(ScreenKind::PokerTable, reason);
             }
         }
+        let cards_agree = self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| same_visible_cards(pending, observation));
         let agrees = self.pending.as_ref() == Some(observation);
         self.pending = Some(observation.clone());
-        if !agrees {
+        if agrees {
+            self.accepted = Some(state.clone());
+            return GateOutcome {
+                kind: ScreenKind::PokerTable,
+                accepted_state: Some(state.clone()),
+                visible_cards: Some(state.clone()),
+                reason: "matching fresh table observations",
+            };
+        }
+        if cards_agree {
             return GateOutcome {
                 kind: ScreenKind::PokerTable,
                 accepted_state: None,
-                reason: "waiting for a second matching observation",
+                visible_cards: Some(state.clone()),
+                reason: "community cards agree; no advice",
             };
         }
-        self.accepted = Some(state.clone());
         GateOutcome {
             kind: ScreenKind::PokerTable,
-            accepted_state: Some(state.clone()),
-            reason: "matching fresh table observations",
+            accepted_state: None,
+            visible_cards: None,
+            reason: "waiting for a second matching observation",
         }
     }
 
@@ -412,8 +411,21 @@ impl TableGate {
         GateOutcome {
             kind,
             accepted_state: None,
+            visible_cards: None,
             reason,
         }
+    }
+}
+
+fn same_visible_cards(pending: &ScreenObservation, observation: &ScreenObservation) -> bool {
+    match (&pending.state, &observation.state) {
+        (Some(pending), Some(observation)) => {
+            pending.game_phase == observation.game_phase
+                && pending.hero_cards == observation.hero_cards
+                && pending.board == observation.board
+                && pending.action_required == observation.action_required
+        }
+        _ => false,
     }
 }
 
@@ -531,6 +543,76 @@ mod tests {
         parse_screen_output(&output(&value.to_string()))
     }
 
+    const REJECTED_SENTINEL: &str = "SYNTHETIC_REJECTED_FIELD_SENTINEL";
+
+    fn assert_safe_category(value: &Value, category: &str) {
+        let diagnostic = parse(value).expect_err("invalid observation").to_string();
+        assert_eq!(diagnostic, category);
+        let record = json!({"reason": diagnostic}).to_string();
+        assert!(!record.contains(REJECTED_SENTINEL));
+        assert!(!record.contains("invalid game state"));
+        assert!(!record.contains("invalid card"));
+        assert!(!record.contains("unknown available action"));
+    }
+
+    #[test]
+    fn safe_category_board_count() {
+        let mut value = serde_json::to_value(table(state(GamePhase::Flop))).unwrap();
+        value["state"]["board"] = json!([{"rank": REJECTED_SENTINEL, "suit": "clubs"}]);
+        assert_safe_category(&value, "board-count");
+    }
+
+    #[test]
+    fn safe_category_hero_cards() {
+        let mut value = serde_json::to_value(table(state(GamePhase::Flop))).unwrap();
+        value["state"]["hero_cards"][0]["rank"] = json!(REJECTED_SENTINEL);
+        assert_safe_category(&value, "hero-cards");
+        value["state"]["hero_cards"] = json!([{"rank": REJECTED_SENTINEL, "suit": "clubs"}]);
+        assert_safe_category(&value, "hero-cards");
+    }
+
+    #[test]
+    fn safe_category_action_required() {
+        let mut value = serde_json::to_value(table(state(GamePhase::Flop))).unwrap();
+        value["state"]["available_actions"] = json!([REJECTED_SENTINEL]);
+        assert_safe_category(&value, "action-required");
+        let mut value = serde_json::to_value(table(state(GamePhase::Flop))).unwrap();
+        value["state"]["players"][1]["name"] = json!(REJECTED_SENTINEL);
+        value["evidence"]["action_controls"] = json!(false);
+        assert_safe_category(&value, "action-required");
+    }
+
+    #[test]
+    fn safe_category_envelope_failures_do_not_mistake_trailing_prose_for_truncation() {
+        let mut value = serde_json::to_value(table(state(GamePhase::Flop))).unwrap();
+        value["state"]["players"][1]["name"] = json!(REJECTED_SENTINEL);
+        let json = value.to_string();
+        let mut incomplete = json.clone();
+        incomplete.pop();
+        let mut unknown_kind = value;
+        unknown_kind["screen_kind"] = json!(REJECTED_SENTINEL);
+        for (text, category) in [
+            (
+                format!("```json\n{json}\n``` {REJECTED_SENTINEL}"),
+                "malformed",
+            ),
+            (format!("```{REJECTED_SENTINEL}"), "malformed"),
+            (format!("```json\n{json}"), "malformed"),
+            (REJECTED_SENTINEL.to_string(), "malformed"),
+            (unknown_kind.to_string(), "schema"),
+            (incomplete, "truncated"),
+            (" \n\t".to_string(), "no-json"),
+        ] {
+            let diagnostic = parse_screen_output(&output(&text)).unwrap_err().to_string();
+            assert_eq!(diagnostic, category);
+            let record = json!({"reason": diagnostic}).to_string();
+            assert!(!record.contains(REJECTED_SENTINEL));
+            assert!(!record.contains("screen envelope fence"));
+            assert!(!record.contains("unknown variant"));
+            assert!(!record.contains("EOF while parsing"));
+        }
+    }
+
     fn observe(gate: &mut TableGate, observation: &ScreenObservation) -> GateOutcome {
         gate.observe(
             &identity(),
@@ -545,6 +627,29 @@ mod tests {
     fn confirm(gate: &mut TableGate, observation: &ScreenObservation) -> GateOutcome {
         assert!(observe(gate, observation).accepted_state.is_none());
         observe(gate, observation)
+    }
+
+    #[test]
+    fn agreeing_community_cards_do_not_require_a_matching_pot() {
+        let mut gate = TableGate::new();
+        let mut reading = state(GamePhase::Flop);
+        reading.hero_cards.clear();
+        reading.action_required = false;
+        reading.available_actions.clear();
+        reading.min_raise_to = None;
+        reading.max_raise_to = None;
+        reading.to_call = 0;
+        let mut changed_pot = reading.clone();
+        changed_pot.pot_size += 50;
+        let waiting = observe(&mut gate, &table(reading));
+        assert!(waiting.visible_cards.is_none());
+        let agreed = observe(&mut gate, &table(changed_pot));
+        assert!(agreed.accepted_state.is_none());
+        let cards = agreed.visible_cards.expect("community cards");
+        assert_eq!(cards.board.len(), 3);
+        assert!(cards.hero_cards.is_empty());
+        assert!(!cards.action_required);
+        assert_eq!(agreed.reason, "community cards agree; no advice");
     }
 
     #[test]
@@ -712,7 +817,7 @@ mod tests {
         }
         invalid_states.push(serde_json::to_value(table(state(GamePhase::Lobby))).unwrap());
         for value in invalid_states {
-            assert!(matches!(parse(&value), Err(ParseError::InvalidState(_))));
+            assert!(parse(&value).is_err());
         }
         let mut value = complete;
         value["state"] = Value::Null;

@@ -11,17 +11,60 @@ use thiserror::Error;
 use crate::vlm::VlmOutput;
 
 /// Errors produced while parsing or validating VLM output.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum ParseError {
     /// No JSON object could be located in the model output.
-    #[error("no JSON object found in VLM output")]
+    #[error("no-json")]
     NoJson,
     /// The JSON was malformed.
-    #[error("malformed JSON: {0}")]
-    Malformed(String),
+    #[error("malformed")]
+    Malformed,
+    /// The JSON does not match the required schema.
+    #[error("schema")]
+    Schema,
     /// The JSON parsed but violates game-state invariants.
-    #[error("invalid game state: {0}")]
-    InvalidState(String),
+    #[error("invalid-observation")]
+    InvalidState,
+    /// The board count contradicts the declared phase.
+    #[error("board-count")]
+    BoardCount,
+    /// Hero cards or their visibility evidence are invalid.
+    #[error("hero-cards")]
+    HeroCards,
+    /// Action flags, controls, or legal actions are inconsistent.
+    #[error("action-required")]
+    ActionRequired,
+    /// The response ended before the JSON was complete.
+    #[error("truncated")]
+    Truncated,
+}
+
+impl ParseError {
+    /// Closed diagnostic codes; never retain rejected fields or parser prose.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::NoJson => "no-json",
+            Self::Malformed => "malformed",
+            Self::Schema => "schema",
+            Self::InvalidState => "invalid-observation",
+            Self::BoardCount => "board-count",
+            Self::HeroCards => "hero-cards",
+            Self::ActionRequired => "action-required",
+            Self::Truncated => "truncated",
+        }
+    }
+}
+
+impl From<serde_json::Error> for ParseError {
+    fn from(error: serde_json::Error) -> Self {
+        match error.classify() {
+            serde_json::error::Category::Data => Self::Schema,
+            serde_json::error::Category::Eof => Self::Truncated,
+            serde_json::error::Category::Syntax | serde_json::error::Category::Io => {
+                Self::Malformed
+            }
+        }
+    }
 }
 
 /// A single playing card.
@@ -95,8 +138,7 @@ pub struct GameState {
 /// Parse and validate a [`VlmOutput`] into a [`GameState`].
 pub fn parse_vlm_output(output: &VlmOutput) -> Result<GameState, ParseError> {
     let json = extract_json_object(&output.text).ok_or(ParseError::NoJson)?;
-    let state: GameState =
-        serde_json::from_str(&json).map_err(|e| ParseError::Malformed(e.to_string()))?;
+    let state: GameState = serde_json::from_str(&json).map_err(ParseError::from)?;
     validate_game_state(&state)?;
     Ok(state)
 }
@@ -150,53 +192,39 @@ fn extract_json_object(text: &str) -> Option<String> {
 /// contract before passing a state to downstream decision logic.
 pub fn validate_game_state(state: &GameState) -> Result<(), ParseError> {
     if !matches!(state.hero_cards.len(), 0 | 2) {
-        return Err(ParseError::InvalidState(format!(
-            "hero must hold either 0 or exactly 2 cards, got {}",
-            state.hero_cards.len()
-        )));
+        return Err(ParseError::HeroCards);
     }
 
     if state.action_required && state.hero_cards.len() != 2 {
-        return Err(ParseError::InvalidState(
-            "actionable state requires exactly 2 hero cards".to_string(),
-        ));
+        return Err(ParseError::HeroCards);
     }
 
     let expected = state.game_phase.expected_board_cards();
     if state.board.len() != expected {
-        return Err(ParseError::InvalidState(format!(
-            "phase {:?} expects exactly {} board cards, got {}",
-            state.game_phase,
-            expected,
-            state.board.len()
-        )));
+        return Err(ParseError::BoardCount);
     }
 
     let mut seen_cards = HashSet::new();
-    for card in state.hero_cards.iter().chain(&state.board) {
+    for (index, card) in state.hero_cards.iter().chain(&state.board).enumerate() {
+        let invalid_card = if index < state.hero_cards.len() {
+            ParseError::HeroCards
+        } else {
+            ParseError::InvalidState
+        };
         if !matches!(
             card.rank.as_str(),
             "A" | "K" | "Q" | "J" | "T" | "9" | "8" | "7" | "6" | "5" | "4" | "3" | "2"
         ) {
-            return Err(ParseError::InvalidState(format!(
-                "invalid card rank: {}",
-                card.rank
-            )));
+            return Err(invalid_card);
         }
         if !matches!(
             card.suit.as_str(),
             "spades" | "hearts" | "diamonds" | "clubs"
         ) {
-            return Err(ParseError::InvalidState(format!(
-                "invalid card suit: {}",
-                card.suit
-            )));
+            return Err(invalid_card);
         }
         if !seen_cards.insert((card.rank.as_str(), card.suit.as_str())) {
-            return Err(ParseError::InvalidState(format!(
-                "duplicate card: {} of {}",
-                card.rank, card.suit
-            )));
+            return Err(invalid_card);
         }
     }
 
@@ -206,19 +234,13 @@ pub fn validate_game_state(state: &GameState) -> Result<(), ParseError> {
     for player in &state.players {
         let name = player.name.as_str();
         if name.trim().is_empty() {
-            return Err(ParseError::InvalidState(
-                "player names cannot be empty".to_string(),
-            ));
+            return Err(ParseError::InvalidState);
         }
         if name != name.trim() {
-            return Err(ParseError::InvalidState(format!(
-                "player name cannot contain surrounding whitespace: {name:?}"
-            )));
+            return Err(ParseError::InvalidState);
         }
         if !seen_names.insert(name) {
-            return Err(ParseError::InvalidState(format!(
-                "duplicate player name: {name}"
-            )));
+            return Err(ParseError::InvalidState);
         }
 
         if name == "Hero" {
@@ -237,50 +259,32 @@ pub fn validate_game_state(state: &GameState) -> Result<(), ParseError> {
             action.as_str(),
             "fold" | "check" | "call" | "raise" | "allin"
         ) {
-            return Err(ParseError::InvalidState(format!(
-                "unknown available action: {action}"
-            )));
+            return Err(ParseError::ActionRequired);
         }
         if !seen_actions.insert(action.as_str()) {
-            return Err(ParseError::InvalidState(format!(
-                "duplicate available action: {action}"
-            )));
+            return Err(ParseError::ActionRequired);
         }
     }
 
     if state.action_required && matches!(state.game_phase, GamePhase::Lobby | GamePhase::Showdown) {
-        return Err(ParseError::InvalidState(format!(
-            "action cannot be required during {:?}",
-            state.game_phase
-        )));
+        return Err(ParseError::ActionRequired);
     }
 
     if state.action_required {
         if hero.is_none() {
-            return Err(ParseError::InvalidState(
-                "actionable state requires a Hero player".to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
         if !active_opponent {
-            return Err(ParseError::InvalidState(
-                "actionable state requires at least one non-Hero player who has not folded"
-                    .to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
         if state.pot_size == 0 {
-            return Err(ParseError::InvalidState(
-                "actionable state requires a positive pot".to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
         if state.hero_chips == 0 {
-            return Err(ParseError::InvalidState(
-                "actionable state requires a positive hero stack".to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
         if state.available_actions.is_empty() {
-            return Err(ParseError::InvalidState(
-                "action_required is true but no actions are available".to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
 
         let hero = hero.expect("checked above");
@@ -299,24 +303,15 @@ pub fn validate_game_state(state: &GameState) -> Result<(), ParseError> {
             .unwrap_or(0);
         let observed_to_call = highest_opponent_bet.saturating_sub(hero.bet_amount);
         if observed_to_call != state.to_call {
-            return Err(ParseError::InvalidState(format!(
-                "to_call {actual} is inconsistent with visible street contributions (expected {expected})",
-                actual = state.to_call,
-                expected = observed_to_call,
-            )));
+            return Err(ParseError::InvalidState);
         }
     } else if !state.available_actions.is_empty() {
-        return Err(ParseError::InvalidState(
-            "available_actions must be empty when action_required is false".to_string(),
-        ));
+        return Err(ParseError::ActionRequired);
     }
 
     if let Some(hero) = hero {
         if hero.chips != state.hero_chips {
-            return Err(ParseError::InvalidState(format!(
-                "Hero player chips {} do not match hero_chips {}",
-                hero.chips, state.hero_chips
-            )));
+            return Err(ParseError::InvalidState);
         }
     }
 
@@ -328,63 +323,41 @@ pub fn validate_game_state(state: &GameState) -> Result<(), ParseError> {
 
     if state.to_call == 0 {
         if has_call || has_fold {
-            return Err(ParseError::InvalidState(
-                "call and fold are only available when to_call is positive".to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
         if state.action_required && !has_check {
-            return Err(ParseError::InvalidState(
-                "actionable state with nothing to call must offer check".to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
     } else {
         if has_check {
-            return Err(ParseError::InvalidState(
-                "check is only available when to_call is zero".to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
         let short_all_in_call = has_all_in && state.hero_chips <= state.to_call;
         if state.action_required && !has_call && !short_all_in_call {
-            return Err(ParseError::InvalidState(
-                "actionable state with a positive to_call must offer call or a short all-in"
-                    .to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
         if state.action_required && !has_fold {
-            return Err(ParseError::InvalidState(
-                "actionable state with a positive to_call must offer fold".to_string(),
-            ));
+            return Err(ParseError::ActionRequired);
         }
     }
 
     if has_raise {
-        let hero = hero
-            .ok_or_else(|| ParseError::InvalidState("raise requires a Hero player".to_string()))?;
-        let min_raise_to = state
-            .min_raise_to
-            .ok_or_else(|| ParseError::InvalidState("raise requires min_raise_to".to_string()))?;
-        let max_raise_to = state
-            .max_raise_to
-            .ok_or_else(|| ParseError::InvalidState("raise requires max_raise_to".to_string()))?;
+        let hero = hero.ok_or(ParseError::InvalidState)?;
+        let min_raise_to = state.min_raise_to.ok_or(ParseError::InvalidState)?;
+        let max_raise_to = state.max_raise_to.ok_or(ParseError::InvalidState)?;
 
         if min_raise_to > max_raise_to {
-            return Err(ParseError::InvalidState(
-                "min_raise_to cannot exceed max_raise_to".to_string(),
-            ));
+            return Err(ParseError::InvalidState);
         }
 
         let call_target = u64::from(hero.bet_amount) + u64::from(state.to_call);
         if u64::from(min_raise_to) <= call_target {
-            return Err(ParseError::InvalidState(
-                "min_raise_to must exceed Hero's current bet plus to_call".to_string(),
-            ));
+            return Err(ParseError::InvalidState);
         }
 
         let all_in_target = u64::from(hero.bet_amount) + u64::from(state.hero_chips);
         if u64::from(max_raise_to) > all_in_target {
-            return Err(ParseError::InvalidState(
-                "max_raise_to cannot exceed Hero's current bet plus remaining stack".to_string(),
-            ));
+            return Err(ParseError::InvalidState);
         }
     }
 
@@ -479,7 +452,7 @@ mod tests {
 
             assert!(matches!(
                 parse_vlm_output(&output(&text)),
-                Err(ParseError::Malformed(message)) if message.contains(field)
+                Err(ParseError::Schema)
             ));
         }
     }
@@ -496,21 +469,21 @@ mod tests {
         state.hero_cards.pop();
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("0 or exactly 2")
+            Err(ParseError::HeroCards)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.hero_cards.push(card("Q", "clubs"));
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("0 or exactly 2")
+            Err(ParseError::HeroCards)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.hero_cards.clear();
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("requires exactly 2")
+            Err(ParseError::HeroCards)
         ));
 
         state.action_required = false;
@@ -524,7 +497,7 @@ mod tests {
             VALID_STATE.replace("\"game_phase\": \"flop\"", "\"game_phase\": \"preflop\"");
         assert!(matches!(
             parse_vlm_output(&output(&preflop_with_board)),
-            Err(ParseError::InvalidState(_))
+            Err(ParseError::BoardCount)
         ));
 
         let flop_without_board = VALID_STATE.replace(
@@ -533,14 +506,14 @@ mod tests {
         );
         assert!(matches!(
             parse_vlm_output(&output(&flop_without_board)),
-            Err(ParseError::InvalidState(_))
+            Err(ParseError::BoardCount)
         ));
 
         let lobby_with_board =
             VALID_STATE.replace("\"game_phase\": \"flop\"", "\"game_phase\": \"lobby\"");
         assert!(matches!(
             parse_vlm_output(&output(&lobby_with_board)),
-            Err(ParseError::InvalidState(_))
+            Err(ParseError::BoardCount)
         ));
     }
 
@@ -577,7 +550,7 @@ mod tests {
             }
             assert!(matches!(
                 validate_game_state(&state),
-                Err(ParseError::InvalidState(message)) if message.contains("board cards")
+                Err(ParseError::BoardCount)
             ));
         }
     }
@@ -588,21 +561,21 @@ mod tests {
         state.pot_size = 0;
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("positive pot")
+            Err(ParseError::ActionRequired)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.hero_chips = 0;
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("positive hero stack")
+            Err(ParseError::ActionRequired)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.available_actions.clear();
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("no actions")
+            Err(ParseError::ActionRequired)
         ));
     }
 
@@ -612,14 +585,14 @@ mod tests {
         state.players.remove(0);
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("Hero player")
+            Err(ParseError::ActionRequired)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.players[1].last_action = Some("fold".to_string());
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("has not folded")
+            Err(ParseError::ActionRequired)
         ));
     }
 
@@ -629,14 +602,14 @@ mod tests {
         state.players[1].name = "  ".to_string();
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("empty")
+            Err(ParseError::InvalidState)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.players[0].name = " Hero ".to_string();
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("surrounding whitespace")
+            Err(ParseError::InvalidState)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
@@ -648,7 +621,7 @@ mod tests {
         });
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("duplicate player name")
+            Err(ParseError::InvalidState)
         ));
     }
 
@@ -658,7 +631,7 @@ mod tests {
         state.players[0].chips -= 1;
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("do not match hero_chips")
+            Err(ParseError::InvalidState)
         ));
     }
 
@@ -668,20 +641,20 @@ mod tests {
         state.available_actions = vec!["call".to_string(), "raise".to_string()];
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("must offer fold")
+            Err(ParseError::ActionRequired)
         ));
 
         state.available_actions = vec!["fold".to_string(), "raise".to_string()];
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("must offer call")
+            Err(ParseError::ActionRequired)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.available_actions.push("check".to_string());
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("check is only")
+            Err(ParseError::ActionRequired)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
@@ -693,13 +666,13 @@ mod tests {
         state.available_actions = vec!["raise".to_string()];
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("must offer check")
+            Err(ParseError::ActionRequired)
         ));
 
         state.available_actions = vec!["check".to_string(), "fold".to_string()];
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("only available")
+            Err(ParseError::ActionRequired)
         ));
     }
 
@@ -709,14 +682,14 @@ mod tests {
         state.min_raise_to = None;
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("min_raise_to")
+            Err(ParseError::InvalidState)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.max_raise_to = None;
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("max_raise_to")
+            Err(ParseError::InvalidState)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
@@ -724,21 +697,21 @@ mod tests {
         state.max_raise_to = Some(2500);
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("cannot exceed")
+            Err(ParseError::InvalidState)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.min_raise_to = Some(1000);
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("current bet plus to_call")
+            Err(ParseError::InvalidState)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.max_raise_to = Some(3001);
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("remaining stack")
+            Err(ParseError::InvalidState)
         ));
     }
 
@@ -748,14 +721,14 @@ mod tests {
         state.hero_cards[0].rank = "1".to_string();
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("rank")
+            Err(ParseError::HeroCards)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.board[0].suit = "stars".to_string();
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("suit")
+            Err(ParseError::InvalidState)
         ));
     }
 
@@ -765,7 +738,7 @@ mod tests {
         state.board[0] = state.hero_cards[0].clone();
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("duplicate card")
+            Err(ParseError::InvalidState)
         ));
     }
 
@@ -775,14 +748,14 @@ mod tests {
         state.available_actions.push("wait".to_string());
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("unknown")
+            Err(ParseError::ActionRequired)
         ));
 
         let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
         state.available_actions.push("call".to_string());
         assert!(matches!(
             validate_game_state(&state),
-            Err(ParseError::InvalidState(message)) if message.contains("duplicate")
+            Err(ParseError::ActionRequired)
         ));
     }
 
@@ -805,7 +778,7 @@ mod tests {
 
             assert!(matches!(
                 validate_game_state(&state),
-                Err(ParseError::InvalidState(message)) if message.contains("action cannot")
+                Err(ParseError::ActionRequired)
             ));
         }
     }

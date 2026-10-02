@@ -18,7 +18,7 @@ use std::process::ExitCode;
 use core_engine::decision::{Action, DecisionEngine, DecisionInput};
 use core_engine::equity::{Card, EquityConfig, EquityEstimator, Rank, Suit};
 use ghost_layer::betting_entropy::{BettingEntropy, BettingEntropyConfig};
-use ingest::parser::{validate_game_state, GameState};
+use ingest::parser::{validate_game_state, GameState, ParseError};
 use ingest::state_machine::{StateMachine, TableEvent};
 mod config;
 mod evaluation;
@@ -302,7 +302,7 @@ fn run_stdin_pipeline() -> Result<(), RunError> {
         let state: GameState = match serde_json::from_str(&line) {
             Ok(state) => state,
             Err(error) => {
-                report_warning(format_args!("invalid state line: {error}"));
+                report_warning(format_args!("{}", ParseError::from(error).code()));
                 state_machine.reset();
                 if decision_active {
                     emitter.emit_clear("invalid-state")?;
@@ -312,7 +312,7 @@ fn run_stdin_pipeline() -> Result<(), RunError> {
             }
         };
         if let Err(error) = validate_game_state(&state) {
-            report_warning(format_args!("invalid state line: {error}"));
+            report_warning(format_args!("{}", error.code()));
             state_machine.reset();
             if decision_active {
                 emitter.emit_clear("invalid-state")?;

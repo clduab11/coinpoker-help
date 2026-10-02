@@ -17,6 +17,7 @@ Configuration (CLI > nonempty environment > defaults):\n\
   --window-hwnd HWND          COINPOKER_WINDOW_HWND (hex or decimal; hard pin)\n\
   --table-title TEXT          COINPOKER_WINDOW_TITLE (calibrated substring)\n\
   --lobby-title TEXT          COINPOKER_LOBBY_TITLE (lobby veto substring)\n\
+  --lobby-size WIDTHxHEIGHT   COINPOKER_LOBBY_SIZE (observed lobby size)\n\
   --vlm-endpoint URL          COINPOKER_VLM_ENDPOINT (loopback by default)\n\
   --vlm-model NAME            COINPOKER_VLM_MODEL (local server model name)\n\
   --allow-remote-vlm          COINPOKER_ALLOW_REMOTE_VLM=1 (HTTPS only)\n\
@@ -57,6 +58,7 @@ const FLAGS: &[(&str, &str)] = &[
     ("--window-hwnd", "COINPOKER_WINDOW_HWND"),
     ("--table-title", "COINPOKER_WINDOW_TITLE"),
     ("--lobby-title", "COINPOKER_LOBBY_TITLE"),
+    ("--lobby-size", "COINPOKER_LOBBY_SIZE"),
     ("--vlm-endpoint", "COINPOKER_VLM_ENDPOINT"),
     ("--vlm-model", "COINPOKER_VLM_MODEL"),
     ("--timeout-secs", "COINPOKER_VLM_TIMEOUT_SECS"),
@@ -128,6 +130,11 @@ pub fn parse(
     options.discovery.exe_name = value("--exe-name");
     options.discovery.table_title = value("--table-title");
     options.discovery.lobby_title = value("--lobby-title");
+    if let Some(size) = value("--lobby-size") {
+        let (width, height) = parse_lobby_size(&size)?;
+        options.discovery.lobby_width = Some(width);
+        options.discovery.lobby_height = Some(height);
+    }
     fn number<T: std::str::FromStr>(
         value: Option<String>,
         flag: &str,
@@ -194,6 +201,22 @@ pub fn parse(
         validate_vlm_endpoint(&options.vlm.endpoint, options.vlm.allow_remote)?;
     }
     Ok(options)
+}
+
+fn parse_lobby_size(value: &str) -> Result<(u32, u32), String> {
+    let invalid = "--lobby-size requires positive WIDTHxHEIGHT";
+    let mut parts = value
+        .trim()
+        .split(|c: char| c == 'x' || c == 'X' || c == '×');
+    let (Some(width), Some(height), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(invalid.into());
+    };
+    let width: u32 = width.trim().parse().map_err(|_| invalid.to_string())?;
+    let height: u32 = height.trim().parse().map_err(|_| invalid.to_string())?;
+    if width == 0 || height == 0 {
+        return Err(invalid.into());
+    }
+    Ok((width, height))
 }
 
 fn parse_hwnd(value: &str) -> Result<usize, String> {
@@ -272,6 +295,33 @@ mod tests {
             vec!["--pid", "1", "--pid", "2"],
         ] {
             assert!(parse(args.into_iter().map(String::from), |_| None).is_err());
+        }
+    }
+    #[test]
+    fn lobby_size_is_a_positive_pair() {
+        let cfg = parse(
+            ["--lobby-size", "1280x1032", "--lobby-title", "Lobby"].map(String::from),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(cfg.discovery.lobby_width, Some(1280));
+        assert_eq!(cfg.discovery.lobby_height, Some(1032));
+        let from_env = parse(["--exe-name".into(), "Client.exe".into()], |key| {
+            (key == "COINPOKER_LOBBY_SIZE").then(|| "800X613".into())
+        })
+        .unwrap();
+        assert_eq!(
+            (
+                from_env.discovery.lobby_width,
+                from_env.discovery.lobby_height
+            ),
+            (Some(800), Some(613))
+        );
+        for bad in ["1280", "0x1032", "1280x0", "1280x1032x1", "x1032"] {
+            assert!(
+                parse(["--lobby-size", bad].map(String::from), |_| None).is_err(),
+                "{bad}"
+            );
         }
     }
     #[test]

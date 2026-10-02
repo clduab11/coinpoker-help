@@ -14,12 +14,13 @@ failure. Keep raw images and private window listings under ignored `.local/`.
   topology UNRECORDED
 - CPU UNRECORDED; GPU NVIDIA RTX 4060 Ti, driver 591.86, 8 GiB VRAM; host RAM
   47.8 GiB and free disk approximately 508 GiB at validation time
-- Client version 1.26.0.6518 observed from the installed executable; install
-  source UNRECORDED
-- Observed executable `CoinPoker.exe`, main/lobby title `CoinPoker`; table title
-  UNRECORDED
-- Observed main-window rectangle and five captured frames: 1280×778 pixels;
-  logical bounds and DPI scale UNRECORDED
+- Client under test: 1.27.0.6876, accepted 2026-10-01 from the installed
+  executable. Historical client 1.26.0.6518 remains the 2026-09-23 record.
+  Install source UNRECORDED
+- Observed executable `CoinPoker.exe`, lobby title `CoinPoker` on both
+  versions; table title UNRECORDED
+- Historical 1.26 lobby capture: 1280×778 pixels, five frames, DPI UNRECORDED.
+  2026-10-01 lobby metadata only: 1280×1032. No new pixels were saved
 - Rust toolchain/target: 1.95.0 / x86_64-pc-windows-msvc, locally verified
 - GGUF, projector and llama-server hashes verified locally; see
   [VLM_COMPATIBILITY.md](VLM_COMPATIBILITY.md)
@@ -43,7 +44,7 @@ failure. Keep raw images and private window listings under ignored `.local/`.
 | 5 | Real client metadata and selected-window native pixels match executable, PID, HWND, title and dimensions. No adjacent desktop or other-window pixels enter the image. | UNRUN | |
 | 6 | Helper starts before the client, waits with bounded polling and no repeated error flood. | UNRUN | |
 | 7 | Start the client normally; helper discovers the calibrated executable without restart. Inspect updater behavior and locate `update.log` only through actual installation evidence. | UNRUN | |
-| 8 | All tested lobby views and table previews remain lobbies or non-actionable screens, with zero recommendations. | UNRUN | |
+| 8 | All tested lobby views and table previews remain lobbies or non-actionable screens, with zero recommendations. | UNRUN | 2026-10-02T00:00:35Z. One visible lobby titled CoinPoker at 1280×1032. Release helper, no PID/HWND/table pin, loopback VLM, no pixels saved. Two `lobby_detected` statuses, one lobby-title veto, 15 discarded observations, zero decisions or clears. `.local/acceptance/20261001T235902Z/lobby-observation.json`. 2026-10-02T00:47:14Z listing: lobby 1280×1032 and a second on-screen window 800×613, both titled exactly CoinPoker, hero not seated. A 15s live run selected neither window (`only lobby windows are present; no arbitrary observation window selected`), with zero decisions or clears. `.local/acceptance/20261002T004714Z/lobby-observation.json`. The user identified the 800×613 window as the game window and was not seated. Its Windows title is still exactly CoinPoker; the NLH label and table id are painted at the top left, so they are not a window-title selector. 2026-10-02T02:10:21Z release run passed the observed lobby size, selected that other-size window, and published no `table` event. Model replies were unreadable, invalid, or a non-table classification. `.local/acceptance/20261002T021021Z/live.jsonl`. No community-card reading is claimed. Other lobby views remain untested. |
 | 9 | Open a real table; helper rebuilds selection, applies table-only title hint and two fresh matching observations without restart. | UNRUN | |
 | 10 | Close active table; advice clears exactly once within bounded discovery/capture time and never exceeds lease. | UNRUN | |
 | 11 | Reopen or replace a table; fresh HWND/consensus prevents reuse of the previous hand or frame. | UNRUN | |

@@ -44,6 +44,13 @@ pub struct DiscoveryConfig {
     pub table_title: Option<String>,
     /// Calibrated lobby substring. Vetoes table classification, even on a title overlap.
     pub lobby_title: Option<String>,
+    /// Observed lobby width, used only together with `lobby_height`.
+    ///
+    /// When both are set, a window that repeats the lobby title at a different
+    /// size is the table. This client uses one title for the lobby and the table.
+    pub lobby_width: Option<u32>,
+    /// Observed lobby height. See `lobby_width`.
+    pub lobby_height: Option<u32>,
 }
 
 impl DiscoveryConfig {
@@ -60,6 +67,39 @@ impl DiscoveryConfig {
     pub(crate) fn matches_window(&self, window: &WindowInfo) -> bool {
         self.matches_application(&window.exe_name, window.process_id)
             && self.window_hwnd.is_none_or(|hwnd| hwnd == window.hwnd)
+    }
+
+    fn lobby_size(&self) -> Option<(u32, u32)> {
+        match (self.lobby_width, self.lobby_height) {
+            (Some(width), Some(height)) if width > 0 && height > 0 => Some((width, height)),
+            _ => None,
+        }
+    }
+
+    /// Title match, narrowed to the observed lobby size when one was calibrated.
+    pub(crate) fn is_calibrated_lobby(&self, window: &WindowInfo) -> bool {
+        if !contains(window.title.as_deref(), self.lobby_title.as_deref()) {
+            return false;
+        }
+        self.lobby_size()
+            .is_none_or(|(width, height)| window.width == width && window.height == height)
+    }
+
+    /// A same-title window at another observed size is the table for this client.
+    fn is_same_title_other_size(&self, window: &WindowInfo) -> bool {
+        let Some((width, height)) = self.lobby_size() else {
+            return false;
+        };
+        contains(window.title.as_deref(), self.lobby_title.as_deref())
+            && (window.width != width || window.height != height)
+    }
+
+    pub(crate) fn is_calibrated_table(&self, window: &WindowInfo) -> bool {
+        if self.is_calibrated_lobby(window) {
+            return false;
+        }
+        contains(window.title.as_deref(), self.table_title.as_deref())
+            || self.is_same_title_other_size(window)
     }
 }
 
@@ -121,9 +161,9 @@ enum WindowKind {
 }
 
 fn window_kind(window: &WindowInfo, config: &DiscoveryConfig) -> WindowKind {
-    if contains(window.title.as_deref(), config.lobby_title.as_deref()) {
+    if config.is_calibrated_lobby(window) {
         WindowKind::Lobby
-    } else if contains(window.title.as_deref(), config.table_title.as_deref()) {
+    } else if config.is_calibrated_table(window) {
         WindowKind::Table
     } else {
         WindowKind::Unknown
@@ -214,7 +254,11 @@ pub fn select_window(snapshot: &DiscoverySnapshot, config: &DiscoveryConfig) -> 
         ),
         WindowKind::Table => (
             DiscoveryState::CandidateTable,
-            "calibrated table-title match; awaiting capture",
+            if config.is_same_title_other_size(window) {
+                "same title as the calibrated lobby at a different size; awaiting capture"
+            } else {
+                "calibrated table-title match; awaiting capture"
+            },
         ),
     };
     result(state, Some(window.clone()), reason)
@@ -487,6 +531,38 @@ mod tests {
         let result = select_window(&snapshot(vec![lobby.clone()]), &config());
         assert_eq!(result.state, DiscoveryState::LobbyDetected);
         assert_eq!(result.window, Some(lobby));
+    }
+
+    #[test]
+    fn repeated_lobby_title_at_another_size_is_the_table() {
+        let mut lobby = window(1, Some("CoinPoker"));
+        lobby.width = 1280;
+        lobby.height = 1032;
+        let mut table = window(2, Some("CoinPoker"));
+        table.width = 800;
+        table.height = 613;
+        let cfg = DiscoveryConfig {
+            exe_name: Some(app().exe_name),
+            lobby_title: Some("CoinPoker".into()),
+            lobby_width: Some(1280),
+            lobby_height: Some(1032),
+            ..DiscoveryConfig::default()
+        };
+        let result = select_window(&snapshot(vec![table.clone(), lobby.clone()]), &cfg);
+        assert_eq!(result.state, DiscoveryState::CandidateTable);
+        assert_eq!(result.window, Some(table.clone()));
+        assert!(cfg.is_calibrated_table(&table));
+        assert!(cfg.is_calibrated_lobby(&lobby));
+        assert!(!cfg.is_calibrated_table(&lobby));
+
+        let untitled = DiscoveryConfig {
+            lobby_width: None,
+            lobby_height: None,
+            ..cfg
+        };
+        let tied = select_window(&snapshot(vec![lobby, table]), &untitled);
+        assert_eq!(tied.state, DiscoveryState::LobbyDetected);
+        assert!(tied.window.is_none());
     }
 
     #[test]

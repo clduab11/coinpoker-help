@@ -2,12 +2,12 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
 
-use ingest::capture::{CaptureError, PlatformCapture, WindowCapturer};
+use ingest::capture::{CaptureError, Frame, PlatformCapture, WindowCapturer};
 use ingest::runtime::{
     Analysis, Clock, InferenceFailure, LiveEvent, LiveRuntime, MonotonicClock, ThreadWorker,
 };
 use ingest::screen::parse_screen_output;
-use ingest::vlm::{OpenAiServerBackend, VlmBackend, VlmError};
+use ingest::vlm::{OpenAiServerBackend, VlmBackend};
 use serde_json::json;
 
 use crate::config::Options;
@@ -42,6 +42,28 @@ pub fn list_windows() -> Result<(), RunError> {
     Ok(())
 }
 
+fn analyze_frame(
+    backend: &impl VlmBackend,
+    pipeline: &Pipeline,
+    frame: &Frame,
+) -> Result<Analysis<ui::widgets::DecisionView>, InferenceFailure> {
+    let output = backend
+        .analyze(frame, &ingest::prompt::build_analysis_prompt())
+        .map_err(|error| InferenceFailure { code: error.code() })?;
+    // Error codes are typed constants, never model payloads or parser messages.
+    let observation =
+        parse_screen_output(&output).map_err(|error| InferenceFailure { code: error.code() })?;
+    let recommendation = observation
+        .state
+        .as_ref()
+        .filter(|s| s.action_required)
+        .and_then(|state| pipeline.decide(state).ok());
+    Ok(Analysis {
+        observation,
+        recommendation,
+    })
+}
+
 pub fn run(options: Options) -> Result<(), RunError> {
     if !cfg!(target_os = "windows") {
         return Err(RunError::Message(
@@ -66,33 +88,7 @@ pub fn run(options: Options) -> Result<(), RunError> {
     let backend = OpenAiServerBackend::new(options.vlm)
         .map_err(|error| RunError::Message(error.to_string()))?;
     let pipeline = Pipeline::new();
-    let worker = ThreadWorker::new(move |frame| {
-        let output = backend
-            .analyze(frame, &ingest::prompt::build_analysis_prompt())
-            .map_err(|error| InferenceFailure {
-                code: match error {
-                    VlmError::Server {
-                        status: 400 | 404 | 422,
-                        ..
-                    } => "unsupported-model-api",
-                    VlmError::Parse(_) | VlmError::Truncated(_) => "invalid-vlm-response",
-                    _ => "vlm-unavailable",
-                },
-            })?;
-        // Do not log model payloads or parser messages: either can contain personal data.
-        let observation = parse_screen_output(&output).map_err(|_| InferenceFailure {
-            code: "invalid-observation",
-        })?;
-        let recommendation = observation
-            .state
-            .as_ref()
-            .filter(|s| s.action_required)
-            .and_then(|state| pipeline.decide(state).ok());
-        Ok(Analysis {
-            observation,
-            recommendation,
-        })
-    });
+    let worker = ThreadWorker::new(move |frame| analyze_frame(&backend, &pipeline, frame));
     let poll_ms = options.runtime.poll_ms;
     let max_frame_age_ms = options.runtime.max_frame_age_ms;
     let mut runtime = LiveRuntime::new(
@@ -152,6 +148,14 @@ pub fn run(options: Options) -> Result<(), RunError> {
                     );
                     record
                 }
+                LiveEvent::Table {
+                    game_phase,
+                    hero_cards,
+                    board,
+                    action_required,
+                } => {
+                    json!({"schema_version":2,"event":"table","game_phase":game_phase,"hero_cards":hero_cards,"board":board,"action_required":action_required})
+                }
                 LiveEvent::Discarded { generation, reason } => {
                     json!({"schema_version":2,"event":"discarded","generation":generation,"reason":reason})
                 }
@@ -200,6 +204,18 @@ pub fn doctor(options: Options) -> Result<(), RunError> {
         ),
         ("COINPOKER_WINDOW_TITLE", options.discovery.table_title),
         ("COINPOKER_LOBBY_TITLE", options.discovery.lobby_title),
+        (
+            "COINPOKER_LOBBY_SIZE",
+            match (
+                options.discovery.lobby_width,
+                options.discovery.lobby_height,
+            ) {
+                (Some(width), Some(height)) if width > 0 && height > 0 => {
+                    Some(format!("{width}x{height}"))
+                }
+                _ => None,
+            },
+        ),
     ] {
         if let Some(value) = value {
             command.env(name, value);
@@ -214,5 +230,133 @@ pub fn doctor(options: Options) -> Result<(), RunError> {
         Err(RunError::Message(
             "doctor found failed or blocked checks; see its report".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ingest::vlm::{VlmError, VlmOutput, VlmResponseError};
+    use std::cell::RefCell;
+
+    const SENTINEL: &str = "SYNTHETIC_REJECTED_FIELD_SENTINEL";
+
+    struct ScriptedBackend(RefCell<Option<Result<VlmOutput, VlmError>>>);
+
+    impl VlmBackend for ScriptedBackend {
+        fn analyze(&self, _: &Frame, prompt: &str) -> Result<VlmOutput, VlmError> {
+            assert_eq!(prompt, ingest::prompt::build_analysis_prompt());
+            self.0.borrow_mut().take().expect("one combined VLM job")
+        }
+    }
+
+    fn assert_worker_category(response: Result<VlmOutput, VlmError>, category: &str) {
+        let backend = ScriptedBackend(RefCell::new(Some(response)));
+        let frame = Frame::new(1, 1, vec![0, 0, 0, 255]).unwrap();
+        let failure = analyze_frame(&backend, &Pipeline::new(), &frame)
+            .err()
+            .expect("invalid input must suppress all advice");
+        assert_eq!(failure.code, category);
+        let record = json!({"schema_version":2,"event":"status","state":"recovering",
+            "reason":failure.code,"identity":null})
+        .to_string();
+        assert!(!record.contains(SENTINEL));
+        assert!(!record.contains("invalid game state"));
+        assert!(!record.contains("completion finish reason"));
+        assert!(!record.contains("finish_reason"));
+    }
+
+    #[test]
+    fn safe_category_live_screen_failures_do_not_leak_rejected_fields() {
+        let complete = json!({
+            "screen_kind":"poker_table",
+            "evidence":{"table_layout":true,"hero_cards":true,"board_area":true,
+                "pot":true,"action_controls":true,"readable":true},
+            "state":{"game_phase":"preflop","hero_cards":[
+                {"rank":"A","suit":"spades"},{"rank":"K","suit":"hearts"}],
+                "board":[],"pot_size":100,"to_call":0,"hero_chips":1000,
+                "min_raise_to":null,"max_raise_to":null,"players":[
+                    {"name":"Hero","chips":1000,"last_action":null,"bet_amount":50},
+                    {"name":SENTINEL,"chips":1000,"last_action":null,"bet_amount":50}],
+                "action_required":true,"available_actions":["check"]}
+        });
+        for category in [
+            "board-count",
+            "hero-cards",
+            "action-required",
+            "schema",
+            "invalid-observation",
+        ] {
+            let mut response = complete.clone();
+            match category {
+                "board-count" => {
+                    response["state"]["board"] = json!([{"rank":SENTINEL,"suit":"clubs"}])
+                }
+                "hero-cards" => response["state"]["hero_cards"][0]["rank"] = json!(SENTINEL),
+                "action-required" => response["state"]["available_actions"] = json!([SENTINEL]),
+                "schema" => response["screen_kind"] = json!(SENTINEL),
+                "invalid-observation" => response["state"]["players"][0]["name"] = json!(SENTINEL),
+                _ => unreachable!(),
+            }
+            assert_worker_category(
+                Ok(VlmOutput {
+                    text: response.to_string(),
+                }),
+                category,
+            );
+        }
+    }
+
+    #[test]
+    fn safe_category_live_backend_failures_ignore_backend_messages() {
+        for (error, category) in [
+            (
+                VlmError::Parse(VlmResponseError::FinishReason),
+                "finish-reason",
+            ),
+            (VlmError::Truncated, "truncated"),
+            (
+                VlmError::Parse(VlmResponseError::Schema),
+                "invalid-vlm-schema",
+            ),
+            (
+                VlmError::Parse(VlmResponseError::Choices),
+                "invalid-vlm-choices",
+            ),
+            (
+                VlmError::Parse(VlmResponseError::EmptyContent),
+                "invalid-vlm-empty",
+            ),
+            (
+                VlmError::Parse(VlmResponseError::Encoding),
+                "invalid-vlm-encoding",
+            ),
+            (VlmError::Parse(VlmResponseError::Size), "invalid-vlm-size"),
+            (
+                VlmError::Request(format!(
+                    "missing or unsupported completion finish reason {SENTINEL}"
+                )),
+                "vlm-unavailable",
+            ),
+            (VlmError::Unavailable(SENTINEL.into()), "vlm-unavailable"),
+            (VlmError::ImageEncoding(SENTINEL.into()), "vlm-unavailable"),
+            (VlmError::InvalidEndpoint(SENTINEL), "vlm-unavailable"),
+            (
+                VlmError::Server {
+                    status: 404,
+                    body: SENTINEL.into(),
+                },
+                "unsupported-model-api",
+            ),
+            (
+                VlmError::Server {
+                    status: 500,
+                    body: SENTINEL.into(),
+                },
+                "vlm-unavailable",
+            ),
+        ] {
+            assert_worker_category(Err(error), category);
+        }
     }
 }

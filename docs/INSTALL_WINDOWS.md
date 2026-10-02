@@ -104,10 +104,30 @@ $env:COINPOKER_LOBBY_TITLE = '<observed lobby title fragment>'
 ```
 
 The table title hint is required for advice; a lobby hint vetoes a matching
-table hint. Equal-ranked windows are ambiguous. Optional `--pid` and
+table hint. When the client reuses the lobby window title and paints the table
+label inside the window, pass the observed lobby size as
+`--lobby-size WIDTHxHEIGHT` (`COINPOKER_LOBBY_SIZE`). That exact size stays the
+lobby. One other size with the same title is the table. Equal-ranked windows
+are ambiguous. Optional `--pid` and
 `--window-hwnd` are hard pins: remove them for automatic recovery after a client
 restart or table replacement. HWND input may be decimal or `0x` hex; JSON output
 uses lowercase `0x` hex. Process metadata cannot authenticate an executable.
+
+Before a table title is known, a bounded lobby check can record live JSON under
+ignored `.local/acceptance/`. It passes only when the stream contains
+`lobby_detected`, zero `decision` or `clear` events, and a settled result: the
+lobby-title veto or a discarded observation. Exit 2 means the lobby was seen but
+the visual result did not settle before the time limit. The check removes any
+PID, HWND, and table-title environment values for that run, saves no pixels, and
+leaves physical gate 8 `UNRUN`:
+
+```powershell
+pwsh -File scripts/lobby-observation.ps1 -ExeName '<exact observed exe_name>' -LobbyTitle '<observed lobby title>'
+```
+
+Add `-VlmEndpoint` when the local server is not the product default. The endpoint
+must stay on loopback. One passing lobby view does not cover other lobby screens,
+table previews, or real-image accuracy.
 
 Live output is JSON lines. Consume it according to [EVENTS_V2.md](EVENTS_V2.md),
 including `clear`, absolute expiry and EOF. A failed or stale capture must not

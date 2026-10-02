@@ -92,6 +92,17 @@ fn table() -> ScreenObservation {
         "state":{"game_phase":"preflop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"K","suit":"hearts"}],"board":[],"pot_size":100,"to_call":0,"hero_chips":1000,"min_raise_to":null,"max_raise_to":null,"players":[{"name":"Hero","chips":1000,"last_action":null,"bet_amount":50},{"name":"Seat1","chips":1000,"last_action":null,"bet_amount":50}],"action_required":true,"available_actions":["check"]}
     }).to_string() }).unwrap()
 }
+fn lobby() -> ScreenObservation {
+    parse_screen_output(&VlmOutput {
+        text: json!({
+            "screen_kind":"lobby",
+            "evidence":{"table_layout":false,"hero_cards":false,"board_area":false,"pot":false,"action_controls":false,"readable":true},
+            "state":null
+        })
+        .to_string(),
+    })
+    .unwrap()
+}
 fn rig(config: RuntimeConfig) -> (Runtime, Source, Worker) {
     let window = WindowInfo {
         hwnd: 7,
@@ -382,6 +393,95 @@ fn over_age_response_and_periodic_refresh_are_fail_closed() {
         1,
         "periodic refresh analyzes even unchanged pixels"
     );
+}
+
+#[test]
+fn expired_result_discards_without_classifying_the_stale_screen() {
+    let (mut runtime, _source, worker) = rig(RuntimeConfig::default());
+    start(&mut runtime);
+    finish(&worker, lobby());
+    let events = runtime.tick(&Time(5_400));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        LiveEvent::Discarded {
+            generation: 1,
+            reason: "observation-expired"
+        }
+    )));
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            LiveEvent::Status {
+                state: "lobby_detected",
+                ..
+            }
+        )),
+        "an expired result must not call the screen a lobby"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e, LiveEvent::Table { .. })),
+        "an expired result must not publish cards"
+    );
+}
+
+#[test]
+fn expired_result_must_not_poison_consensus_for_the_next_fresh_read() {
+    let (mut runtime, _source, worker) = rig(RuntimeConfig::default());
+    start(&mut runtime);
+    finish(&worker, table());
+    let events = runtime.tick(&Time(5_400));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        LiveEvent::Discarded {
+            reason: "observation-expired",
+            ..
+        }
+    )));
+    assert!(!events.iter().any(is_decision));
+    assert_eq!(runtime.active_count(), 1);
+    finish(&worker, table());
+    let events = runtime.tick(&Time(5_500));
+    assert!(
+        !events.iter().any(is_decision),
+        "one fresh observation must not pair with an expired observation"
+    );
+    runtime.tick(&Time(5_600));
+    finish(&worker, table());
+    let events = runtime.tick(&Time(5_700));
+    assert!(events.iter().any(is_decision));
+}
+
+#[test]
+fn expired_worker_failure_does_not_throttle_the_next_read() {
+    let (mut runtime, _source, worker) = rig(RuntimeConfig::default());
+    start(&mut runtime);
+    worker.0.borrow_mut().ready = Some(Err(InferenceFailure {
+        code: "invalid-observation",
+    }));
+    let events = runtime.tick(&Time(5_400));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        LiveEvent::Discarded {
+            generation: 1,
+            reason: "observation-expired"
+        }
+    )));
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            LiveEvent::Status {
+                state: "recovering",
+                ..
+            }
+        )),
+        "an expired failure must not be reported as a fresh worker error"
+    );
+    assert_eq!(
+        runtime.active_count(),
+        1,
+        "an expired failure must not delay re-analysis by retry_ms"
+    );
+    assert_eq!(worker.0.borrow().started, vec![1, 2]);
 }
 
 #[test]

@@ -4,6 +4,7 @@
 //! computation) runs on one worker. There is one active ticket and one replaceable
 //! latest stable frame. A result is never trusted without a fresh capture in the
 //! same tick, matching identity/epoch/generation, and an unexpired capture lease.
+//! An over-age completion is discarded whole: it never classifies the screen.
 
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::time::Instant;
@@ -13,6 +14,7 @@ use serde::Serialize;
 use crate::capture::{CaptureError, CaptureSource, Frame, WindowInfo};
 use crate::change_detect::{ChangeDetectorConfig, FrameTracker, StabilityConfig};
 use crate::discovery::{CaptureManager, DiscoveryConfig, DiscoveryState, TableIdentity};
+use crate::parser::{Card, GamePhase};
 use crate::screen::{
     inspect_frame, MetadataEvidence, ScreenKind, ScreenObservation, TableGate, VisualEvidence,
 };
@@ -197,6 +199,13 @@ pub enum LiveEvent<T> {
         generation: u64,
         reason: &'static str,
     },
+    /// Visible table cards. This is not advice and carries no action.
+    Table {
+        game_phase: GamePhase,
+        hero_cards: Vec<Card>,
+        board: Vec<Card>,
+        action_required: bool,
+    },
 }
 
 pub struct LiveRuntime<S: CaptureSource, W, T> {
@@ -219,6 +228,7 @@ pub struct LiveRuntime<S: CaptureSource, W, T> {
     worker_dead: bool,
     worker_failures: u32,
     last_status: Option<(&'static str, &'static str, Option<TableIdentity>)>,
+    last_table: Option<(GamePhase, Vec<Card>, Vec<Card>, bool)>,
     marker: std::marker::PhantomData<T>,
 }
 
@@ -250,6 +260,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
             worker_dead: false,
             worker_failures: 0,
             last_status: None,
+            last_table: None,
             marker: std::marker::PhantomData,
         })
     }
@@ -271,6 +282,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     let selection_changed = self.selected != selection.window;
                     if selection_changed {
                         self.invalidate("window-changed", true, &mut events);
+                        self.last_table = None;
                         self.selected = selection.window;
                         self.tracker.reset();
                         self.last_analysis = None;
@@ -345,8 +357,30 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                             max_frame_age_ms: self.config.max_frame_age_ms,
                         },
                     );
+                let same_window = expected.as_ref() == Some(&completion.ticket)
+                    && identity.as_ref() == Some(&completion.ticket.identity);
                 if fresh {
-                    self.complete(completion, now, &mut events);
+                    self.complete(completion, now, true, &mut events);
+                } else if same_window {
+                    // A young result from a moved frame is stale advice, but its
+                    // board reading can still be published; a newer capture is
+                    // already queued. An over-age result is also too old to
+                    // classify: it must not label the screen a lobby or unreadable,
+                    // enter consensus, or delay the next read by retry_ms.
+                    let expired = now.saturating_sub(completion.ticket.captured_at_ms)
+                        >= self.config.max_frame_age_ms;
+                    events.push(LiveEvent::Discarded {
+                        generation: completion.ticket.generation,
+                        reason: if expired {
+                            "observation-expired"
+                        } else {
+                            "obsolete-observation"
+                        },
+                    });
+                    self.needs_analysis = true;
+                    if !expired {
+                        self.complete(completion, now, false, &mut events);
+                    }
                 } else {
                     events.push(LiveEvent::Discarded {
                         generation: completion.ticket.generation,
@@ -421,7 +455,13 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
         self.status("recovering", error.code, events);
     }
 
-    fn complete(&mut self, completion: Completion<T>, now: u64, events: &mut Vec<LiveEvent<T>>) {
+    fn complete(
+        &mut self,
+        completion: Completion<T>,
+        now: u64,
+        allow_advice: bool,
+        events: &mut Vec<LiveEvent<T>>,
+    ) {
         match completion.result {
             Err(error) => {
                 self.clear(error.code, events);
@@ -438,8 +478,25 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     metadata,
                     VisualEvidence::Plausible,
                 );
+                if let Some(state) = outcome.visible_cards.as_ref() {
+                    let reading = (
+                        state.game_phase,
+                        state.hero_cards.clone(),
+                        state.board.clone(),
+                        state.action_required,
+                    );
+                    if self.last_table.as_ref() != Some(&reading) {
+                        self.last_table = Some(reading.clone());
+                        events.push(LiveEvent::Table {
+                            game_phase: reading.0,
+                            hero_cards: reading.1,
+                            board: reading.2,
+                            action_required: reading.3,
+                        });
+                    }
+                }
                 match outcome.accepted_state {
-                    Some(state) => {
+                    Some(state) if allow_advice => {
                         self.needs_analysis = false;
                         self.status("capturing_table", outcome.reason, events);
                         if state.action_required {
@@ -461,6 +518,10 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                         } else {
                             self.clear("action-not-required", events);
                         }
+                    }
+                    Some(_) => {
+                        self.needs_analysis = true;
+                        self.status("capturing_table", "advice-withheld-frame-changed", events);
                     }
                     None => {
                         self.clear("screen-not-accepted", events);
@@ -486,15 +547,12 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
     }
 
     fn metadata(&self) -> MetadataEvidence {
-        let title = self.selected.as_ref().and_then(|w| w.title.as_deref());
-        let matches = |needle: &Option<String>| {
-            needle
-                .as_ref()
-                .is_some_and(|n| title.is_some_and(|t| t.contains(n)))
+        let Some(window) = self.selected.as_ref() else {
+            return MetadataEvidence::Candidate;
         };
-        if matches(&self.discovery.lobby_title) {
+        if self.discovery.is_calibrated_lobby(window) {
             MetadataEvidence::LobbyTitle
-        } else if matches(&self.discovery.table_title) {
+        } else if self.discovery.is_calibrated_table(window) {
             MetadataEvidence::TableTitle
         } else {
             MetadataEvidence::Candidate

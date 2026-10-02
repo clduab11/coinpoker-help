@@ -178,6 +178,7 @@ pub fn run(path: &str, config: VlmConfig) -> Result<(), RunError> {
     let mut gates: HashMap<&str, TableGate> = HashMap::new();
     let mut ids = BTreeSet::new();
     let mut confusion: BTreeMap<&str, BTreeMap<&str, usize>> = BTreeMap::new();
+    let mut rejection_categories: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut tags: BTreeMap<&str, usize> = BTreeMap::new();
     let mut cards = Ratio::default();
     let mut pot = Ratio::default();
@@ -203,26 +204,31 @@ pub fn run(path: &str, config: VlmConfig) -> Result<(), RunError> {
         let image = frame(case, root, synthetic)?;
         let start = Instant::now();
         let response = if synthetic {
-            VlmOutput {
+            Ok(VlmOutput {
                 text: serde_json::to_string(
                     case.response
                         .as_ref()
                         .ok_or_else(|| fail("synthetic response required"))?,
                 )
                 .map_err(|_| fail("invalid synthetic response"))?,
-            }
+            })
         } else {
-            match backend.analyze(&image, &ingest::prompt::build_analysis_prompt()) {
-                Ok(output) => output,
-                Err(_) => {
+            backend
+                .analyze(&image, &ingest::prompt::build_analysis_prompt())
+                .map_err(|error| {
                     errors += 1;
-                    VlmOutput {
-                        text: String::new(),
-                    }
-                }
+                    error.code()
+                })
+        };
+        let observation = match response
+            .and_then(|output| parse_screen_output(&output).map_err(|error| error.code()))
+        {
+            Ok(observation) => Some(observation),
+            Err(category) => {
+                *rejection_categories.entry(category).or_default() += 1;
+                None
             }
         };
-        let observation = parse_screen_output(&response).ok();
         let actual_kind = observation
             .as_ref()
             .map_or(ScreenKind::Unknown, |o| o.screen_kind);
@@ -340,6 +346,7 @@ pub fn run(path: &str, config: VlmConfig) -> Result<(), RunError> {
         "action_required_recall":rate(true_positive,true_positive+false_negative),
         "available_action_exact_accuracy":actions.value(),"raise_bound_exact_accuracy":raises.value(),
         "critical_actionable_false_positives":critical,"request_errors":errors,
+        "rejection_categories":rejection_categories,
         "recommendations_emitted":emitted_decisions,"eligible_decision_recall":decision_recall.value(),
         "stale_result_suppression_failures":if stale_cases == 0 { Value::Null } else { json!(stale_failures) },
         "stale_cases":stale_cases,"stale_evidence":"shared freshness predicate; concurrent runtime separately unit-tested",
