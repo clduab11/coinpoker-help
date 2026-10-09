@@ -10,9 +10,10 @@ failure. Keep raw images and private window listings under ignored `.local/`.
 
 - Automated host observations: 2026-09-23 and 2026-10-08/09 UTC; physical gate
   reviewer UNRECORDED
-- Candidate commit: base f97ca44 plus the 2026-10-08/09 remediation (gate-20 clippy
-  fix, thinking disabled, 8000 ms lease, loopback endpoint 18080), committed for CI
-  on 2026-10-09; CI run links are recorded in local gate-20 evidence
+- Candidate commit: **81f59986531204b338780333839757bb6b930e3f** (f97ca44 plus
+  c5a145a: gate-20 clippy fix, thinking disabled, 8000 ms lease, loopback endpoint
+  18080; and 81f5998: reference-sheet table rules, opening ranges, outs). Later
+  commits that touch only this report do not change the candidate code
 - Windows version/build and architecture: Windows 11 build 26200, x64; display
   topology UNRECORDED
 - CPU UNRECORDED; GPU NVIDIA RTX 4060 Ti, driver 591.86, 8 GiB VRAM; host RAM
@@ -53,18 +54,18 @@ failure. Keep raw images and private window listings under ignored `.local/`.
 | 6 | Helper starts before the client, waits with bounded polling and no repeated error flood. | UNRUN | |
 | 7 | Start the client normally; helper discovers the calibrated executable without restart. Inspect updater behavior and locate `update.log` only through actual installation evidence. | UNRUN | |
 | 8 | All tested lobby views and table previews remain lobbies or non-actionable screens, with zero recommendations. | UNRUN | 2026-10-02T00:00:35Z. One visible lobby titled CoinPoker at 1280×1032. Release helper, no PID/HWND/table pin, loopback VLM, no pixels saved. Two `lobby_detected` statuses, one lobby-title veto, 15 discarded observations, zero decisions or clears. `.local/acceptance/20261001T235902Z/lobby-observation.json`. 2026-10-02T00:47:14Z listing: lobby 1280×1032 and a second on-screen window 800×613, both titled exactly CoinPoker, hero not seated. A 15s live run selected neither window (`only lobby windows are present; no arbitrary observation window selected`), with zero decisions or clears. `.local/acceptance/20261002T004714Z/lobby-observation.json`. The user identified the 800×613 window as the game window and was not seated. Its Windows title is still exactly CoinPoker; the NLH label and table id are painted at the top left, so they are not a window-title selector. 2026-10-02T02:10:21Z release run passed the observed lobby size, selected that other-size window, and published no `table` event. Model replies were unreadable, invalid, or a non-table classification. `.local/acceptance/20261002T021021Z/live.jsonl`. No community-card reading is claimed. Other lobby views remain untested. |
-| 9 | Open a real table; helper rebuilds selection, applies table-only title hint and two fresh matching observations without restart. | UNRUN | |
+| 9 | Open a real table; helper rebuilds selection, applies table-only title hint and two fresh matching observations without restart. | UNRUN | 2026-10-09T05:58:58Z partial, helper started after the table opened (the no-restart path is untested). Discovery selected the 1015×770 table, HWND 0x27910ec, on the first pass by size, since the table shares the lobby title. No fresh matching observation was obtained: the model read 0 of 3 table frames as a valid table (2 non-table, 1 schema-invalid). `.local/acceptance/20261009T055858Z-table-live/summary.md` |
 | 10 | Close active table; advice clears exactly once within bounded discovery/capture time and never exceeds lease. | UNRUN | |
 | 11 | Reopen or replace a table; fresh HWND/consensus prevents reuse of the previous hand or frame. | UNRUN | |
 | 12 | Quit/relaunch the client; helper recovers across a new PID without restart when no PID/HWND pin is set. | UNRUN | |
 | 13 | Two equally ranked table windows cause ambiguity and one clear; no enumeration-order choice; recovery after one closes. | UNRUN | |
-| 14 | Minimized, obscured, animated, unreadable or inconsistent table emits no recommendation; recover after readability returns. | UNRUN | |
-| 15 | Slow real inference while cards, actions or window identity change discards obsolete work and never overwrites newer state. | UNRUN | |
+| 14 | Minimized, obscured, animated, unreadable or inconsistent table emits no recommendation; recover after readability returns. | UNRUN | 2026-10-09T05:58:58Z partial: an animating live table emitted zero decisions and zero clears in 90 s. Recovery was not exercised. Finding: the table never held still for one inference, so no reading can be published during active play until animated regions are handled (decision pending). `.local/acceptance/20261009T055858Z-table-live/summary.md` |
+| 15 | Slow real inference while cards, actions or window identity change discards obsolete work and never overwrites newer state. | UNRUN | 2026-10-09T05:58:58Z partial: all 3 live completions were discarded as `obsolete-observation` after the frame changed mid-inference, with no `observation-expired` discards under the 8000 ms lease and no state published. Card, action and identity changes were not isolated. `.local/acceptance/20261009T055858Z-table-live/live.jsonl` |
 | 16 | Small card/action/amount changes clear prior advice before inference completes; capture/process loss and consumer EOF/expiry clear display. | UNRUN | |
 | 17 | At 100%, 125% and 150% DPI, record window logical bounds and native pixels; test resize, move, multiple displays, aspect/crop and adjacent-window pixel exclusion. | UNRUN | |
 | 18 | Held-out authorized real corpus meets every threshold in `VISUAL_EVALUATION_V2.md`; independently review all actionable states and coverage. | UNRUN | |
 | 19 | Download checksummed candidate ZIP into clean account; verify support-file allowlist, execution, actual Authenticode status if requested, and complete local model setup. | UNRUN | |
-| 20 | Required Rust, Python, PowerShell syntax, synthetic evaluation and Windows CI checks pass at the exact candidate revision; inspect CI run links. | UNRUN | CI at f97ca44 (run 37030966828) FAILED on both Quality jobs. All tests passed; the only error was clippy `manual_pattern_char_comparison` at `bin/config.rs:210`, since fixed. 2026-10-09 local `scripts/validate.py` on the candidate tree: all 12 checks exit 0, 293 Rust tests. CI for the candidate commit is pending; links go in `.local/acceptance/20261008T224705Z-phase1/gate20-summary.md` |
+| 20 | Required Rust, Python, PowerShell syntax, synthetic evaluation and Windows CI checks pass at the exact candidate revision; inspect CI run links. | PASS | 2026-10-09T04:36:30Z for candidate 81f5998. Local `scripts/validate.py`: all 12 checks exit 0, 293 Rust tests. CI run 37883810315 succeeded: https://github.com/clduab11/coinpoker-help/actions/runs/37883810315 (windows-latest 293 tests, ubuntu-latest 294). The earlier f97ca44 run 37030966828 failed only on clippy at `bin/config.rs:210`, fixed in c5a145a. `.local/acceptance/20261008T224705Z-phase1/gate20-summary.md` |
 
 ## Smoke order
 
