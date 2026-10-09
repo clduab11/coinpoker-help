@@ -94,7 +94,7 @@ values fail instead of being clamped. `--help` lists all timing and pixel bounds
 | `--table-title` | `COINPOKER_WINDOW_TITLE` | Calibrated table-only substring, required for advice |
 | `--lobby-title` | `COINPOKER_LOBBY_TITLE` | Lobby veto that takes precedence over a table hint |
 | `--lobby-size` | `COINPOKER_LOBBY_SIZE` | Observed lobby `WIDTHxHEIGHT`. The same title at another size is the table |
-| `--vlm-endpoint` | `COINPOKER_VLM_ENDPOINT` | Local default: `http://127.0.0.1:8080/v1/chat/completions` |
+| `--vlm-endpoint` | `COINPOKER_VLM_ENDPOINT` | Local default: `http://127.0.0.1:18080/v1/chat/completions` |
 | `--vlm-model` | `COINPOKER_VLM_MODEL` | Default model alias: `coinpoker-gemma-4-e2b` |
 | `--allow-remote-vlm` | `COINPOKER_ALLOW_REMOTE_VLM=1` or `true` | Off by default; capture mode only and HTTPS required |
 | `--retry-ms` | `COINPOKER_RETRY_MS` | Default 2000 ms; bounded recovery delay |

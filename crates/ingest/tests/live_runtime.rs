@@ -397,7 +397,10 @@ fn over_age_response_and_periodic_refresh_are_fail_closed() {
 
 #[test]
 fn expired_result_discards_without_classifying_the_stale_screen() {
-    let (mut runtime, _source, worker) = rig(RuntimeConfig::default());
+    let (mut runtime, _source, worker) = rig(RuntimeConfig {
+        max_frame_age_ms: 5_000,
+        ..RuntimeConfig::default()
+    });
     start(&mut runtime);
     finish(&worker, lobby());
     let events = runtime.tick(&Time(5_400));
@@ -426,7 +429,10 @@ fn expired_result_discards_without_classifying_the_stale_screen() {
 
 #[test]
 fn expired_result_must_not_poison_consensus_for_the_next_fresh_read() {
-    let (mut runtime, _source, worker) = rig(RuntimeConfig::default());
+    let (mut runtime, _source, worker) = rig(RuntimeConfig {
+        max_frame_age_ms: 5_000,
+        ..RuntimeConfig::default()
+    });
     start(&mut runtime);
     finish(&worker, table());
     let events = runtime.tick(&Time(5_400));
@@ -453,7 +459,10 @@ fn expired_result_must_not_poison_consensus_for_the_next_fresh_read() {
 
 #[test]
 fn expired_worker_failure_does_not_throttle_the_next_read() {
-    let (mut runtime, _source, worker) = rig(RuntimeConfig::default());
+    let (mut runtime, _source, worker) = rig(RuntimeConfig {
+        max_frame_age_ms: 5_000,
+        ..RuntimeConfig::default()
+    });
     start(&mut runtime);
     worker.0.borrow_mut().ready = Some(Err(InferenceFailure {
         code: "invalid-observation",
@@ -575,7 +584,10 @@ fn publication_dropped_clears_lease_silently_then_reanalyzes() {
 
 #[test]
 fn lease_expiry_emits_clear_exactly_once() {
-    let (mut runtime, _source, worker) = rig(RuntimeConfig::default());
+    let (mut runtime, _source, worker) = rig(RuntimeConfig {
+        max_frame_age_ms: 5_000,
+        ..RuntimeConfig::default()
+    });
     activate(&mut runtime, &worker);
     let events = runtime.tick(&Time(5_500));
     assert_eq!(clears(&events), 1, "expiry must emit exactly one clear");

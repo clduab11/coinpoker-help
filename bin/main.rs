@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn local_vlm_endpoints_are_allowed_without_opt_in() {
         for endpoint in [
-            "http://127.0.0.1:8080/v1/chat/completions",
+            "http://127.0.0.1:18080/v1/chat/completions",
             "http://localhost:8080/v1/chat/completions",
             "https://[::1]:8443/v1/chat/completions",
         ] {

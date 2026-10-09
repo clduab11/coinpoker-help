@@ -205,9 +205,7 @@ pub fn parse(
 
 fn parse_lobby_size(value: &str) -> Result<(u32, u32), String> {
     let invalid = "--lobby-size requires positive WIDTHxHEIGHT";
-    let mut parts = value
-        .trim()
-        .split(|c: char| c == 'x' || c == 'X' || c == '×');
+    let mut parts = value.trim().split(['x', 'X', '×']);
     let (Some(width), Some(height), None) = (parts.next(), parts.next(), parts.next()) else {
         return Err(invalid.into());
     };

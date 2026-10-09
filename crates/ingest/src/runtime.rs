@@ -57,7 +57,7 @@ impl Default for RuntimeConfig {
             discovery_ms: 1_000,
             retry_ms: 2_000,
             force_refresh_ms: 5_000,
-            max_frame_age_ms: 5_000,
+            max_frame_age_ms: 8_000,
             change: ChangeDetectorConfig::default(),
             stability: StabilityConfig::default(),
         }

@@ -61,14 +61,14 @@ pwsh -File scripts/start-vlm.ps1
 ```
 
 The script verifies the assets, runs `llama-server.exe` in the foreground, binds
-only `127.0.0.1:8080`, and serves alias `coinpoker-gemma-4-e2b`. Leave the
+only `127.0.0.1:18080`, and serves alias `coinpoker-gemma-4-e2b`. Leave the
 terminal open; Ctrl-C stops it. Other local processes may reach this
 unauthenticated port. Do not publish it through a proxy or tunnel.
 
 In terminal B, from the same root:
 
 ```powershell
-curl.exe --fail --silent --show-error http://127.0.0.1:8080/v1/models
+curl.exe --fail --silent --show-error http://127.0.0.1:18080/v1/models
 $coinpoker = if (Test-Path -LiteralPath .\coinpoker.exe) { '.\coinpoker.exe' } else { '.\target\release\coinpoker.exe' }
 python scripts/doctor.py --binary $coinpoker
 ```

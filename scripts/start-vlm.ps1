@@ -33,9 +33,9 @@ $projectorFile = Join-Path $modelDirectory $pins.model.files[1].name
 $env:HF_HUB_OFFLINE = '1'
 $env:HF_HUB_DISABLE_TELEMETRY = '1'
 $env:DO_NOT_TRACK = '1'
-Write-Output "Starting pinned GGUF server on 127.0.0.1:8080 as $($pins.model.alias)."
+Write-Output "Starting pinned GGUF server on 127.0.0.1:18080 as $($pins.model.alias)."
 & $server --model $modelFile --mmproj $projectorFile --alias $pins.model.alias `
-    --host 127.0.0.1 --port 8080 --offline --gpu-layers auto `
+    --host 127.0.0.1 --port 18080 --offline --gpu-layers auto `
     --ctx-size 8192 --parallel 1 --no-webui --cors-origins localhost `
     --no-cors-credentials --log-disable
 if ($LASTEXITCODE -ne 0) { throw "llama.cpp server exited with code $LASTEXITCODE" }

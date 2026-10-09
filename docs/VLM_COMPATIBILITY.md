@@ -23,7 +23,7 @@ both generated multimodal probes. These checks do not prove poker accuracy.
 The separate BF16 projector is essential for image input. The selected model
 directory is `models/gemma-4-E2B-it-GGUF/`. The server asset lives under ignored
 `.local/vlm-runtime/b10964/` and serves model alias `coinpoker-gemma-4-e2b` on
-`127.0.0.1:8080`. The runtime is a foreground process started by
+`127.0.0.1:18080`. The runtime is a foreground process started by
 `scripts/start-vlm.ps1`; it is not a Windows service. Model terms are documented
 in [MODEL_LICENSES.md](../MODEL_LICENSES.md).
 

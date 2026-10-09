@@ -251,7 +251,7 @@ def collect(root, binary, offline=False):
     except (OSError, ValueError, KeyError):
         record("model_files_sha256", "fail", "pinned model/projector absent or invalid; run download-model.ps1")
 
-    endpoint = os.environ.get("COINPOKER_VLM_ENDPOINT") or "http://127.0.0.1:8080/v1/chat/completions"
+    endpoint = os.environ.get("COINPOKER_VLM_ENDPOINT") or "http://127.0.0.1:18080/v1/chat/completions"
     model = os.environ.get("COINPOKER_VLM_MODEL") or MODEL
     try:
         url = loopback_endpoint(endpoint)

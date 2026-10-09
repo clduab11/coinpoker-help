@@ -112,7 +112,7 @@ pub struct VlmConfig {
 impl Default for VlmConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://127.0.0.1:8080/v1/chat/completions".to_string(),
+            endpoint: "http://127.0.0.1:18080/v1/chat/completions".to_string(),
             allow_remote: false,
             model: "coinpoker-gemma-4-e2b".to_string(),
             temperature: 0.1,
@@ -207,6 +207,10 @@ impl VlmBackend for OpenAiServerBackend {
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
             "stream": false,
+            // The pinned Gemma 4 E2B emits a long reasoning_content chain-of-thought
+            // by default, which dominates generation time on real table frames and
+            // exceeds the capture lease. Suppress it; the JSON envelope is unchanged.
+            "chat_template_kwargs": { "enable_thinking": false },
             "messages": [
                 {
                     "role": "system",
