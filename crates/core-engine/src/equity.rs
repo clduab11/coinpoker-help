@@ -37,7 +37,7 @@ pub enum EquityError {
 }
 
 /// Card rank, ordered Two..Ace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rank {
     Two,
     Three,
