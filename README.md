@@ -24,7 +24,8 @@ model, real-image, and clean-account acceptance are recorded in
 Windows process and window metadata (exe name, PID, HWND)
   -> calibrated table/lobby title selection, explicit ambiguity
   -> Windows Graphics Capture for the selected window, RGBA frame
-  -> cumulative and local pixel change checks, stability gate
+  -> cumulative and local pixel change checks, persistently animated tiles
+     suppressed (seat avatars, badges, glows), stability gate
   -> one inference worker and one replaceable latest frame
   -> generation, epoch, window identity and capture-age checks
   -> strict screen classification and complete poker-state validation
@@ -136,8 +137,13 @@ clears an active recommendation once; later valid input may recover.
 - Pixel checks reject malformed, blank and tiny frames; they do not positively
   identify a real table. Wrong title calibration and correlated model errors remain
   possible.
-- The 5-second default advice lease can expire before a slow inference finishes.
+- The 8-second default advice lease can expire before a slow inference finishes.
   Consumers must honor clear, absolute expiry and EOF even when capture blocks.
+- Persistently animated tiles (seat avatars, badges, glows) are excluded from
+  change detection while they animate, so a state change inside such a tile is
+  only picked up by the periodic forced refresh (5 s by default), not instantly.
+  On a live six-max table real state changes arrive every few hundred
+  milliseconds; an inference of several seconds rarely finds a quiet window.
 - Strict continuity may suppress valid hands after missed frames or street changes.
   Multiway all-in and side-pot decisions remain suppressed; poker math is unchanged.
 - Real image accuracy, end-to-end latency, DPI behavior, window occlusion, restart

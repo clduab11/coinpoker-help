@@ -657,3 +657,75 @@ fn waiting_for_application_has_bounded_discovery_and_recovers_without_restart() 
     runtime.tick(&Time(1000));
     assert_eq!(source.0.borrow().captures, 1);
 }
+
+/// Alternate one 16x16 tile between two values, like an animated seat avatar.
+fn toggle_tile(source: &Source, step: u64) {
+    let value = if step.is_multiple_of(2) { 64 } else { 200 };
+    let mut state = source.0.borrow_mut();
+    let width = state.frame.width as usize;
+    for y in 48..64 {
+        for x in 32..48 {
+            let start = (y * width + x) * 4;
+            state.frame.rgba[start..start + 4].copy_from_slice(&[value; 4]);
+        }
+    }
+}
+
+#[test]
+fn persistently_animated_tile_does_not_starve_inference() {
+    // Live finding 20261009T061624Z: seat avatars change every capture, so
+    // every completion was discarded as obsolete. With the animated tile
+    // suppressed, inference that takes several captures still completes fresh.
+    let (mut runtime, source, worker) = rig(RuntimeConfig::default());
+    let latency_ms = 1_000;
+    let mut decisions = 0;
+    let mut discards = Vec::new();
+    let mut now = 0;
+    while now <= 8_000 {
+        toggle_tile(&source, now / 100);
+        let due = worker
+            .0
+            .borrow()
+            .ticket
+            .as_ref()
+            .map(|ticket| ticket.captured_at_ms + latency_ms);
+        if due.is_some_and(|due| now >= due) {
+            finish(&worker, table());
+        }
+        for event in runtime.tick(&Time(now)) {
+            match event {
+                LiveEvent::Recommendation { .. } => decisions += 1,
+                LiveEvent::Discarded { reason, .. } => discards.push(reason),
+                _ => {}
+            }
+        }
+        now += 100;
+    }
+    assert!(discards.is_empty(), "{discards:?}");
+    assert!(
+        decisions >= 1,
+        "the animated seat tile must not block advice"
+    );
+
+    // A change outside the animated tile still invalidates in-flight work.
+    let (mut runtime, source, worker) = rig(RuntimeConfig::default());
+    let mut now = 0;
+    while runtime.active_count() == 0 && now <= 3_000 {
+        toggle_tile(&source, now / 100);
+        runtime.tick(&Time(now));
+        now += 100;
+    }
+    assert_eq!(runtime.active_count(), 1);
+    toggle_tile(&source, now / 100);
+    change(&source, 255);
+    runtime.tick(&Time(now));
+    finish(&worker, table());
+    let events = runtime.tick(&Time(now + 100));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        LiveEvent::Discarded {
+            reason: "obsolete-observation",
+            ..
+        }
+    )));
+}
