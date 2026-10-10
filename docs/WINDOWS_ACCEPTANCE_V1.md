@@ -6,7 +6,57 @@ real-image, client-lifecycle or pixel-boundary gates. Use `PASS`, `FAIL`, `BLOCK
 or `UNRUN` with UTC time, sanitized local evidence path and reproduction for a
 failure. Keep raw images and private window listings under ignored `.local/`.
 
-## Environment and provenance
+## Current Laya and follow-on status
+
+The sole current backend is Laya, alias `coinpoker-laya-vision`, using the already
+downloaded/trained `models/laya-vision/finetuned/20261009T190322Z-it1` and
+`scripts/laya-pins.json`. Base revision:
+`thaitea/laya-vision@f2fe3c12cb6d04c59d8a190250bf3fb40fc828dc`.
+No redownload/retraining is needed. A fresh install lacks this user's local
+fine-tuned derivative. Current browser/service target is
+`http://127.0.0.1:18090/`, with `/v1/models` and `/v1/laya/predict`, not
+Gemma/chat-completions or retired product ports.
+
+Iteration-1 Gate F remains **FAIL**, human verification **UNVERIFIED**,
+source/vendor `calibrated:false`. At board threshold 1.0, the 66 agent-reviewed
+frames produced **0/330 confident board units**, despite raw accuracy
+`307/330 = 93.03%`. Warm full-unseated-battery p95 **3027.3 ms** failed the
+original `<2000 ms` criterion. Preserve [the exact receipt](LAYA_VISION_PHASE_A.md#7-phase-gates).
+Temperature calibration and matching reviewed annotations are not advice
+approval. The new proposed `<5000 ms` warm capture-to-display p95 and hard
+5000 ms full end-to-end deadline do not retroactively pass that benchmark.
+
+The follow-on scope is actual Practice Games development with practice chips,
+not real-money acceptance. Practice/cash use one repo, representation and
+validation mechanism; no bypass. First phase is read-only UI/feed/private
+per-session history with opaque IDs and explicit gaps, no UI-triggered capture
+or training and no seated advice. Positive real UI data and approved
+human-held-out calibration/evaluation are still needed. The root PNG charts
+and PDF are reference facts, not positive seated screenshots.
+
+`scripts/start-vlm.ps1 -DashboardOnly` is planned to load no model/use no GPU;
+default startup asynchronously verifies/loads/warms the pinned model. Optional
+`-LiveConfig .local/profile.json` explicitly supervises one native passive CLI
+feed and is not automatically used in this phase. These instructions remain
+subject to the coordinator's actual tests, not an accepted live receipt.
+Follow-on evidence still needed: root/status during loading/failure/busy
+prediction, truthful source timestamps/frame and optional recorder counters,
+expiry/disconnect/out-of-order clearing, sanitized bounded history and private
+output. A healthy page/model is not `COLLECTOR_READY` or `ADVICE_READY`.
+The native feed is capture-health only (`recording_enabled:false`,
+`recorded_frames:0`); typed `-LiveConfig` target settings do not forward a
+`--record-dir` option. Recorder/profile readiness remains a later manual-data
+checkpoint, not a receipt supplied by UI tests.
+
+Laya server/dashboard support and the local fine-tuned weights are absent from
+historical release packaging. `scripts/vlm-pins.json` remains an orphaned
+historical manifest. This phase makes no release/workflow changes.
+
+## Historical environment and provenance
+
+The remainder preserves the Gemma candidate evidence from 2026-09-23 and
+2026-10-08/09. Its dates, hashes, ports, candidate revision and gate statuses
+are historical receipts, not current Laya defaults or follow-on acceptance.
 
 - Automated host observations: 2026-09-23 and 2026-10-08/09 UTC; physical gate
   reviewer UNRECORDED
@@ -42,7 +92,7 @@ failure. Keep raw images and private window listings under ignored `.local/`.
   Authenticode status UNRECORDED
 - Final recommendation: **NO-GO**
 
-## Gates
+## Historical candidate gates
 
 | # | Evidence to collect | Status | Local evidence / limitation |
 | --- | --- | --- | --- |
@@ -67,7 +117,11 @@ failure. Keep raw images and private window listings under ignored `.local/`.
 | 19 | Download checksummed candidate ZIP into clean account; verify support-file allowlist, execution, actual Authenticode status if requested, and complete local model setup. | UNRUN | |
 | 20 | Required Rust, Python, PowerShell syntax, synthetic evaluation and Windows CI checks pass at the exact candidate revision; inspect CI run links. | PASS | 2026-10-09T04:36:30Z for candidate 81f5998. Local `scripts/validate.py`: all 12 checks exit 0, 293 Rust tests. CI run 37883810315 succeeded: https://github.com/clduab11/coinpoker-help/actions/runs/37883810315 (windows-latest 293 tests, ubuntu-latest 294). The earlier f97ca44 run 37030966828 failed only on clippy at `bin/config.rs:210`, fixed in c5a145a. `.local/acceptance/20261008T224705Z-phase1/gate20-summary.md` |
 
-## Smoke order
+## Historical candidate smoke order
+
+This sequence belongs to the candidate above. Current Laya/dashboard setup is
+in [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md); no old Gemma download/probe sequence
+is an instruction to repeat for this phase.
 
 1. Record a genuinely clean account and prerequisites. Follow the install guide
    literally; record and fix undocumented interventions before repeating.

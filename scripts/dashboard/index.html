@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <title>CoinPoker | Table Monitor</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to dashboard</a>
+  <div class="console">
+    <header class="masthead">
+      <div class="identity">
+        <span class="brand-mark" aria-hidden="true">CP<span>01</span></span>
+        <div>
+          <p class="eyebrow">CoinPoker / Practice Games</p>
+          <h1>Table monitor</h1>
+          <p class="subtitle">The table first. Unknowns stay unknown.</p>
+        </div>
+      </div>
+      <div class="mode-label">
+        <span class="badge" data-tone="neutral">Read-only</span>
+        <span class="small muted">No automated actions</span>
+      </div>
+    </header>
+
+    <div class="view-bar">
+      <div class="tabs" role="tablist" aria-label="Dashboard view">
+        <button type="button" id="tab-monitor" role="tab" aria-selected="true" aria-controls="panel-monitor" tabindex="0">Monitor</button>
+        <button type="button" id="tab-reference" role="tab" aria-selected="false" aria-controls="panel-reference" tabindex="-1">Reference</button>
+      </div>
+      <span id="view-label" class="view-label">Experimental readings / suggestions off</span>
+    </div>
+
+    <main id="main" tabindex="-1">
+      <section id="panel-monitor" role="tabpanel" aria-labelledby="tab-monitor" tabindex="0">
+        <p id="monitor-empty" class="monitor-empty" role="status">Waiting for a table reading.</p>
+        <div id="monitor-grid" class="monitor-grid no-reading no-history">
+          <section id="suggested-action" class="panel action-panel" aria-labelledby="action-title" data-role="uncertain" hidden>
+            <header class="action-heading"><h2 id="action-title" class="eyebrow">Suggested action</h2><span id="role-status" class="badge" hidden></span></header>
+            <div class="action-choice"><p id="action-move" class="action-move">Reading uncertain</p><div id="action-amount-wrap" class="action-amount" hidden><span class="eyebrow">Amount</span><strong id="action-amount">-</strong></div></div>
+            <p id="action-reason" class="action-reason" hidden>Baseline gate FAILED.</p>
+          </section>
+
+          <section id="monitor-readings" class="panel readings-panel" aria-labelledby="observation-title" hidden>
+            <header class="panel-heading"><div><p class="eyebrow">Supporting readings</p><h2 id="observation-title">At the table</h2></div><span class="badge" data-tone="warning">Experimental</span></header>
+            <dl class="table-meta"><div><dt>Phase</dt><dd id="game-phase">-</dd></div><div><dt>Acting seat</dt><dd id="acting-seat">-</dd></div></dl>
+            <div class="card-deck"><div class="card-group board-group"><h3>Board</h3><div id="board-cards" class="cards" aria-label="Experimental board cards"></div></div><div class="card-group"><h3>Hero</h3><div id="hero-cards" class="cards" aria-label="Experimental hero cards"></div></div></div>
+            <dl class="amount-grid">
+              <div><dt>Pot</dt><dd id="amount-pot">-</dd></div>
+              <div><dt id="call-label">Call</dt><dd id="amount-call">-</dd></div>
+              <div><dt>Hero stack</dt><dd id="amount-stack">-</dd></div>
+            </dl>
+            <section class="reading-row" aria-labelledby="wagers-title"><h3 id="wagers-title">Visible wagers</h3><ul id="visible-wagers" class="wager-list"></ul></section>
+            <section class="reading-row" aria-labelledby="controls-title"><h3 id="controls-title">Offered actions</h3><ul id="control-states" class="control-list" aria-label="Observed labels, not action buttons"></ul><p class="footnote">Presence and enabled state are separate. These labels are not legal-action approval.</p></section>
+            <dl class="raise-bounds"><div><dt>Min raise to</dt><dd id="amount-min">-</dd></div><div><dt>Max raise to</dt><dd id="amount-max">-</dd></div></dl>
+            <dl class="metric-grid">
+              <div><dt>Hand rank</dt><dd id="metric-rank">-</dd></div>
+              <div><dt id="metric-odds-label">Pot odds / required equity</dt><dd id="metric-odds">-</dd></div>
+              <div class="draw-reading"><dt>Draw completion</dt><dd><dl class="draw-metrics"><div><dt>Outs</dt><dd id="metric-draw-outs">-</dd></div><div><dt>Next card</dt><dd id="metric-draw-next">-</dd></div><div><dt>By river</dt><dd id="metric-draw-river">-</dd></div></dl></dd></div>
+              <div><dt>Win equity</dt><dd id="metric-equity">-</dd></div>
+            </dl>
+            <p class="footnote">Amounts are practice chips. A dash is unknown; draw completion is not win equity.</p>
+          </section>
+
+          <aside id="history-panel" class="panel history-panel" aria-labelledby="history-title" hidden>
+            <header class="panel-heading"><div><p class="eyebrow">Across every seat change</p><h2 id="history-title">Recent table activity</h2></div><span id="history-status" class="badge" data-tone="warning">Partial</span></header>
+            <dl class="history-metrics"><div><dt>Folds</dt><dd id="history-folds">-</dd></div><div><dt>Bets</dt><dd id="history-bets">-</dd></div><div><dt>Raises</dt><dd id="history-raises">-</dd></div><div><dt>3-bets</dt><dd id="history-three-bets">-</dd></div><div><dt>4-bets</dt><dd id="history-four-bets">-</dd></div><div><dt>Gaps</dt><dd id="history-gaps">-</dd></div></dl>
+            <div class="history-toolbar"><p id="history-coverage" class="small muted">Partial history; gaps may hide actions.</p><label class="filter-label" for="history-filter">Show <select id="history-filter"><option value="all">All activity</option><option value="action">Actions</option><option value="gap">Gaps</option><option value="boundary">Hand / table changes</option></select></label></div>
+            <ol id="history-events" class="event-list" aria-label="Recent observed activity, newest first" tabindex="0"></ol>
+            <p id="history-empty" class="empty-state">No actions recorded in this partial history.</p>
+            <p class="footnote">Counts are observed lower bounds, not rates. A 3-bet or 4-bet needs known prior action order.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section id="panel-reference" role="tabpanel" aria-labelledby="tab-reference" tabindex="0" hidden>
+        <header class="section-intro"><p class="eyebrow">Knowledge / not live guidance</p><h2 id="reference-title">Poker reference</h2><p id="reference-scope">Locally bundled rules, odds and context. Not proof of card recognition or live advice.</p></header>
+        <div class="reference-toolbar"><label class="reference-search" for="reference-search"><span class="eyebrow">Find a topic</span><input id="reference-search" type="search" placeholder="Rankings, pot odds, 3-bets..." maxlength="160" autocomplete="off" spellcheck="false" aria-controls="reference-sections" aria-describedby="reference-count" disabled></label><div class="reference-meta"><p id="reference-count" class="small" role="status"></p><p id="reference-reviewed" class="small muted"></p></div></div>
+        <p id="reference-load-status" class="notice" data-tone="neutral">Reference has not been loaded.</p>
+        <div id="reference-sections" class="reference-sections"></div>
+        <p id="reference-empty" class="empty-state" hidden>No matching topics.</p>
+        <p class="footnote">Source links open only when you choose them. Reference material never activates suggestions.</p>
+      </section>
+    </main>
+
+    <footer class="console-footer"><span>Practice Games / local only</span><span>Experimental readings. Suggestions off.</span></footer>
+    <p id="announce" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+    <noscript><p class="notice">JavaScript is disabled. Monitoring is paused and suggestions remain off.</p></noscript>
+  </div>
+</body>
+</html>

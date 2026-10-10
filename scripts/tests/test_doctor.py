@@ -7,6 +7,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from unittest.mock import patch
 import zlib
@@ -17,11 +18,14 @@ SPEC.loader.exec_module(doctor)
 
 
 class DoctorTests(unittest.TestCase):
-    def test_only_loopback_without_credentials_or_redirects(self):
+    def test_only_loopback_laya_endpoint_without_credentials_or_redirects(self):
         for host in ["127.0.0.1", "localhost", "[::1]"]:
-            doctor.loopback_endpoint("http://" + host + ":8080/v1/chat/completions")
-        for url in ["https://example.com/v1/chat/completions", "http://localhost@evil.example/v1/chat/completions",
-                    "file:///tmp/data", "http://127.0.0.1/v1/chat/completions?token=secret"]:
+            doctor.loopback_endpoint("http://" + host + ":18090/v1/laya/predict")
+        for url in ["https://example.com/v1/laya/predict", "http://localhost@evil.example/v1/laya/predict",
+                    "file:///tmp/data", "http://127.0.0.1/v1/laya/predict?token=secret",
+                    "http://127.0.0.1:18080/v1/chat/completions",
+                    "http://127.0.0.1:18080/v1/laya/predict", "http://localhost:8080/v1/laya/predict",
+                    "http://127.0.0.1:18091/v1/laya/predict"]:
             with self.assertRaises(ValueError):
                 doctor.loopback_endpoint(url)
         self.assertIsNone(doctor.NoRedirect().redirect_request(None, None, 302, None, None, "https://evil.example"))
@@ -34,69 +38,104 @@ class DoctorTests(unittest.TestCase):
         pixels = zlib.decompress(png[41:41 + length])
         self.assertEqual(pixels, (b"\0" + b"\xff\0\0" * 64) * 64)
         body = doctor.probe_body("local-model", (0, 0, 255))
-        self.assertFalse(body["stream"])
-        self.assertEqual([m["role"] for m in body["messages"]], ["system", "user"])
-        self.assertEqual(body["messages"][1]["content"][1]["type"], "image_url")
+        self.assertEqual((body["model"], body["layout"]), ("local-model", "full"))
+        self.assertEqual(len(body["images_png_b64"]), 1)
+        self.assertEqual(set(body["questions"]["dominant_color"]["criteria"]), {"red", "blue"})
 
     def test_success_requires_correct_image_dependent_answer(self):
-        answer = {"choices": [{"finish_reason": "stop", "message": {"content": '{"dominant_color":"red"}'}}]}
+        answer = {"answers": {"dominant_color": {"type": "choice", "choice": "red", "confidence": 0.9, "truncated": False}}}
         self.assertTrue(doctor.verify_probe(answer, "red"))
         self.assertFalse(doctor.verify_probe(answer, "blue"))
-        answer["choices"][0]["finish_reason"] = "length"
+        answer["answers"]["dominant_color"]["truncated"] = True
         self.assertFalse(doctor.verify_probe(answer, "red"))
 
     def test_bad_api_shapes_fail_without_echoing_payloads(self):
-        for response in [None, [], {}, {"choices": []}, {"choices": [None]},
-                         {"choices": [{"finish_reason": "stop", "message": {"content": "data:image/png;base64,PRIVATE"}}]}]:
+        for response in [None, [], {}, {"answers": []}, {"answers": {"dominant_color": None}},
+                         {"error": "data:image/png;base64,PRIVATE"}]:
             self.assertFalse(doctor.verify_probe(response, "red"))
         for response in [None, [], {}, {"data": None}, {"data": [None, "bad", 4]}]:
             self.assertFalse(doctor.model_available(response, "local-model"))
         self.assertTrue(doctor.model_available({"data": [{"id": "local-model"}]}, "local-model"))
 
     def make_model(self, root):
-        model = {"repository": "test/model", "revision": "a" * 40,
-                 "files": [{"name": "model.gguf", "size": 5, "sha256": hashlib.sha256(b"model").hexdigest()},
-                           {"name": "projector.gguf", "size": 9, "sha256": hashlib.sha256(b"projector").hexdigest()}]}
-        (root / "model.gguf").write_bytes(b"model")
-        (root / "projector.gguf").write_bytes(b"projector")
-        (root / "SOURCE_REVISION").write_text(
-            f"format=2\nrepository={model['repository']}\nrevision={model['revision']}\n"
-            "model=model.gguf\nprojector=projector.gguf\n", encoding="utf-8")
-        return {"model": model}
+        files = {"model.safetensors": b"model", "vlm_agent_config.json": b"{}"}
+        snap = root / "hf/hub/models--test--model/snapshots" / ("a" * 40)
+        ft = root / "ft"
+        for d in (snap, ft):
+            d.mkdir(parents=True)
+            for name, data in files.items():
+                (d / name).write_bytes(data)
+        listing = [{"path": n, "size": len(d), "sha256": hashlib.sha256(d).hexdigest()} for n, d in files.items()]
+        return {"model": {"repository": "test/model", "revision": "a" * 40, "hf_home": "hf", "files": listing,
+                          "finetuned": {"path": "ft", "files": [dict(x) for x in listing]}}}
 
-    def test_model_requires_pinned_provenance_size_and_sha256(self):
+    def test_model_requires_pinned_size_and_sha256_for_base_and_finetuned(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             pins = self.make_model(root)
             doctor.check_model_files(root, pins)
-            (root / "model.gguf").write_bytes(b"other")
+            (root / "ft/model.safetensors").write_bytes(b"other")
             with self.assertRaises(ValueError):
                 doctor.check_model_files(root, pins)
-            (root / "model.gguf").write_bytes(b"model")
-            (root / "SOURCE_REVISION").write_text("revision=untrusted\n")
+            (root / "ft/model.safetensors").write_bytes(b"model")
+            del pins["model"]["finetuned"]
             with self.assertRaises(ValueError):
                 doctor.check_model_files(root, pins)
+
+    def test_hf_snapshot_links_may_resolve_only_into_the_configured_hub_cache(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / ".local") as directory:
+            hub = Path(directory) / "hub"
+            cache = hub / "repo"
+            snapshot = cache / "snapshots" / "revision"
+            snapshot.mkdir(parents=True)
+            blobs = hub / "blobs"
+            blobs.mkdir()
+            blob = blobs / "sha"
+            blob.write_bytes(b"test-model")
+            outside = Path(directory) / "outside.bin"
+            outside.write_bytes(b"test-model")
+            artifact = {"path": "model.bin", "size": 10, "sha256": doctor.sha256_file(blob)}
+            original = Path.resolve
+
+            def resolve(path, *args, **kwargs):
+                if path == snapshot / "model.bin":
+                    return original(blob)
+                return original(path, *args, **kwargs)
+
+            with patch.object(Path, "resolve", resolve):
+                doctor._check_files(snapshot, [artifact], "base", allowed_root=hub)
+                with self.assertRaises(ValueError):
+                    doctor._check_files(snapshot, [artifact], "fine-tuned")
+
+            def escaping(path, *args, **kwargs):
+                if path == snapshot / "model.bin":
+                    return original(outside)
+                return original(path, *args, **kwargs)
+
+            with patch.object(Path, "resolve", escaping), self.assertRaises(ValueError):
+                doctor._check_files(snapshot, [artifact], "base", allowed_root=hub)
+            for name in ("../blobs/sha", str(blob)):
+                with self.assertRaises(ValueError):
+                    doctor._check_files(snapshot, [{**artifact, "path": name}], "base", allowed_root=hub)
 
     def test_model_path_cannot_escape_root(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             pins = self.make_model(root)
-            pins["model"]["files"][0]["name"] = "../outside.gguf"
+            pins["model"]["finetuned"]["files"][0]["path"] = "../outside.safetensors"
             with self.assertRaises(ValueError):
                 doctor.check_model_files(root, pins)
 
-    def test_runtime_archive_requires_hash_and_server(self):
+    def test_runtime_requires_pinned_environment(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            runtime = {"tag": "b1", "asset": "runtime.zip", "sha256": hashlib.sha256(b"zip").hexdigest()}
-            place = root / ".local/vlm-runtime/b1"
-            (place / "bin").mkdir(parents=True)
-            (place / "runtime.zip").write_bytes(b"zip")
-            (place / "bin/llama-server.exe").write_bytes(b"synthetic")
-            self.assertEqual(doctor.check_runtime_archive(root, {"runtime": runtime}).name, "llama-server.exe")
-            (place / "runtime.zip").write_bytes(b"tampered")
+            pins = {"runtime": {"env_prefix": "env", "packages": {"torch": "1"}, "laya": {"commit": "c" * 40}}}
             with self.assertRaises(ValueError):
-                doctor.check_runtime_archive(root, {"runtime": runtime})
+                doctor.runtime_python(Path(directory), pins)
+
+    def test_pins_are_lazy(self):
+        with self.assertRaises(OSError):
+            doctor.load_pins(Path("does-not-exist.json"))
+        self.assertEqual(doctor.load_pins()["server"]["port"], 18090)
 
     def test_windows_v2_metadata_and_calibrated_identity(self):
         records = [

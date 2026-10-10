@@ -8,7 +8,8 @@
 //!   change detection → VLM → decision → JSON lines on stdout.
 //! - `coinpoker --stdin`    — read `GameState` JSON lines from stdin and run
 //!   the decision pipeline (works on any host; used by tests and replay).
-//! - `coinpoker --ui`       — reserved; exits 2 until a live UI feed exists.
+//! - `coinpoker --ui`       - reserved native UI; exits 2. The separately launched
+//!   read-only browser dashboard uses http://127.0.0.1:18090/.
 //! - `coinpoker --list-windows` — list capture candidates for calibration.
 
 use std::fmt;
@@ -361,28 +362,33 @@ mod tests {
     use super::config::validate_vlm_endpoint;
 
     #[test]
-    fn local_vlm_endpoints_are_allowed_without_opt_in() {
+    fn local_laya_endpoints_are_allowed() {
         for endpoint in [
-            "http://127.0.0.1:18080/v1/chat/completions",
-            "http://localhost:8080/v1/chat/completions",
-            "https://[::1]:8443/v1/chat/completions",
+            "http://127.0.0.1:18090/v1/laya/predict",
+            "http://localhost:18090/v1/laya/predict",
+            "https://[::1]:18090/v1/laya/predict",
         ] {
-            validate_vlm_endpoint(endpoint, false).expect("loopback endpoint");
+            validate_vlm_endpoint(endpoint).expect("loopback endpoint");
         }
     }
 
     #[test]
-    fn remote_vlm_endpoint_requires_opt_in_and_https() {
-        let endpoint = "https://vlm.example.com/v1/chat/completions";
-        assert!(validate_vlm_endpoint(endpoint, false).is_err());
-        validate_vlm_endpoint(endpoint, true).expect("opted-in HTTPS endpoint");
-        assert!(validate_vlm_endpoint("http://vlm.example.com/v1", true).is_err());
+    fn remote_laya_endpoints_are_always_rejected() {
+        for endpoint in [
+            "https://vlm.example.com/v1/laya/predict",
+            "http://vlm.example.com/v1",
+            "http://192.168.1.2/v1/laya/predict",
+            "http://localhost.evil.com/",
+        ] {
+            let error = validate_vlm_endpoint(endpoint).unwrap_err();
+            assert!(error.contains("loopback"), "{error}");
+        }
     }
 
     #[test]
     fn deceptive_or_invalid_hosts_are_rejected() {
-        assert!(validate_vlm_endpoint("http://localhost:8080@evil.example/v1", false).is_err());
-        assert!(validate_vlm_endpoint("file:///tmp/socket", true).is_err());
-        assert!(validate_vlm_endpoint("not a URL", true).is_err());
+        assert!(validate_vlm_endpoint("http://localhost:8080@evil.example/v1").is_err());
+        assert!(validate_vlm_endpoint("file:///tmp/socket").is_err());
+        assert!(validate_vlm_endpoint("not a URL").is_err());
     }
 }

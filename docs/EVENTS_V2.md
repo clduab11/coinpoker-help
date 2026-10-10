@@ -16,10 +16,14 @@ events but must never infer a recommendation from `status`.
 | --- | --- |
 | `configuration` | Active `runtime` thresholds, `identity_configured`, `model`, `vlm_timeout_secs`, `visual_calibration:"not_validated"`; this does not assert readiness. |
 | `status` | `state`, `reason`, `identity`. Runtime status identity is an object or null. Early configuration and listing failure records may omit it; treat omission as null. Emitted only when this tuple changes. |
-| `decision` | Existing decision fields plus `observation`, `valid_for_ms`, `emitted_at_unix_ms`, `expires_at_unix_ms`. Only emitted after all gates. |
-| `table` | `game_phase`, `hero_cards`, `board`, `action_required`. Visible cards after the same acceptance gates as a decision. Not advice. Emitted only when that tuple changes. `hero_cards` is empty when none are visible. No player names and no table id. |
+| `decision` | Existing decision fields plus `observation`, `captured_at_unix_ms`, `valid_for_ms`, `emitted_at_unix_ms`, `expires_at_unix_ms`. Only emitted after source-current admission; the first-phase browser still withholds all advice because seated quality is unapproved. |
+| `observation` | Separately admitted full-state observation with `observation` ticket, source capture/emission/expiry times, remaining lease, cards/phase, nullable chip amounts/actions, `action_required` and `quality_approved`. This is the browser's freshness-bound diagnostic source, not a raw model response or a quality approval. Unseated hero amounts and offered controls are null, not zero/absent. |
+| `observation_invalidated` | `reason`, `generation`, `epoch`, `identity`, `emitted_at_unix_ms`. Invalidates current diagnostics even when no recommendation exists. |
+| `capture_health` | Every 1000 ms: cumulative `frame_count`, nullable `frame_width`/`frame_height`, capture/emission time, generation/epoch/identity and `fresh_capture`. A delayed source frame cannot claim fresh health. `recording_enabled:false` and `recorded_frames:0` explicitly distinguish capture from image recording. |
+| `history` | Sanitized bounded observer `summary` and emission time after a successfully emitted, still-current observation. The baseline contributes `unvalidated_source` gaps only, never guessed player actions or profiles. |
+| `table` | `game_phase`, `hero_cards`, `board`, `action_required`. Weaker card-only consensus reading without a ticket or external lease. Not equivalent to complete state/advice admission and not authoritative current controls. Emitted only when that tuple changes; no player names or table id. |
 | `clear` | `reason`, `generation`; invalidates one active decision and is not repeated when no decision is active. |
-| `discarded` | `generation` and `reason:"obsolete-observation"`, `"observation-expired"`, or `"publication-expired"`. Never reactivate older advice. A `table` event for the same unchanged window can still follow an `"obsolete-observation"` discard; an `"observation-expired"` result is discarded whole and never classifies the screen. |
+| `discarded` | `generation` and a safe reason such as `obsolete-observation`, `observation-expired`, `decision-budget-expired`, or `publication-expired`. Obsolete/expired completions are discarded whole; they cannot classify, seed consensus, or reactivate older diagnostics/advice. |
 
 Decision fields are `action`, `amount`, `ev`, `pot_odds`, `equity`, `break_even`,
 `opponent`, and `confidence`. Amount retains the poker engine's chip/raise-to
@@ -42,11 +46,11 @@ after a meaningful frame or scope change.
 
 **Consumer requirements:**
 
-1. Clear immediately on `clear`, EOF/process loss, expired lease, or new stream.
+1. Clear current diagnostics on `observation_invalidated` independently of advice, and clear advice on `clear`. Clear both on EOF/process loss, expired lease, or new stream.
 2. `valid_for_ms` is the remaining lease at emission. Compare
    `expires_at_unix_ms` with the current clock; delayed lines do not receive a new
    full lease. Use the shorter available wall-clock or monotonic lease.
-3. Never show an older generation over a newer one; ignore duplicate decisions.
+3. Never show an older generation/epoch over a newer one; duplicate packets/polls cannot renew a lease. Tombstone cleared/expired versions until a newer source admission.
 4. If transport delay or clock uncertainty makes freshness unknowable, clear.
 5. Never execute a recommendation as a client input command.
 
@@ -87,6 +91,99 @@ targets, not real-time guarantees. A blocked capture or output write cannot
 extend the external advice lease. Obsolete queued and completed work is discarded
 under the same identity, generation, epoch and age checks. An over-age completion
 is discarded without classification; it never labels the screen or feeds consensus.
+
+`--decision-budget-ms` defaults to 5000 (bounds 500..5000), independently of the
+5-second per-request timeout and 8-second maximum frame age. The total deadline
+starts with source capture and reserves 300 ms for publication/poll/render;
+each Laya pass receives only the remaining worker budget. A timeout does not
+cancel GPU work or free its slot: late completions/publications are withheld.
+The previous iteration's latency/quality failure is not retroactively passed.
+
+## Monitor and Reference, browser snapshot version 1
+
+The browser and model API share `http://127.0.0.1:18090/`. `GET /api/state`
+normalizes the native JSONL pipe into a small snapshot:
+opaque stream `session_id`, monotonic `event_seq`, model/capture states, nullable
+experimental observation, history/ledger status, `advice:null`, and readiness.
+It omits native HWND/PID/name data, raw responses, images and backend bodies.
+The service never accepts browser capture/process/poker-control requests. The
+user-facing app has exactly **Monitor** and **Reference** views; runtime details,
+freshness internals, private ledger status and synthetic fixtures are not extra
+app views. A disconnected/empty Monitor has one compact message.
+
+The additive role-aware observation contract uses `role` (`observing`,
+`seated_waiting`, `your_turn`, `uncertain`), nullable `hero_seated` and
+`action_required`, and nullable one-based `acting_seat` (1..6). Missing hero cards
+are not evidence that the user is unseated. Contradictory or absent role evidence
+stays uncertain. Role changes do not begin a new stream or clear prior history.
+The new DTO is software-tested, not validation of it1 seated recognition.
+
+The native feed's `verified_fields` allowlist distinguishes explicit shape/
+semantic-validated readings from legacy placeholders. Allowed names are
+`hero_seated`, `action_required`, `controls`, `pot_size`, `to_call`, `hero_chips`,
+`min_raise_to`, `max_raise_to`, `acting_seat`, `acting_to_call`, and `wagers`.
+Omitted/malformed verification yields unknowns; it is not perception-quality or
+advice approval and is not forwarded as a browser grant. Existing question-set
+0.4.0 R15/R17 unseated admission can supply observing provenance only on a full
+source-leased Laya observation. A generic state with no Hero or a weak `table`
+record cannot establish that the user is unseated. Valid seated Hero stack
+evidence can survive waiting/folded states; it does not enable turn controls.
+
+`amounts.acting_to_call` is nullable, separately from hero `to_call`. Observing
+mode never exposes hero placeholders as a "your call". `wagers` is a bounded list
+of `{seat,amount}` entries, with physical seat labels 1..6 and unknown amounts
+null. Controls keep independent presence/enabled labels, are multi-label, and
+distinguish Bet from Raise (including re-raises). Neither presence nor an empty
+legacy action list establishes legality. No parser/raw-model bypass is added.
+
+`metrics` has `hand_rank`, `pot_odds`, `draw`, and `equity_pct`. Until separate
+capability approval, all are null even if a feed asserts `quality_approved:true`.
+Future pot-odds metrics carry the acting seat; future draw-completion probability
+is not win equity. Browser rendering does not derive poker strategy from
+experimental perception. `advice` remains null and `advice_ready:false`.
+
+- `UI_READY` means the page/status service works, not that a model/recorder/adviser passed.
+- `COLLECTOR_READY` requires actual registered capture/recording evidence. This
+  phase has no image recorder in the native feed and cannot claim it from a heartbeat.
+- `server.model_state:ready` means verified weights loaded; temperature calibration
+  loading is separate from the failed quality gate and `advice_ready:false`.
+- Live controls remain independently unknown, with presence/enabled labels. No
+  empty legacy array or recommended action supplies missing offered controls.
+- The private session ledger is prefix-preserving, capped at 10,000 events / 25 MiB;
+  cap or I/O failure is visible as incomplete, never silently repaired/deleted.
+- Internal observer slots 0..5 are normalized to physical browser labels 1..6;
+  opaque u64 identities are not passed through JavaScript numbers.
+- Synthetic fixtures are internal/test-only; `GET /api/replay` is no longer a
+  supported route. CLI `--stdin` below is unchanged, not another app view.
+- Reference facts are researched from several cited education sources and bundled
+  in the browser asset. Reference search/collapse makes no runtime requests.
+  `GET /api/reference` also exposes the bounded local JSON source for development;
+  missing/invalid data returns a sanitized 503, never file or exception details.
+  Reference material is not live advice or positive seated UI images.
+- History includes nullable observed fold/check/call/bet/raise counts and bounded
+  source-provided preflop raise ordinals. The browser never invents 3-bet/4-bet
+  order from a gapped sequence or resets history just because seating changes.
+
+HTTP handling is bounded/concurrent, but model requests have one nonblocking
+GPU admission slot. Status/UI remain responsive during slow inference. The
+browser polls at 250 ms with one outstanding request and source-bound local
+expiry; disconnect, heartbeat loss, older sequence/session, and tab hide/resume
+clear before revalidation. Same-session polls never refresh a source lease.
+
+Launch `scripts/start-vlm.ps1 -DashboardOnly` for Monitor/Reference without GPU loading;
+the default asynchronously verifies/loads the pinned model. An explicit
+`-LiveConfig .local/profile.json` supervises only the configured native passive
+feed, with fixed local model endpoint and a private ledger. Supported profile
+keys: `binary` (built checkout coinpoker executable), `exe_name`, `pid`,
+`window_hwnd`, `window_title` (native `--table-title`), `lobby_title`,
+`lobby_size` (`WIDTHxHEIGHT`). No arbitrary argv, model endpoint, or record-dir
+field is accepted. Actual capture requires a later operator go-ahead; no such
+profile is invoked by first-phase validation. The role-aware work supersedes
+operator-launched profiles as the normal Monitor workflow: automatic attachment
+after one-time `--list-windows` calibration is checkpoint B, not implemented or
+started in checkpoint A. Checkpoint A reuses the existing model service without
+restarting it; changed Python imports/routes take effect at the controlled B
+restart. The updated bundled Reference/static page already works without one.
 
 ## Replay, listing, doctor and evaluation
 

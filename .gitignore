@@ -17,6 +17,8 @@
 
 # Private evaluation images, reports, calibrated identities and local runtimes
 /.local/
+/.conda/
+/lobby-screengrab.png
 .venv/
 venv/
 /dist/

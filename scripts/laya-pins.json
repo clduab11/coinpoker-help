@@ -1,0 +1,151 @@
+{
+  "format": 1,
+  "status": "Fine-tuned it1 pinned and verified 2026-10-09T22:00:15.956Z. Gate F FAIL: fitted board threshold 1.0 yields no confident cards; warm full-battery p95 3027.3 ms exceeds the <2000 ms gate. All 66 checklist frames matched agent visual review, not human approval; human verification UNVERIFIED. Question set calibrated remains false; no actionable-state approval; continuation stopped.",
+  "license": {
+    "weights": "CC-BY-NC-SA-4.0 (thaitea/laya-vision; training data includes ScienceQA and CrisisMMD). Personal local use only; never redistributed. Fine-tuned it1 is a derivative trained on private captures, remains CC-BY-NC-SA-4.0, and is not redistributed.",
+    "code": "Apache-2.0 (r33drichards/laya-vision, a fork of NandhaKishorM/laya)",
+    "backbone": "Apache-2.0 (HuggingFaceTB/SmolVLM-256M-Instruct; architecture config and processor are bundled in the checkpoint snapshot)"
+  },
+  "runtime": {
+    "python": "3.12.15",
+    "env_prefix": ".local/laya-runtime/env",
+    "env_created_with": "conda (Kilo Desktop plugin base, conda 26.1.1) -c conda-forge --override-channels python=3.12 pip",
+    "torch_index_url": "https://download.pytorch.org/whl/cu128",
+    "packages": {
+      "torch": "2.11.0+cu128",
+      "torchvision": "0.26.0+cu128",
+      "transformers": "5.19.0",
+      "safetensors": "0.8.0",
+      "huggingface_hub": "2.2.0",
+      "numpy": "2.5.2",
+      "pillow": "12.3.0"
+    },
+    "laya": {
+      "repository": "https://github.com/r33drichards/laya-vision",
+      "commit": "9e1e2419d855ad3e1a2af4d4bd1ef6be5418842c",
+      "package_version": "0.1.7"
+    },
+    "verified_device": "NVIDIA GeForce RTX 4060 Ti (8188 MiB), driver 610.88, CUDA 12.8 runtime"
+  },
+  "model": {
+    "repository": "thaitea/laya-vision",
+    "revision": "f2fe3c12cb6d04c59d8a190250bf3fb40fc828dc",
+    "hf_home": "models/laya-vision/hf",
+    "offline_load_verified": true,
+    "files": [
+      {
+        "path": ".gitattributes",
+        "size": 1519,
+        "sha256": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361"
+      },
+      {
+        "path": "model.safetensors",
+        "size": 804696880,
+        "sha256": "31220803f38b44b8b1649b207c632612c9a35dee0da2ef1ea35d21e4b424be68"
+      },
+      {
+        "path": "README.md",
+        "size": 7291,
+        "sha256": "a31d2c4a0eac496da2c56d3b760ae38bab4780a582e04d14c415132374008630"
+      },
+      {
+        "path": "training_metrics.json",
+        "size": 20862,
+        "sha256": "f08184e5dce3ba6c00283fbacc2555ce968364eeb67ba5dd3b0952030403ea85"
+      },
+      {
+        "path": "vlm_agent_config.json",
+        "size": 554,
+        "sha256": "543c08bb241ef67a6ef3795cbd2dd34313bea7e94ad200ee1f8798b3e09aa798"
+      },
+      {
+        "path": "backbone/config.json",
+        "size": 5288,
+        "sha256": "865861b8d4e8ee99826ff58a72b84e376dddbe191265abb3dfed68aef40c226d"
+      },
+      {
+        "path": "processor/chat_template.jinja",
+        "size": 403,
+        "sha256": "830005085ddd94cec605b6e21b885b28ffad6e3f82ee6a212c523533e8f04f01"
+      },
+      {
+        "path": "processor/processor_config.json",
+        "size": 586,
+        "sha256": "10ed91fcba8f9a8c6c2a1f7ac83d3a13ef1db7664dbcf21825354090c92e865d"
+      },
+      {
+        "path": "processor/tokenizer.json",
+        "size": 3548471,
+        "sha256": "2500f374cdc89040032a7d8437b6ed0fe745667b1194c17914d062ee31701605"
+      },
+      {
+        "path": "processor/tokenizer_config.json",
+        "size": 586,
+        "sha256": "e3dbc4d0735aa794532520ec36b6ab46bc075a306f18a8fa725a8aad6c39caa1"
+      }
+    ],
+    "finetuned": {
+      "path": "models/laya-vision/finetuned/20261009T190322Z-it1",
+      "run_log": ".local/laya/train/run-20261009T190322Z-it1.json",
+      "init": "thaitea/laya-vision@f2fe3c12cb6d04c59d8a190250bf3fb40fc828dc",
+      "train_data": {
+        "path": ".local/laya/dataset/examples/train.jsonl",
+        "sha256": "c6e8c99be0f70b0792766343cc002bdd783aeb68729758079cc690b3945e55a4",
+        "examples": 34487,
+        "note": "SHA-256 copied from the run log; computed after an approximately 2-example change, not a guaranteed byte-exact snapshot of the training input."
+      },
+      "calibration_file": "laya-calibration.json",
+      "question_set_calibrated": false,
+      "files": [
+        {
+          "path": "backbone/config.json",
+          "size": 5482,
+          "sha256": "1f407c2c9ee37fbf114be647ad901b1addbb86c734dcade90d27b481b54e2810"
+        },
+        {
+          "path": "laya-calibration.json",
+          "size": 7217,
+          "sha256": "6efe677c0171d7af94cfb9d171d93499f25f76418f2b2d3f05c34e5801b82170"
+        },
+        {
+          "path": "model.safetensors",
+          "size": 804696880,
+          "sha256": "84c008b976e72445ae07c58678af542b63f79548ad0a314f836f210bda3195a1"
+        },
+        {
+          "path": "processor/chat_template.jinja",
+          "size": 404,
+          "sha256": "319a155b31e4780f2b9b8294779a2e8b897977d189f74c38993dbb008bb47f12"
+        },
+        {
+          "path": "processor/processor_config.json",
+          "size": 617,
+          "sha256": "110c16da030d8725154623ce8808d941779a135bc4cdcc708f132ae2cb6814a6"
+        },
+        {
+          "path": "processor/tokenizer.json",
+          "size": 3548471,
+          "sha256": "2500f374cdc89040032a7d8437b6ed0fe745667b1194c17914d062ee31701605"
+        },
+        {
+          "path": "processor/tokenizer_config.json",
+          "size": 608,
+          "sha256": "98e97823c26db719898acf3abf134feb31eff99563bceb630fc70271ff0bef26"
+        },
+        {
+          "path": "vlm_agent_config.json",
+          "size": 586,
+          "sha256": "977aba7527659dd32b8c6fca94ea0793802e70a3cdbecc2180fb14806f14a2c7"
+        }
+      ]
+    }
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 18090,
+    "alias": "coinpoker-laya-vision",
+    "implemented": true,
+    "dtype": "bf16",
+    "batch_size": 32
+  }
+}

@@ -1,10 +1,20 @@
 # Laya Vision Prototype — Phase A Design (Question Set + Calibration Corpus)
 
-Status: Phase A COMPLETE (structure). Human annotation pending. Approved in-session
-2026-10-09 UTC. This is a prototype track alongside the Windows acceptance plan;
-it does not modify any pipeline code yet.
+Current status: Laya-only iteration-1 checkpoint installed/trained; **Gate F
+FAIL**, human verification **UNVERIFIED**, no seated advice. The current model
+is `models/laya-vision/finetuned/20261009T190322Z-it1`, served locally under
+alias `coinpoker-laya-vision` at `http://127.0.0.1:18090/`, with `/v1/models`
+and `/v1/laya/predict`. It is not evaluation-only; Gemma is not the default or
+a fallback. See section 7 for the preserved failed-gate receipt and follow-on.
 
-## 1. Motivation
+Sections 1-5 record the initial Phase A design approved 2026-10-09, not current
+install instructions or pending tasks to repeat. The Phase A structure was
+complete with human annotation pending at that point. Subsequent wiring,
+download, iteration-1 training, dumps, calibration, scoring and verification
+already happened. Reuse them; no redownload or retraining is needed for the
+read-only dashboard phase. A fresh install lacks the user's local derivative.
+
+## 1. Historical motivation
 
 The pinned Gemma 4 E2B path measures **5.8-6.3 s warm** on a real 800x613 table
 frame (two samples, 2026-10-09) against an 8000 ms frame lease — a thin margin
@@ -14,15 +24,16 @@ calibrated decisions in one forward pass with no text generation**, promising
 orders-of-magnitude faster perception. It also gives per-answer probabilities,
 which map naturally onto this project's never-fabricate envelope semantics.
 
-## 2. Model facts (verified against the HF model card 2026-10-09)
+## 2. Initial model facts (2026-10-09, licensing corrected)
 
 - Model: `thaitea/laya-vision` — 201M params (SmolVLM-256M-Instruct cut to 20 of
-  30 language layers). Code: github.com/r33drichards/laya-vision (Apache 2.0).
+  30 language layers). Pinned fork code: github.com/r33drichards/laya-vision (Apache-2.0).
 - **License: CC-BY-NC-SA-4.0 for the weights** (training data includes ScienceQA
   and CrisisMMD). An earlier in-session research note said Apache 2.0 — that was
-  wrong; the base SmolVLM and the code are Apache 2.0, the trained weights are
-  not. Compatible with local personal use; redistribution of the weights or
-  derivatives would carry NC+SA terms. Flagged for the user's decision.
+  wrong for the weights; the upstream SmolVLM backbone and pinned fork code are Apache 2.0, and
+  trained weights are CC-BY-NC-SA-4.0. The existing local fine-tuned derivative
+  inherits NC+SA constraints. This workflow keeps weights local and does not
+  redistribute them; repository source MIT does not override weight terms.
 - API: `laya.load_vlm(id).predict({image, note}, {qid: {type, instructions,
   criteria}})` — one call answers a **batch of typed questions** about one image.
   Types: `choice` (categorical pick), `noul` (yes/no probability), `score`
@@ -33,10 +44,11 @@ which map naturally onto this project's never-fabricate envelope semantics.
   path for a new domain.
 - Published: 69.1% accuracy over 34 validation sets, ECE 0.041, 0.83x latency of
   the previous 237M checkpoint on an L4. Experimental research status.
-- Phase B must pin the exact revision hash at download time (the card advises
-  pinning; the repo has moved checkpoints before).
+- The initial Phase B design required an exact revision pin. The completed base
+  and fine-tuned artifact records are now in `scripts/laya-pins.json`; this is
+  not an outstanding download task.
 
-## 3. Architecture
+## 3. Historical Phase A architecture
 
 ```
 capture -> [Laya region passes] -> typed answers + probabilities
@@ -45,10 +57,10 @@ capture -> [Laya region passes] -> typed answers + probabilities
         -> unchanged downstream state machine / decision engine
 ```
 
-Key principle: the Laya path **never bypasses validation**. It produces the same
-envelope the Gemma path produces; the unchanged validator remains the gate. The
-Gemma backend stays the pinned default; Laya lands as an alternative perception
-backend behind the same `VlmBackend` contract (Phase B).
+Key principle retained today: the Laya path **never bypasses validation**.
+The initial design targeted the same envelope/validator as Gemma and proposed
+keeping Gemma as the default with Laya as an alternative behind `VlmBackend`.
+That backend selection is superseded: Laya is now the sole active backend.
 
 **Region-crop passes** mitigate the 512 px tile limit (a full 800x613 table
 shrinks cards below readable size):
@@ -66,6 +78,10 @@ shrinks cards below readable size):
 14 passes. Even if per-pass latency on the RTX 4060 Ti is 10x the L4 figure, the
 full battery stays far inside the 8000 ms lease; Phase C measures the real number.
 
+The pass counts and latency forecast above are historical design estimates,
+not a measurement or guarantee. The actual iteration-1 full unseated battery
+and its failed original timing gate are recorded in section 7.
+
 **Numeric fields** cannot be `score` questions (score is an ordinal rubric, not
 numerals), so every amount is 7 fixed character-slot `choice` questions over
 `[none, 0-9, '.', ',']`. Assembly parses the displayed decimal and encodes it as
@@ -78,7 +94,7 @@ unreadable / not_visible / state_null / field_null). Initial threshold 0.8
 everywhere; Phase C refits per pass with `agent.calibrate` on the human-labeled
 corpus, split into calibration/eval halves.
 
-## 4. First baseline findings (recorded 2026-10-09)
+## 4. Historical first baseline findings (recorded 2026-10-09)
 
 Running the corpus through the pinned Gemma server (`.local/laya/baseline/`):
 
@@ -95,7 +111,7 @@ Running the corpus through the pinned Gemma server (`.local/laya/baseline/`):
   currency with two decimals; the digit-slot design handles this, pending human
   confirmation (worksheet section 1).
 
-## 5. Calibration corpus and annotation protocol
+## 5. Historical Phase A corpus and annotation protocol
 
 Corpus: `.local/captures/20261008T232842Z-new-calibration/` (authorized
 calibration captures; provenance.json carries hashes and window identity).
@@ -123,6 +139,13 @@ records the hash under `reference_sheet` and `validate_phase_a.py` fails if
 the file changes. The design rule: **the model reports only visible facts;
 the sheet's rules derive everything else in Rust** (`core-engine::table_rules`).
 Direct model answers for derivable values are kept as cross-checks only.
+
+This PDF and the two reference PNGs below are rules/odds/range references,
+not actual seated CoinPoker UI captures or positive hero-card/button examples.
+They support deterministic calculations/replay, never perception-quality
+approval. A reference panel must remain distinct from live observed facts and
+eventual recommendations. Best-five ranking requires enough verified cards;
+unknown cards or amounts produce unavailable metrics, not fabricated zeros.
 
 | Sheet | Rule | Laya logic |
 |---|---|---|
@@ -182,7 +205,208 @@ gutshot 4 outs 9%/17%, pocket pair to set 2 outs 4%/8%). The card rounds
 loosely: the 8-out two-card entry is the rule-of-four 32%, against an exact
 31.45%; this is flagged in code.
 
+Opening-range membership applies only to a verified unopened pot and position;
+this is not a 3-bet defense range. Draw-completion probability is not win equity.
+Pot odds are `to_call / (pot + to_call)` and undefined without a verified call
+amount. Reference correctness does not establish the model's UI recognition.
+
 ## 7. Phase gates
+
+### Practice dashboard infrastructure: verified 2026-10-10
+
+The separate follow-on implementation is complete through software/dashboard/feed/
+history infrastructure, not seated data or live advice acceptance. Browser and
+model API share **http://127.0.0.1:18090/**; the page is read-only. No actual
+client capture or plays were performed by this validation.
+
+- 397 Rust tests passed (1 ignored), including 32 pure observer tests; 53 Python
+  tests passed; 15 desktop/small-window presentation checks and 7 synthetic
+  lease/order/disconnect/advice-rejection checks passed. Release build exited 0.
+- Native full-state observations now have current-source admission, tickets and
+  expiry; controls invalidate independently of advice. Weaker legacy table events
+  and raw model answers are not current-action/advice authority.
+- The bounded private observer/ledger handles occurrences, gaps, hand/occupant
+  changes and full-raise prefixes. The current unapproved model contributes only
+  unvalidated-source gaps, never invented player actions, profiles or default-zero
+  bets. Actual semantic watching recognition is not validated yet.
+- Default total decision budget is 5000 ms (bounds 500..5000), with 300 ms reserved
+  for publication/poll/render. Remaining time is carried through Laya requests.
+  Existing freshness limits are not enlarged; end-to-end seated timing is unrun.
+- One existing pinned model was loaded without downloading/retraining; generated
+  warm-up 3273.1 ms is not a p95 or an end-to-end acceptance benchmark. Temperature
+  calibration loaded, quality FAILED, advice unsupported, capture idle.
+- Doctor at `03:19:13.349Z`: all 10 installation/runtime/hash/API/metadata checks
+  passed; discovery intentionally BLOCKED without executable/table calibration,
+  so overall exit 1. No screenshots captured/saved. A regression now covers both
+  repository-local and shared HF cache blob links without permitting path escape.
+- `UI_READY` is established. Image recording is not integrated into the native
+  feed, so `COLLECTOR_READY`/`ADVICE_READY` are NOT established. The retained private
+  capture harness, real seated profile/positive examples, explicit go-ahead, and
+  later quality acceptance remain at the manual-data checkpoint.
+- Baseline dataset/vendored-question hashes and all four original/filtered score
+  files reproduced unchanged. No threshold clamp, calibrated activation, it2/it3,
+  uploads, commits, client input, new PowerShell files or release/workflow edits.
+
+Evidence: `.local/laya/train/phase1-20261010/phase1-summary.json`, recorded command
+logs, dashboard-only screenshots under `.local/captures/20261010T0238Z-dashboard-tests/`,
+and readiness-plan Addendum 11. The October 9 failed-gate receipt below is unchanged.
+
+### Current: iteration-1 Gate F FAIL (2026-10-09)
+
+The approved Laya-only wiring supersedes the historical B-lite disposition below.
+The original sequential continuation finished at **2026-10-09T22:00:15.956Z**:
+eval/late dumps, temperature fitting, calib/eval/late scores, fine-tuned pins, and
+pin verification all exited 0. Checkpoint:
+`models/laya-vision/finetuned/20261009T190322Z-it1`. No training or dump was repeated.
+
+- Fitted pass thresholds: p0 `0.995`, board `1.0`, pot `0.8`, six seat-stack passes
+  `0.8`. Temperatures: choice `3.796329`, noul `4.100601`.
+- **Board gate FAIL**: zero confident board units on calib/eval/late
+  (`0/863`, `0/568`, `0/2034`); precision is undefined and coverage is 0%, not a
+  pass against >=99% precision / >=85% coverage. Threshold `1.0` was not lowered.
+- **Latency gate FAIL**: one `bench_server.py 30` run, 30 frames with the first
+  two excluded as warm-up, completed `22:03:05.348Z`. Warm p50/p95 (ms): p0
+  `213.2/271.0`; tier01 `904.7/1497.9`; full unseated battery
+  `1467.0/3027.3`. Each warm p95 must be <2000 ms.
+- **Human verification UNVERIFIED**: asked once for the 66-row checklist; the
+  user requested an agentic review instead. All 66 original PNGs were inspected
+  individually; all claimed fields matched, with no corrections or unsure
+  claimed fields. Phase abstentions for rows 1, 5, 6 were retained. The filtered
+  supplemental score completed `22:29:03.459Z`: 66 of 115 frames, 3,589 selected
+  rows, 2,593 excluded. Board remains `0/330` confident; pot precision/coverage
+  `100/96.72%`; p5 stacks `100/98.92%` (non-blocking). Agent review does not
+  certify human label truth or authorize a gate exception.
+  `thresholds.calibrated` remains false in source and vendored questions;
+  the fitted thresholds were not
+  activated. Server `meta.calibrated:true` meant loaded temperature calibration
+  only, never Gate F acceptance.
+- The sole loopback server was started for the benchmark and intentionally
+  stopped at `22:08:30.914Z`. Its launcher exit 1 is the recorded intentional
+  termination, not a prediction or benchmark failure. Gemma was not restarted.
+- **STOP**: no iteration 2-3, downstream validation, release build, doctor
+  invocation, live run, uploads, or commits. The prior 20 scoring and 29
+  server/doctor unit-test passes are retained, not rerun as live acceptance.
+- Seated practice and cash tables share this repo, representation, and mechanism:
+  no advice. Seated frames remain `readable:false`, `state:null`. Seated passes have no
+  training data and are provisional/unrun. Enabling seated advice requires a
+  separately approved session here with user-controlled seating, harness
+  captures, region measurements, labels/training, and its own Gate F.
+- Remaining gaps: six-max only; one very thin lobby eval example (1278x785,
+  not validation of the configured 1280x778 lobby-size guard); server absent
+  from release packaging; cursor compositing; local-only fine-tuned weights;
+  untested currency-glyph handling. Template matching remains an alternative
+  for the user's decision, not an implemented or validated fallback.
+- Root `lobby-screengrab.png` is untouched and must be deleted by the user;
+  the byte-identical eval-only copy remains under `.local/captures/`.
+
+Evidence: `.local/laya/train/continuation-20261009/`, checkpoint
+`calibration.json` / `score-{calib,eval,late}.json`, supplemental
+`score-eval-agent-reviewed.json`, `.local/laya/dataset/human-check/agent-review.json`,
+and readiness-plan Addendum 10. Final read-only audit at `22:29:53.468Z`
+reproduced all four scores, checked the exact agent-reviewed frame filter, and
+confirmed protected data hashes and source/vendor `calibrated:false` unchanged.
+
+### Active follow-on: dashboard/history first, baseline still FAIL
+
+The historical stop above records the iteration-1 closeout; it does not claim
+that the approved 2026-10-10 dashboard/history follow-on has been tested.
+The work targets actual Practice Games with practice chips in this same repo,
+representation and mechanism as cash, without a bypass or real-money acceptance.
+First-phase browser/feed/ledger infrastructure remains no-advice; model health,
+schema validity and fresh timestamps do not certify perception quality.
+
+On the 66 agent-reviewed frames, raw board accuracy was `307/330 = 93.03%`,
+but fitted threshold `1.0` produced `0/330` confident units. Matching annotation
+claims is not a claim that all model predictions were correct. The original
+full-battery p95 `3027.3 ms` fails the old `<2000 ms` requirement. The prospective
+warm capture-to-display p95 `<5000 ms` and hard 5000 ms full end-to-end deadline
+require new usable-result timing, including capture, all inference passes,
+history/math, admission, transport and rendering. This is not a retroactive pass,
+a per-request timeout claim, or a reason to enlarge independent freshness leases.
+
+Canonical browser: `http://127.0.0.1:18090/`; read-only state at `/api/state`,
+metadata at `/v1/models`, prediction at `/v1/laya/predict`.
+`scripts/start-vlm.ps1 -DashboardOnly` uses no GPU/model load;
+default startup asynchronously verifies/loads/warms the pinned model. Optional
+`-LiveConfig .local/profile.json` explicitly supervises one native passive CLI
+feed. The 2026-10-10 role-aware adjustment supersedes an operator-launched profile
+as the normal workflow: one-time executable/title calibration followed by
+automatic practice-table attachment is checkpoint B, not active in checkpoint A.
+UI/model health alone is not `COLLECTOR_READY`: actual source timestamps/frame
+progress, optional recording counters and private output must be tested.
+Current native feed is capture-health only: `recording_enabled:false`,
+`recorded_frames:0`. Typed `-LiveConfig` target settings do not add a
+`--record-dir` option. Recorder/profile readiness remains pending; retained
+`.local/laya/dataset/capture_loop.py` belongs to a later manual-data checkpoint,
+not an automatic first-phase capture job.
+
+The browser cannot start/stop capture, seat/play or trigger training. Bounded
+per-session history lives privately under `.local/` with opaque IDs,
+unknowns and gaps, not public names or cross-session identity guesses. Legacy
+table events/raw model answers cannot provide trusted current controls or
+eligible opponent statistics. Polling does not extend source-bound expiry.
+
+No seated advice until positive real UI examples and approved human-held-out
+calibration/evaluation support the critical fields and enabled controls. Existing
+it1 inputs remain immutable; new data/training is a separately versioned later
+checkpoint, not a repeat of completed work. Six-max capture is not complete
+six-player strategy: heads-up raising and multiway all-in/side-pot guards remain.
+Current release packaging omits the Laya server/dashboard path and local
+fine-tuned weights; `scripts/vlm-pins.json` is an orphaned historical manifest.
+This phase changes no release/workflow.
+
+### Role-aware Monitor + Reference, checkpoint A (2026-10-10)
+
+The binding adjustment is at the top of
+`.kilo/plans/1791590483000-practice-sandbox-dashboard-and-history.md`. Exactly two
+app views replace the four-view dashboard: **Monitor** and **Reference**. Replay,
+Checkpoint, runtime/lease diagnostics and ledger details are not user-facing.
+The empty/disconnected state is one compact message. Current readings have a
+separate Suggested action box; suggestions remain OFF while the gate is failed.
+
+Source-current role DTOs distinguish Observing, Seated/waiting, Your turn and
+Uncertain using explicit validated seating/turn evidence, not missing hero cards.
+Waiting says "Waiting for your turn"; current turns highlight the box without
+enabling advice. Role changes retain the same stream/history. Observing call cost
+is a separate nullable reading for a labelled acting seat, never a fabricated
+hero call. Wagers and independently present/enabled controls stay separate from
+strategy. All calculated metrics remain null until capability approval; the
+browser does not calculate them from experimental perception.
+
+Reference is a concise locally bundled study guide with eight searchable,
+collapsible sections and ten cited pages from four education publishers.
+Pot/draw arithmetic is independently checked using exact fractions/combinations;
+fixed clean-out probabilities are not showdown equity. Six-max opening examples
+are explicitly authored strategy opinion for unopened cash pots around 100bb,
+not copied root charts or attributed solver frequencies. Runtime Reference
+requests are unnecessary; optional further-reading links are not auto-fetched.
+
+At `2026-10-10T05:38:33.6548212Z`..`05:38:37.5435818Z`, OS inspection confirmed
+the sole canonical listener was the existing it1 process PID `24372` on 18090.
+Read-only metadata/state queries at `05:43:22.742831Z`..`05:43:23.033045Z` confirmed
+the pinned model ready, quality gate failed, no advice and capture idle with zero
+frames/recordings. The process was not replaced; no training or native feed was
+started for A. The later doctor used only generated-colour API smoke inputs on
+that retained engine, not poker/client images or a second model. Updated static
+assets/Reference are served by that process; new Python role normalization/routes
+require the controlled B restart.
+
+Checkpoint A verification passed: **402 Rust tests (one ignored), 79 Python tests,
+47 browser checks** at desktop and 400px, node syntax, formatting and whitespace
+checks. Doctor had ten passes and discovery BLOCKED (exit 1), not live acceptance.
+Integration receipts are in Addendum 12 and
+`.local/laya/train/role-aware-20261010/`; these are software/UI evidence only.
+Live attachment/recorder, actual observing/seated sessions, human verification,
+new versioned data/training and warm end-to-end latency remain later checkpoints.
+Thin lobby coverage, six-max scope, omitted release server packaging, cursor
+compositing, local-only weights and untested currency glyphs remain limitations.
+Template matching remains an option for the user's decision, not an implemented
+fallback. The user, not the agent, deletes root `lobby-screengrab.png`.
+
+### Historical A-D proposals and B-lite results
+
+These dated proposals/results are superseded where they call Gemma current or
+Laya evaluation-only. They are retained as history, not tasks to restart.
 
 - **Phase A — COMPLETE (structure)**: question set 0.2.0 (203 questions, validated; reference sheet pinned by hash),
   corpus + annotations (baseline candidates recorded), worksheet, baseline
@@ -191,6 +415,34 @@ loosely: the 8-out two-card entry is the rule-of-four 32%, against an exact
   revision; implement region capture + a Laya perception backend that assembles
   the envelope from typed answers; Gemma remains the default; feature-flagged.
   Blocked on human annotation (region boxes + ground truth).
+  - **Phase B-lite status (2026-10-09T16:10-16:35Z): GATE FAILED, wiring not
+    started.**
+    - On 2026-10-09 the user decided that Laya would replace Gemma as the sole
+      backend, observation-only until calibrated, provided the Phase B-lite gate
+      passed first.
+    - **Installed and pinned** (`scripts/laya-pins.json`, `MODEL_LICENSES.md`):
+      - checkpoint `thaitea/laya-vision@f2fe3c12cb6d04c59d8a190250bf3fb40fc828dc`
+      - laya code `9e1e2419`
+      - torch 2.11.0+cu128, transformers 5.19.0
+      - Python 3.12.15 env at `.local/laya-runtime/env`
+      - Offline load is verified.
+    - **Question set 0.3.0** (source and expander fixes) is vendored to
+      `crates/ingest/assets/laya/question-set.json`. Normalized regions are in
+      `crates/ingest/assets/laya/regions.json`.
+    - **Geometry, measured numerically on both captures** (no pixels saved):
+      - Frames are whole windows with an unscaled 28 px title bar.
+      - The content area is aspect-locked at 1.3677 and scales uniformly.
+    - **Results** (`.local/laya/phase-b/SUMMARY-20261009T1650Z.md`):
+      - The API works.
+      - `screen_kind` does **not** separate lobby from table: lobby →
+        `poker_table@0.41`. One refinement round did not fix it.
+      - The 54-option card questions are truncated by the 256-token option
+        budget. No card or amount was read correctly with confidence.
+      - Every crop answer is below the 0.8 threshold.
+      - Latency: tier-0 250-320 ms warm; six-max battery 2.1-2.8 s (target
+        < 2.0 s).
+    - **Gemma stays the backend.** Its removal was conditional on this gate.
+      Laya stays an evaluation-only install.
 - **Phase C — benchmark**: Laya vs pinned Gemma on the labeled corpus: accuracy
   per question group, calibrated thresholds via `agent.calibrate`, end-to-end
   latency per pass and per full battery on the RTX 4060 Ti, VRAM/WS footprint.
@@ -202,20 +454,36 @@ loosely: the 8-out two-card entry is the rule-of-four 32%, against an exact
   without weakening the never-fabricate guarantees. Otherwise findings stand as
   evidence for the acceptance report.
 
-## 8. Risks and open assumptions
+## 8. Current risks and open assumptions
 
-- Out-of-domain accuracy is the main risk: a 201M model trained on no poker
-  clients. Calibration on our corpus is mandatory; targets may not be met.
-- License (CC-BY-NC-SA-4.0 weights) needs a user decision if this ever ships.
+- Out-of-domain accuracy remains a risk: the 201M base was not trained on poker
+  clients, and the local it1 domain fine-tune did not establish seated capability.
+  Required per-capability calibration/held-out targets may still not be met.
+- Base/derivative weights remain CC-BY-NC-SA-4.0 and local-only in this workflow;
+  code MIT/upstream backbone Apache-2.0 do not remove their constraints.
 - Region boxes depend on the 800x613 layout; window-size drift invalidates them
   (same calibration-drift caveat as window discovery).
-- The batch-of-questions-per-pass API is confirmed by the model card, but
-  per-pass latency on this GPU is unmeasured until Phase C.
-- One corpus table image is thin; more labeled captures (ideally one per
-  game_phase, with and without hero cards, action and idle) are needed before
-  Phase C statistics mean much.
+- The batch-of-questions-per-pass API is confirmed by the model card.
+  Per-pass latency on this GPU was measured in Phase B-lite: 120-320 ms per pass
+  warm.
+- Phase B-lite exposed out-of-domain accuracy risk; iteration-1 domain training
+  already completed and did not pass Gate F. Dashboard/history work does not
+  require retraining. A later candidate needs genuine positive seated/control
+  examples, a new versioned dataset, approved human-held-out calibration and a
+  bounded compute checkpoint; no automatic iteration 2-3 or base redownload.
+- The original Phase A two-image corpus is historical. The later 66-frame
+  agent review is not human certification, and the all-negative action labels
+  cannot establish positive hero-button recognition. New critical capabilities
+  need class-specific positive/negative/disabled examples and held-out coverage.
 
 ## 9. Artifacts
+
+Current artifacts are the local it1 checkpoint and its calibration/scores,
+`scripts/laya-pins.json`, source/vendor question sets (still `calibrated:false`),
+and the private continuation/review evidence named in section 7. Keep those
+existing inputs/outputs intact. The following list records initial Phase A
+artifacts and reference provenance; 0.2/0.3-era files are not new tasks or the
+current Gate F outcome.
 
 - `docs/LAYA_VISION_PHASE_A.md` — this document.
 - `.local/laya/question-set.json` — machine-readable question set (source of truth).

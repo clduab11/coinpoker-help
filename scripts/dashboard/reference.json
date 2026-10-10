@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "title": "Poker Study Reference",
+  "scope": "Offline educational reference for standard 52-card no-limit Texas Hold'em. Not live recommendations, perception validation, or advice activation.",
+  "reviewed_utc": "2026-10-10T05:45:26Z",
+  "sources": [
+    {
+      "id": "pokernews-hands",
+      "title": "Poker Hand Rankings",
+      "url": "https://www.pokernews.com/poker-hands/",
+      "publisher": "PokerNews"
+    },
+    {
+      "id": "pokernews-straight",
+      "title": "What is a Straight in Poker? Definition & Examples",
+      "url": "https://www.pokernews.com/poker-hands/straight.htm",
+      "publisher": "PokerNews"
+    },
+    {
+      "id": "pokernews-ties",
+      "title": "Tied Poker Hands - Split Pots & Tie-Breaker Rules Explained",
+      "url": "https://www.pokernews.com/poker-hands/tied-poker-hands.htm",
+      "publisher": "PokerNews"
+    },
+    {
+      "id": "upswing-pot-odds",
+      "title": "Pot Odds Explained and How to Calculate Them",
+      "url": "https://upswingpoker.com/pot-odds-step-by-step/",
+      "publisher": "Upswing Poker"
+    },
+    {
+      "id": "pokerology-outs",
+      "title": "Poker Outs: How to Count Outs and Calculate Odds",
+      "url": "https://www.pokerology.com/poker/math/drawing-odds/",
+      "publisher": "Pokerology"
+    },
+    {
+      "id": "upswing-six-max",
+      "title": "The Ultimate Guide to 6-Handed Poker",
+      "url": "https://upswingpoker.com/6-handed-max-poker-strategy/",
+      "publisher": "Upswing Poker"
+    },
+    {
+      "id": "gtowizard-large-opens",
+      "title": "How To Respond to Large Preflop Raises in Poker",
+      "url": "https://blog.gtowizard.com/how-to-respond-to-large-preflop-raises-in-poker/",
+      "publisher": "GTO Wizard"
+    },
+    {
+      "id": "upswing-bet-numbering",
+      "title": "What is a 2-Bet in Poker?",
+      "url": "https://upswingpoker.com/what-is-2-bet-poker/",
+      "publisher": "Upswing Poker"
+    },
+    {
+      "id": "upswing-three-bet",
+      "title": "This Is Why (And How) You Need to 3-Bet More Often",
+      "url": "https://upswingpoker.com/3-bet-strategy-aggressive-preflop/",
+      "publisher": "Upswing Poker"
+    },
+    {
+      "id": "upswing-aces",
+      "title": "Do You Know How To Play Pocket Aces? Quiz Answers and Explanations",
+      "url": "https://upswingpoker.com/pocket-aces-quiz-answers/",
+      "publisher": "Upswing Poker"
+    }
+  ],
+  "sections": [
+    {
+      "id": "hand-rankings",
+      "title": "Hand Rankings and Ties",
+      "scope": "Standard high-hand Hold'em; best five cards, not starting-hand strength.",
+      "paragraphs": [
+        "At showdown, compare the best five-card hand available from seven cards. Hold'em permits zero, one, or two hole cards. First compare the hand category, then the ranks that define it; never use a sixth or seventh card to break a tie."
+      ],
+      "bullets": [
+        "An ace is high except in A-2-3-4-5, a five-high straight (the wheel). T-J-Q-K-A is ace-high. Q-K-A-2-3 does not wrap into a straight. The same ace-low rule applies to straight flushes.",
+        "Kickers count only within the best five cards. With the same pair, compare the three remaining cards from highest to lowest; stop at the first difference.",
+        "Suits do not rank above one another. Identical best five-card ranks split the eligible pot, including when the board plays for everyone; house rules allocate any odd chip."
+      ],
+      "tables": [
+        {
+          "caption": "Strongest to weakest; a royal flush is the highest straight flush",
+          "columns": ["Order", "Hand", "Definition and comparison"],
+          "rows": [
+            [1, "Royal flush", "A-K-Q-J-T of one suit; tied royals share the pot."],
+            [2, "Straight flush", "Five sequential ranks of one suit; compare the top rank."],
+            [3, "Four of a kind", "Four equal ranks; compare quads, then the remaining kicker."],
+            [4, "Full house", "Three equal ranks plus a pair; compare trips first, then the pair."],
+            [5, "Flush", "Five of one suit; compare all five ranks from highest to lowest."],
+            [6, "Straight", "Five sequential ranks; compare only the top rank (wheel = five)."],
+            [7, "Three of a kind", "Three equal ranks; compare trips, then the two kickers in order."],
+            [8, "Two pair", "Compare the higher pair, then the lower pair, then the kicker."],
+            [9, "One pair", "Compare the pair, then the three kickers in order."],
+            [10, "High card", "No higher category; compare all five ranks in descending order."]
+          ]
+        }
+      ],
+      "source_ids": ["pokernews-hands", "pokernews-straight", "pokernews-ties"]
+    },
+    {
+      "id": "pot-odds",
+      "title": "Pot Odds and Required Equity",
+      "scope": "Call-cost arithmetic, not a recommendation to call.",
+      "paragraphs": [
+        "Let P be the pot now: it includes the opponent's bet, all other committed wagers, and any chips already posted by the caller, but excludes the caller's unpaid call. Let C be the extra price to call, not the opponent's total raise when the caller has already invested chips. The reward-to-risk ratio is P:C; break-even equity = C / (P + C).",
+        "For a 100 pot facing a 50 bet, P = 150 and C = 50: the final pot is 200, so break-even equity is 25%, not 33.33%. In a blind example, an open to 2.25bb plus a posted 1bb BB and 0.5bb SB gives P = 3.75bb; the BB's extra call is 1.25bb, requiring 25%."
+      ],
+      "bullets": [
+        "The simple threshold assumes no rake, no further betting, and full realization of the estimated share of the eligible pot. Equality is break-even, not guaranteed profit. Ties contribute their share to equity.",
+        "Rake, side-pot eligibility, future bet costs, implied/reverse implied odds, and equity realization can change call value. Raw draw-hit probability is not necessarily showdown equity; no live opponent range is supplied here."
+      ],
+      "tables": [
+        {
+          "caption": "Independently checked examples; same units within each row; percentages rounded to 6 decimals",
+          "columns": ["Pot now P", "Extra call C", "Final pot P+C", "Break-even equity %"],
+          "rows": [
+            [150, 50, 200, 25],
+            [175, 75, 250, 30],
+            [200, 100, 300, 33.333333],
+            [250, 150, 400, 37.5],
+            [300, 200, 500, 40],
+            [3.75, 1.25, 5, 25]
+          ]
+        }
+      ],
+      "source_ids": ["upswing-pot-odds"]
+    },
+    {
+      "id": "outs-and-draws",
+      "title": "Outs: Approximate and Exact",
+      "scope": "Fixed-out draw-hit probability, not an equity calculator.",
+      "paragraphs": [
+        "An out is an unseen card that improves the hand toward the desired result. Count distinct cards once, then discount dirty outs that may leave the hand losing. An open-ended straight draw plus a flush draw can have 8 + 9 - 2 = 15 outs because two cards complete both draws.",
+        "Rule of 2: about 2 x outs percent for one card. Rule of 4: about 4 x outs percent for both turn and river. A flop call normally buys only the turn; using the two-card estimate to justify that call ignores possible river costs. Even when all-in guarantees both cards, hitting a draw need not win.",
+        "With only two hole cards and the board known, there are 47 unseen cards on the flop and 46 on the turn. For n fixed clean outs: flop -> turn = n/47; turn -> river = n/46; flop -> river = 1 - ((47-n)(46-n))/(47 x 46). The last expression also equals 1 - comb(47-n,2)/comb(47,2)."
+      ],
+      "bullets": [
+        "These exact formulas count at least one card from a fixed out set under uniform unseen-card sampling. They do not model changing outs, backdoor draws needing two specific cards, opponent redraws, domination, or tied outcomes. Known dead/exposed cards change the counts.",
+        "Rule of 4 overstates larger draws: 15 outs gives about 54.116559% to hit, not 60%. Rule of 2 is approximate too; 9 outs gives 19.148936% flop -> turn and 19.565217% turn -> river, not exactly 18%."
+      ],
+      "tables": [
+        {
+          "caption": "Common nominal out counts; improvement is not proof of winning",
+          "columns": ["Outs", "Illustration"],
+          "rows": [
+            [2, "Pocket pair improving to three of a kind."],
+            [4, "Gutshot straight draw."],
+            [6, "Two overcards making a pair; these outs are often dirty."],
+            [8, "Open-ended straight draw."],
+            [9, "Four cards to a flush."],
+            [15, "Open-ended straight plus flush draw, with two shared outs removed."]
+          ]
+        },
+        {
+          "caption": "Independently calculated fixed-out hit percentages, rounded to 6 decimals",
+          "columns": ["Outs", "Flop -> turn %", "Turn -> river %", "Flop -> river %", "Rule of 2 %", "Rule of 4 %"],
+          "rows": [
+            [2, 4.255319, 4.347826, 8.418131, 4, 8],
+            [4, 8.510638, 8.695652, 16.466235, 8, 16],
+            [6, 12.765957, 13.043478, 24.144311, 12, 24],
+            [8, 17.021277, 17.391304, 31.452359, 16, 32],
+            [9, 19.148936, 19.565217, 34.967623, 18, 36],
+            [15, 31.914894, 32.608696, 54.116559, 30, 60]
+          ]
+        }
+      ],
+      "source_ids": ["pokerology-outs", "upswing-pot-odds"]
+    },
+    {
+      "id": "six-max-positions",
+      "title": "Six-Max Positions",
+      "scope": "Six occupied seats, no straddle; seat labels depend on the button, not physical seat numbers.",
+      "paragraphs": [
+        "This bundle labels the first non-blind UTG; some six-max material calls that same seat LJ (lojack). HJ is the next seat, not a second name for UTG in this six-seat convention. With fewer occupied seats, count remaining players and relabel; do not apply six-seat ranges unchanged.",
+        "Preflop action begins left of the BB. After the flop it begins with the first remaining player left of the button. The BTN therefore acts last postflop when still in the hand. RFI means raising first in after all earlier players folded, with only the blinds posted."
+      ],
+      "bullets": [
+        "BB has no raise-first-in opportunity in an unopened pot: if all five other players fold, the hand is over. Raising over an SB limp is an isolation raise, not RFI; facing an SB raise is defense, not RFI."
+      ],
+      "tables": [
+        {
+          "caption": "Six-seat preflop order and postflop context",
+          "columns": ["Position", "Preflop order", "Context"],
+          "rows": [
+            ["UTG", 1, "First non-blind; LJ in an alternate convention; five players behind."],
+            ["HJ", 2, "Hijack; distinct from UTG; four players behind."],
+            ["CO", 3, "Cutoff; immediately before BTN."],
+            ["BTN", 4, "Button; last postflop when in the hand."],
+            ["SB", 5, "Small blind; first postflop when in the hand."],
+            ["BB", 6, "Big blind; last preflop before any reopened action; no unopened-pot RFI."]
+          ]
+        }
+      ],
+      "source_ids": ["upswing-six-max", "upswing-bet-numbering"]
+    },
+    {
+      "id": "opening-examples",
+      "title": "Contextual Opening Examples",
+      "scope": "Strategy opinion for study, not live recommendations or an exact solver solution.",
+      "paragraphs": [
+        "These independently authored, relatively tight pure-raise examples assume an unopened six-max cash pot, approximately 100bb effective stacks, no antes or straddles, moderate capped pot rake, and typical non-extreme opponents. Example sizes are total raises to 2.5bb, or 3bb from SB, not extra chips on top of the blind. No frequencies or percentages are attributed to a source.",
+        "Notation: s = suited, o = offsuit, T = ten. A pair plus includes higher pairs (55+ includes 55 through AA). For non-pairs, + keeps the higher rank fixed: ATo+ = ATo/AJo/AQo/AKo; 97s+ = 97s/98s. Each listed hand is a pure-open example, not a mixed-frequency prescription."
+      ],
+      "bullets": [
+        "Later positions usually admit more hands because fewer players remain and postflop position improves. SB is special: only BB remains, but SB is out of position postflop. A limping strategy can also be reasonable there; this table only illustrates a pure-raise branch.",
+        "Changing opening size, rake/cap, opponents' calling or 3-betting tendencies, effective stacks, or occupied seats changes applicability. Larger opens cost more when resisted; higher rake can eliminate marginal hands. These are not universal ranges, tournament/ICM ranges, or responses to a raise.",
+        "The cited Upswing and GTO Wizard pages support adjustment principles, not these exact hand lists. GTO Wizard's large-raise study uses 125bb and 300bb examples, not a certification of this 100bb teaching baseline."
+      ],
+      "tables": [
+        {
+          "caption": "Authored RFI examples for the stated conditions only; BB is deliberately excluded",
+          "columns": ["Position", "Example total open (bb)", "Illustrative hand range"],
+          "rows": [
+            ["UTG", 2.5, "55+, A2s+, KTs+, QTs+, JTs, T9s, 98s, ATo+, KJo+"],
+            ["HJ", 2.5, "44+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, 87s, ATo+, KJo+, QJo"],
+            ["CO", 2.5, "22+, A2s+, K7s+, Q8s+, J8s+, T8s+, 98s, 87s, 76s, A9o+, KTo+, QTo+, JTo"],
+            ["BTN", 2.5, "22+, A2s+, K2s+, Q5s+, J7s+, T7s+, 97s+, 86s+, 75s+, 65s, 54s, A2o+, K8o+, Q9o+, J9o+, T9o"],
+            ["SB", 3, "22+, A2s+, K2s+, Q6s+, J7s+, T7s+, 97s+, 86s+, 75s+, 65s, 54s, A2o+, K9o+, Q9o+, J9o+, T9o"]
+          ]
+        }
+      ],
+      "source_ids": ["upswing-six-max", "gtowizard-large-opens"]
+    },
+    {
+      "id": "facing-raises",
+      "title": "Facing Raises, 3-Bets and 4-Bets",
+      "scope": "Concepts and numbering only; no opponent-specific decision or live sizing advice.",
+      "paragraphs": [
+        "Preflop numbering counts the forced big blind as the first wager, the opening raise as the second (2-bet), a re-raise as the third (3-bet), and the next raise as a 4-bet. The SB is not a separate numbered level; calls do not increment the count. Postflop, the first voluntary bet is bet one, a raise is bet two, and a re-raise is bet three.",
+        "RFI lists are not defense ranges. Facing a raise requires a separate fold/call/re-raise analysis using the opener's range and position, price, players behind, rake, blockers, fold equity, and effective stack. Heads-up effective stack is the smaller stack available to the two players; multiway side pots need separate treatment.",
+        "AA is a premium value hand and often a 4-bet against a 3-bet, but a 4-bet is not automatically all-in. Non-all-in sizing can keep weaker hands or further raises in the pot. Position, effective stack, opponent response, and stack-to-pot ratio matter; the cited AA quiz's non-all-in preflop example is 150bb, not a universal 100bb size rule."
+      ],
+      "bullets": [
+        "A tight early-position opening range and a loose button opening range need different responses. Out-of-position play and players still to act can reduce the attraction of calling; wide opponent calls and low fold equity reduce the value of pure bluff raises.",
+        "Linear 3-bet ranges emphasize stronger hands together; polarized ranges combine value hands and selected weaker hands while some medium hands call. Blockers remove combinations, but alone do not make a raise profitable.",
+        "Facing a 4-bet, earlier investments are sunk costs; new call price and remaining stack matter. Not every hand used to 3-bet can continue. Short all-in raises may not reopen action under the applicable rules; this reference is not a betting-legality engine."
+      ],
+      "tables": [
+        {
+          "caption": "Illustrative preflop numbering; amounts are totals, not sizing recommendations",
+          "columns": ["Level", "Total wager (bb)", "Meaning"],
+          "rows": [
+            [1, 1, "Forced big blind."],
+            [2, 2.5, "Opening raise."],
+            [3, 9, "Re-raise of the opening raise."],
+            [4, 22, "Raise of the 3-bet; not all-in with 100bb stacks."],
+            [5, 100, "Further raise, here an illustrative all-in."]
+          ]
+        }
+      ],
+      "source_ids": ["upswing-bet-numbering", "upswing-three-bet", "upswing-aces", "gtowizard-large-opens"]
+    },
+    {
+      "id": "glossary",
+      "title": "Short Glossary",
+      "scope": "Study terminology; these words are not evidence of observed live facts.",
+      "paragraphs": [],
+      "bullets": [],
+      "tables": [
+        {
+          "caption": "Terms used in this reference",
+          "columns": ["Term", "Meaning"],
+          "rows": [
+            ["bb", "One big blind as a unit; BB also names the big-blind seat."],
+            ["RFI", "Raise first in: first voluntary entry is a raise after earlier players fold."],
+            ["Range", "A set of possible hole-card hands; a detailed model may weight combinations."],
+            ["Equity", "Expected share of the pot at showdown, including ties, against specified hands or ranges."],
+            ["Out", "An unseen improving card; a dirty out may improve the hand without winning."],
+            ["In position", "Acting after the relevant opponent on the postflop street."],
+            ["Fold equity", "The value of opponents folding to aggression; not a measured live percentage here."],
+            ["Blocker", "A known card that removes some combinations from opponents' possible holdings."],
+            ["Effective stack", "Heads-up, the smaller stack available to the two players."],
+            ["SPR", "Stack-to-pot ratio: remaining effective stack divided by the relevant pot size."],
+            ["Rake", "The house fee; percentage, cap, and collection rules affect strategy."],
+            ["Implied / reverse implied odds", "Potential future gains / extra losses after improving; neither is guaranteed."]
+          ]
+        }
+      ],
+      "source_ids": ["upswing-pot-odds", "pokerology-outs", "upswing-six-max", "upswing-three-bet", "upswing-aces"]
+    },
+    {
+      "id": "limits-and-sources",
+      "title": "Limitations and Source Use",
+      "scope": "A locally bundled study summary, not a solver, chart import, or live recommendation system.",
+      "paragraphs": [
+        "All summaries and opening examples are independently authored. Citations point to retrieved educational passages supporting the concepts; pot and out tables are calculated independently, not copied from source images, PDFs, or range charts. Source strategy is opinion within its stated game assumptions, not a promise of profit.",
+        "No runtime network is needed for this reference. Links are optional further reading. None of these sources validates screenshots, captured amounts, inferred seating, opponent tendencies, or this application's perception. Reading the reference does not enable advice or make recommendations live."
+      ],
+      "bullets": [
+        "The scope is standard high-hand Hold'em. Omaha hole-card constraints, short-deck rankings, antes/straddles, tournament ICM, and short-stack push/fold strategies require different treatment.",
+        "Percentages are rounded displays of exact arithmetic under explicit assumptions. Draw-hit estimates cannot substitute for a specified opponent range or full showdown equity and do not certify a profitable action.",
+        "Sources were reviewed on the recorded UTC date; commercial education sites may change their text or availability. No paid chart, image, executable, or root-directory range asset is required."
+      ],
+      "tables": [],
+      "source_ids": ["upswing-pot-odds", "pokerology-outs", "upswing-six-max", "gtowizard-large-opens", "upswing-aces"]
+    }
+  ]
+}

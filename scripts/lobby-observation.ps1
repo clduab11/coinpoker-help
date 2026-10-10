@@ -9,7 +9,7 @@ param(
     [Parameter(Mandatory)][string]$LobbyTitle,
     [int]$Seconds = 90,
     [string]$VlmEndpoint,
-    [string]$VlmModel = 'coinpoker-gemma-4-e2b',
+    [string]$VlmModel = 'coinpoker-laya-vision',
     [string]$Binary
 )
 

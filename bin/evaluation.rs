@@ -6,10 +6,11 @@ use std::time::Instant;
 use crate::{live, Pipeline, RunError};
 use ingest::capture::Frame;
 use ingest::discovery::TableIdentity;
+use ingest::laya::LayaBackend;
 use ingest::parser::GameState;
 use ingest::runtime::{observation_is_current, Freshness, Ticket};
 use ingest::screen::{inspect_frame, parse_screen_output, MetadataEvidence, ScreenKind, TableGate};
-use ingest::vlm::{OpenAiServerBackend, VlmBackend, VlmConfig, VlmOutput};
+use ingest::vlm::{VlmBackend, VlmConfig, VlmOutput};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -156,7 +157,7 @@ fn percentile(samples: &mut [u64], percentile: usize) -> Value {
 }
 
 pub fn run(path: &str, config: VlmConfig) -> Result<(), RunError> {
-    crate::config::validate_vlm_endpoint(&config.endpoint, false).map_err(RunError::Message)?;
+    crate::config::validate_vlm_endpoint(&config.endpoint).map_err(RunError::Message)?;
     let path = Path::new(path).canonicalize()?;
     let root = path
         .parent()
@@ -172,8 +173,9 @@ pub fn run(path: &str, config: VlmConfig) -> Result<(), RunError> {
         ));
     }
     let synthetic = manifest.source == "synthetic";
+    // Synthetic cases never call analyze; local images go through Laya (no lobby size here).
     let backend =
-        OpenAiServerBackend::new(config).map_err(|error| RunError::Message(error.to_string()))?;
+        LayaBackend::new(config, None).map_err(|error| RunError::Message(error.to_string()))?;
     let pipeline = Pipeline::new();
     let mut gates: HashMap<&str, TableGate> = HashMap::new();
     let mut ids = BTreeSet::new();

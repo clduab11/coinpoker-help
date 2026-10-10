@@ -1,8 +1,14 @@
 # Windows installation and calibration
 
-**Candidate procedure:** clean-account and live-table acceptance are recorded in
-[WINDOWS_ACCEPTANCE_V1.md](WINDOWS_ACCEPTANCE_V1.md). This guide does not claim
-that the model has read a real table successfully. Version remains `0.1.0`.
+**Development procedure:** the active scope is actual CoinPoker Practice Games
+with practice chips, not cash/real-money acceptance. Laya iteration-1 Gate F
+remains **FAIL**, human verification **UNVERIFIED**, and seated advice unavailable.
+Version remains `0.1.0`. Historical physical and clean-account evidence is in
+[WINDOWS_ACCEPTANCE_V1.md](WINDOWS_ACCEPTANCE_V1.md).
+
+The dashboard/launcher instructions describe the approved follow-on interface
+and remain subject to the coordinator's actual implementation tests. They are
+not a receipt for accepted live capture or guidance.
 
 ## 1. Prerequisites
 
@@ -13,94 +19,120 @@ describes downloading its Windows installer, opening it, and signing in. The rea
 executable name, installation path, lobby/table titles and display behavior must
 be observed locally. Do not copy an example selector into live configuration.
 
-Install PowerShell 7 (`pwsh`) and Python 3.11. A source checkout also requires
-Rust 1.95.0, the MSVC C++ build tools and Windows SDK. Review each installer.
-The setup script requires Windows x64 and a Vulkan GPU; it downloads a pinned
-server ZIP into `.local/`, checks its hash and executable version, then builds
-the source unless `-SkipBuild` is used. Record the OS build, GPU/Vulkan driver
-and available RAM/storage for acceptance; performance is not established by
-package metadata.
+Use PowerShell 7 (`pwsh`) and the existing pinned local Python/Laya runtime.
+The recorded inference environment uses Python 3.12.15, Laya 0.1.7,
+PyTorch `2.11.0+cu128` and torchvision `0.26.0+cu128`; see
+[VLM_COMPATIBILITY.md](VLM_COMPATIBILITY.md). Normal model loading uses that
+CUDA runtime, not the retired llama.cpp/Vulkan ZIP. `-DashboardOnly` is intended
+to use no GPU and must not load the model. A source checkout also requires Rust
+1.95.0, the MSVC C++ build tools and Windows SDK. Record actual OS, driver,
+memory and runtime details; package metadata is not performance acceptance.
 
-Clone or open the repository, then run from its root:
+For a new source build, the existing setup entry point from the repository root is:
 
 ```powershell
 pwsh -File scripts/setup-windows.ps1
 ```
 
-For a source-free candidate bundle, use the included `coinpoker.exe` and support
-scripts from its root. The bundle intentionally omits Rust source, model weights
-and downloaded runtime binaries. Use `pwsh -File scripts/setup-windows.ps1 -SkipBuild`
-to check bundle prerequisites; the source checkout setup command above builds
-from source. The model download and server commands below apply to both.
+The already prepared host does not need to repeat setup or completed model
+work just to test the dashboard. Fresh-runtime/checkpoint provisioning and
+actual launcher behavior still need the coordinator's recorded tests.
 
-## 2. Download and verify the pinned vision runtime
+Prefer the source checkout for this phase. The historical source-free candidate
+omits Rust source, Laya server/dashboard support, local weights and runtime
+artifacts. Its bundled replay commands remain historical evidence; do not assume
+current Laya setup works from that archive. No release/workflow change is included
+in this phase.
 
-Review [model and server provenance](VLM_COMPATIBILITY.md) and
-[model terms](../MODEL_LICENSES.md). The required GGUF and projector are separate
-multi-gigabyte files; the Windows Vulkan llama.cpp build is a third pinned asset.
-Run from the repository or candidate root:
+## 2. Reuse and verify the existing Laya checkpoint
+
+Review [runtime provenance](VLM_COMPATIBILITY.md) and
+[model terms](../MODEL_LICENSES.md). The sole checkpoint is
+`models/laya-vision/finetuned/20261009T190322Z-it1`, based on
+`thaitea/laya-vision@f2fe3c12cb6d04c59d8a190250bf3fb40fc828dc`.
+Download, training, calibration, scoring and pin verification already completed.
+No redownload, retraining or repeat dump is needed for the existing installation.
+For an offline recheck from the repository root:
 
 ```powershell
-pwsh -File download-model.ps1
 pwsh -File download-model.ps1 -Verify
 ```
 
-The expected repository revisions, asset names, sizes and SHA-256 hashes are in
-`scripts/vlm-pins.json`. Model verification rehashes existing files; Windows setup
-verifies the server ZIP and executable. Both refuse missing or corrupt assets.
-Keep model and server files under the local ignored paths;
-candidate archives do not redistribute them. Do not substitute a moving revision
-or an unrelated projector.
+Expected revisions, artifacts and SHA-256 hashes are in `scripts/laya-pins.json`.
+Missing or corrupt model artifacts must fail verification/prediction readiness,
+not trigger a Gemma fallback. `scripts/vlm-pins.json` is an orphaned historical
+manifest, not an active install source. Keep weights and private data local;
+The pinned Laya fork and upstream backbone are Apache-2.0; base/derived Laya weights are
+CC-BY-NC-SA-4.0. They are not redistributed.
 
-## 3. Start the local server and diagnose it
+**Fresh installation:** a base-model download cannot supply this user's private
+fine-tuned derivative. Provisioning that checkpoint locally and validating the
+matching runtime is a separate missing setup step; do not silently substitute
+the base or run training. Dashboard-only use is distinct from model readiness,
+and clean-account acceptance is still unrun.
 
-In terminal A:
+## 3. Open the read-only local dashboard
+
+For the first-phase dashboard without model loading or GPU use:
+
+```powershell
+pwsh -File scripts/start-vlm.ps1 -DashboardOnly
+```
+
+Alternatively, normal startup is intended to bind the dashboard independently
+of asynchronous verification/loading of the existing pinned model:
 
 ```powershell
 pwsh -File scripts/start-vlm.ps1
 ```
 
-The script verifies the assets, runs `llama-server.exe` in the foreground, binds
-only `127.0.0.1:18080`, and serves alias `coinpoker-gemma-4-e2b`. Leave the
-terminal open; Ctrl-C stops it. Other local processes may reach this
-unauthenticated port. Do not publish it through a proxy or tunnel.
+Choose one mode, not two concurrent servers. Open **`http://127.0.0.1:18090/`**.
+The same loopback listener exposes `/v1/models` and `/v1/laya/predict`; the
+read-only state view is `/api/state`. Predict must stay unavailable until pin
+verification/loading succeeds, while the page reports loading or failure.
+Neither mode starts live capture automatically. Keep the owning terminal open;
+shutdown should stop only owned processes. If 18090 is occupied, report the
+conflict rather than kill an unowned process or fall back to `18080`/`8080`.
+There is no supported remote-VLM mode. Other local processes may reach this
+unauthenticated listener; do not expose it through a proxy or tunnel.
 
 In terminal B, from the same root:
 
 ```powershell
-curl.exe --fail --silent --show-error http://127.0.0.1:18080/v1/models
-$coinpoker = if (Test-Path -LiteralPath .\coinpoker.exe) { '.\coinpoker.exe' } else { '.\target\release\coinpoker.exe' }
+curl.exe --fail --silent --show-error http://127.0.0.1:18090/v1/models
+$coinpoker = '.\target\release\coinpoker.exe'
 python scripts/doctor.py --binary $coinpoker
 ```
 
-The binary selection uses the candidate executable when present, otherwise the
-source checkout build. Doctor sends two
-generated red/blue PNG requests through the same multimodal API and requires
-different correct color JSON plus a stop finish reason. It neither captures nor
-uploads a real table. A connection or color-probe pass does not establish table
-accuracy, memory fitness or production latency. Doctor may also report missing
-client calibration; do that next.
+Use the current source-checkout binary and matching Python environment for
+diagnostics; an old bundled executable is not evidence about the new interface.
+Confirm alias `coinpoker-laya-vision` in `/v1/models`, and distinguish model
+readiness/temperature calibration from quality approval. Doctor/status checks
+do not start a seated-data session or establish table accuracy. The historical
+Gemma red/blue probes and stop-reason contract are not the current Laya API.
+The coordinator must record actual launcher, metadata, unavailable/busy predict
+and dashboard behavior before these follow-on instructions are marked tested.
 
-## 4. Calibrate the real Windows client
+## 4. Prepare a measured passive capture profile
 
 Launch the client normally. The helper's listing reads process/window metadata,
 not pixels. Keep its output local because titles may contain private details.
-Select the source checkout build or bundled candidate executable:
+Use the current source-checkout build, not the historical bundled executable:
 
 ```powershell
-$coinpoker = if (Test-Path -LiteralPath .\coinpoker.exe) { '.\coinpoker.exe' } else { '.\target\release\coinpoker.exe' }
+$coinpoker = '.\target\release\coinpoker.exe'
 & $coinpoker --list-windows
 ```
 
 Record the exact executable basename and distinguish observed lobby and table
-titles by opening and closing a table manually. Do not guess a title. Configure:
+titles by opening and closing a Practice Games table manually. Do not guess a
+title or region geometry. The native CLI's selectors include:
 
 ```powershell
 $env:COINPOKER_EXE_NAME = '<exact observed exe_name>'
 $env:COINPOKER_WINDOW_TITLE = '<observed table-only title fragment>'
 $env:COINPOKER_LOBBY_TITLE = '<observed lobby title fragment>'
 & $coinpoker --doctor
-& $coinpoker
 ```
 
 The table title hint is required for advice; a lobby hint vetoes a matching
@@ -113,46 +145,59 @@ are ambiguous. Optional `--pid` and
 restart or table replacement. HWND input may be decimal or `0x` hex; JSON output
 uses lowercase `0x` hex. Process metadata cannot authenticate an executable.
 
-Before a table title is known, a bounded lobby check can record live JSON under
-ignored `.local/acceptance/`. It passes only when the stream contains
-`lobby_detected`, zero `decision` or `clear` events, and a settled result: the
-lobby-title veto or a discarded observation. Exit 2 means the lobby was seen but
-the visual result did not settle before the time limit. The check removes any
-PID, HWND, and table-title environment values for that run, saves no pixels, and
-leaves physical gate 8 `UNRUN`:
+The follow-on optional `-LiveConfig .local/profile.json` launcher argument
+explicitly supervises exactly one native passive CLI feed via its UTF-8 JSONL
+stdout. It is not automatically used in the first phase. Use only the actual
+profile fields/CLI bounds confirmed by the coordinator's launcher tests; this
+guide does not invent a profile schema. Confirm measured six-max geometry and
+source timestamps/frame progress, plus actual recording counters/private output
+when recording is enabled, before a later seated-data session. A capture heartbeat
+alone is not proof that images are being recorded or that `COLLECTOR_READY` holds.
+The native feed currently supplies health only: `recording_enabled:false`,
+`recorded_frames:0`. `-LiveConfig` accepts typed target settings, not a new
+`--record-dir` option. Recorder/profile readiness and a manual go-ahead remain
+the next checkpoint; retained `.local/laya/dataset/capture_loop.py` is later-session
+tooling, never automatically launched by the UI or this first phase.
+Capture and any new pixels stay local, with pixels under `.local/captures/`.
+The user alone selects a seat and plays; the page has no capture/training or
+poker-client input controls.
 
-```powershell
-pwsh -File scripts/lobby-observation.ps1 -ExeName '<exact observed exe_name>' -LobbyTitle '<observed lobby title>'
-```
-
-Add `-VlmEndpoint` when the local server is not the product default. The endpoint
-must stay on loopback. One passing lobby view does not cover other lobby screens,
-table previews, or real-image accuracy.
-
-Live output is JSON lines. Consume it according to [EVENTS_V2.md](EVENTS_V2.md),
-including `clear`, absolute expiry and EOF. A failed or stale capture must not
-leave a prior recommendation displayed. Windows capture access failures are
-reported through doctor and capture errors; no manual permission command is
-required. Keep OS protections enabled while diagnosing them.
+Native output is JSON lines; see [EVENTS_V2.md](EVENTS_V2.md). Honor clearing,
+absolute expiry, stream reset/EOF and capture health. Legacy table events/raw
+model answers cannot establish trusted current hero controls. The planned
+private bounded per-session history under `.local/` uses opaque IDs, unknowns
+and gap markers, not public names or guessed cross-session identity. Browser
+polling must never renew an old lease. These are follow-on validation requirements,
+not recorded successful live behavior.
 
 ## 5. Evaluate and record acceptance
 
 ```powershell
-$coinpoker = if (Test-Path -LiteralPath .\coinpoker.exe) { '.\coinpoker.exe' } else { '.\target\release\coinpoker.exe' }
+$coinpoker = '.\target\release\coinpoker.exe'
 pwsh -File scripts/windows-acceptance.ps1
 & $coinpoker --evaluate fixtures/synthetic/manifest.json
 ```
 
-The synthetic manifest validates contracts only. For an authorized held-out
-image corpus, use an ignored `.local/fixtures/manifest.json` and meet all
+The synthetic manifest validates contracts only. The baseline Gate F receipt
+remains FAIL: board threshold 1.0 gives zero confident units, and full unseated
+warm p95 3027.3 ms failed the old <2000 ms target. The prospective <5000 ms warm
+capture-to-display p95 and hard 5000 ms full end-to-end deadline are new tests,
+not a retroactive pass or a longer freshness lease. Seated advice remains blocked
+until positive real UI data and approved human-held-out calibration/evaluation.
+Temperature calibration and an agent label review do not supply that approval.
+
+For a later held-out image corpus, use ignored `.local/` fixtures and meet all
 thresholds in [VISUAL_EVALUATION_V2.md](VISUAL_EVALUATION_V2.md). Complete the
 twenty physical gates with evidence, including 100%, 125%, and 150% DPI scaling,
 window-only pixel bounds, client restart, visual accuracy and clean-account
-candidate execution. In a source-free archive, the acceptance script marks
+candidate execution where applicable. Practice and cash share one representation
+and mechanism, with no practice bypass; this development phase gives no real-money
+acceptance. The root PNG charts and PDF are mathematical references, not positive
+seated UI examples. In a historical source-free archive, the acceptance script marks
 source-validation checks blocked because Cargo source and `scripts/validate.py`
 are omitted. It produces local reports but cannot observe manual facts for you.
 
-## Candidate archive
+## Historical candidate archive and current omissions
 
 The manual `release-windows.yml` workflow stages an explicit source-free allowlist
 and SHA256SUMS. On a downloaded archive, calculate the ZIP SHA-256 with
@@ -161,3 +206,8 @@ Authenticode signing requires repository secrets and signs only the executable;
 an unsigned candidate remains a development artifact. The workflow never
 publishes a release. Record actual signing status and clean-account execution in
 the acceptance report.
+
+That packaging record does not include the current Laya server/dashboard path
+or the local fine-tuned derivative. `scripts/vlm-pins.json` may remain in the
+old allowlist as a historical orphan; it must not be treated as the active
+manifest. Release/workflow updates are outside this phase.

@@ -1,10 +1,62 @@
 # Windows validation evidence
 
 This document separates automated checks, host-specific calibration and physical
-acceptance for the Windows-only candidate. Version remains `0.1.0`. The results
-below are from the dirty working tree on 2026-09-23 UTC, not a CI run or release.
+acceptance for the Windows-only candidate. Version remains `0.1.0`. Dated
+historical results are retained below without port/date/receipt substitution.
 
-## Current automated run
+## Current baseline and pending follow-on validation
+
+Laya is the sole backend, alias `coinpoker-laya-vision`, with the existing
+`models/laya-vision/finetuned/20261009T190322Z-it1` checkpoint from base
+`thaitea/laya-vision@f2fe3c12cb6d04c59d8a190250bf3fb40fc828dc`.
+`scripts/laya-pins.json` is active; `scripts/vlm-pins.json` is an orphaned
+historical manifest. Download, training, dumps, calibration, scores and pin
+verification already completed; dashboard/history work does not require
+redownload or retraining. Fresh installations lack the user's local fine-tune.
+Current browser is `http://127.0.0.1:18090/`; `/v1/models` and
+`/v1/laya/predict` share that loopback listener.
+
+The preserved iteration-1 Gate F is **FAIL**, human verification **UNVERIFIED**
+and source/vendor `calibrated:false`. The agent-reviewed board score has
+`0/330` confident units at threshold 1.0 (raw `307/330 = 93.03%`). Full
+unseated warm p95 `3027.3 ms` failed the original `<2000 ms` criterion;
+[section 7 of the Laya record](LAYA_VISION_PHASE_A.md#7-phase-gates) retains exact
+UTC times and evidence paths. Loaded temperature calibration is not quality
+approval. The prospective `<5000 ms` warm capture-to-display p95 and hard
+5000 ms full end-to-end deadline need new eligible-result measurements; the
+old battery is not a seated/end-to-end pass, nor a reason to relax freshness.
+
+The active follow-on develops actual Practice Games with practice chips in
+the same repo/representation/guards as cash, without a bypass or real-money
+acceptance. Seated advice remains blocked until positive real UI examples
+and approved human-held-out calibration/evaluation. Root PNG charts and PDF
+are deterministic reference/replay material, not positive seated UI captures.
+
+The planned launcher is `scripts/start-vlm.ps1 -DashboardOnly` for no GPU/model
+load, or default asynchronous pinned model loading. Optional
+`-LiveConfig .local/profile.json` explicitly supervises one native passive feed;
+it is not automatically used for capture in the first phase. Browser controls
+are read-only and trigger no capture/training. Planned history is private,
+bounded and per-session under `.local/`, with opaque IDs and unknown/gap markers.
+
+No follow-on implementation-test or accepted live receipt is supplied by this
+documentation cleanup. The coordinator must record actual launcher/flag/profile,
+root/loading/failed-pin/busy prediction, freshness/clearing and history outcomes.
+Page/model health alone is not `COLLECTOR_READY`; source timestamps/frame
+progress, optional recorder counters and private output require their own
+tests. No script/test/server/GPU run is implied by the updated instructions.
+Native health currently reports `recording_enabled:false`, `recorded_frames:0`;
+capture-frame counts are not recorded images. Typed `-LiveConfig` target settings
+do not forward a `--record-dir` option. Recorder/profile readiness and a later
+manual-data checkpoint remain pending, independently of UI/model health.
+Historical packaging lacks Laya server/dashboard support and the local weights;
+no release/workflow change is made here.
+
+## Historical automated run (2026-09-23)
+
+The results in this section are from the dirty working tree on 2026-09-23 UTC,
+not a CI run, release or claim about current Laya/dashboard changes. Statements
+about what was unmeasured/unrun describe that date only.
 
 `python scripts/validate.py` exited 0 on the final tree. Its machine-readable
 report and individual logs are under ignored `.local/validation/`.
@@ -44,7 +96,7 @@ window. The script correctly exits 1 and leaves all twenty physical gates UNRUN.
 No clean-account candidate run, real-image corpus, Windows CI run or signing
 evidence exists, so the release decision is **NO-GO**.
 
-## Boundaries retained from the previous implementation
+## Historical implementation boundaries (2026-09-23)
 
 - Stdin replay and poker equity/EV rules remain independent of visual capture.
 - A table-only title, readable frame, strict screen envelope, two matching fresh

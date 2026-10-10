@@ -1,4 +1,4 @@
-param([switch]$DownloadModel, [switch]$SkipBuild)
+param([switch]$DownloadModel, [switch]$SkipBuild, [string]$CondaPython = '')
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -12,55 +12,40 @@ if ([Environment]::OSVersion.Version.Build -lt 18362) {
 }
 if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne
     [System.Runtime.InteropServices.Architecture]::X64) {
-    throw 'The pinned llama.cpp server asset requires Windows x64.'
+    throw 'The pinned CUDA PyTorch wheels require Windows x64.'
 }
 
 $root = Split-Path -Parent $PSScriptRoot
-$pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'vlm-pins.json') -Raw | ConvertFrom-Json
-if ($pins.format -ne 1) { throw 'Unsupported VLM pin format.' }
-$runtime = Join-Path $root ".local/vlm-runtime/$($pins.runtime.tag)"
-$archive = Join-Path $runtime $pins.runtime.asset
-$bin = Join-Path $runtime 'bin'
-$server = Join-Path $bin 'llama-server.exe'
-New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+$pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'laya-pins.json') -Raw | ConvertFrom-Json
+if ($pins.format -ne 1) { throw 'Unsupported Laya pin format.' }
+$envPrefix = Join-Path $root $pins.runtime.env_prefix
+$python = Join-Path $envPrefix 'python.exe'
 
-if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
-    $partial = Join-Path $runtime ($pins.runtime.asset + '.partial-' + [guid]::NewGuid().ToString('N'))
-    $url = "https://github.com/$($pins.runtime.repository)/releases/download/$($pins.runtime.tag)/$($pins.runtime.asset)"
-    Write-Output "Downloading pinned llama.cpp server asset from $url"
-    Invoke-WebRequest -Uri $url -OutFile $partial -MaximumRedirection 5
-    if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ine $pins.runtime.sha256) {
-        throw "Server archive failed the pinned SHA256 check; partial file retained at $partial"
-    }
-    if (Test-Path -LiteralPath $archive) { throw "Server archive destination appeared during download: $archive" }
-    Move-Item -LiteralPath $partial -Destination $archive
-}
-if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $pins.runtime.sha256) {
-    throw "Pinned llama.cpp server archive hash mismatch: $archive"
+if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+    # conda creates the interpreter only; every Python package is pip-installed at an exact pin below.
+    $conda = @()
+    if ($CondaPython) { $conda = @($CondaPython, '-m', 'conda') }
+    elseif (Get-Command conda -ErrorAction SilentlyContinue) { $conda = @('conda') }
+    else { throw 'conda not found. Pass -CondaPython <python.exe that has the conda package>.' }
+    Write-Output "Creating the Laya environment at $envPrefix (python $($pins.runtime.python))"
+    $exe = $conda[0]
+    $rest = @($conda | Select-Object -Skip 1)
+    & $exe @rest create --yes --prefix $envPrefix -c conda-forge --override-channels "python=$($pins.runtime.python)" pip
+    if ($LASTEXITCODE -ne 0) { throw 'conda environment creation failed.' }
 }
 
-if (-not (Test-Path -LiteralPath $bin)) {
-    $staging = Join-Path $runtime ('bin.partial-' + [guid]::NewGuid().ToString('N'))
-    Expand-Archive -LiteralPath $archive -DestinationPath $staging
-    if (-not (Test-Path -LiteralPath (Join-Path $staging 'llama-server.exe') -PathType Leaf)) {
-        throw "Server executable missing from pinned archive; staging retained at $staging"
-    }
-    if (Test-Path -LiteralPath $bin) { throw "Server destination appeared during extraction: $bin" }
-    Move-Item -LiteralPath $staging -Destination $bin
-}
-if (-not (Test-Path -LiteralPath $server -PathType Leaf)) {
-    throw "Pinned server executable missing: $server"
-}
-$version = (& $server --version 2>&1 | Out-String)
-if ($LASTEXITCODE -ne 0 -or
-    $version -notmatch "build $($pins.runtime.tag.Substring(1))" -or
-    $version -notmatch [regex]::Escape($pins.runtime.commit.Substring(0, 9))) {
-    throw "Installed server does not match pinned $($pins.runtime.tag) build and commit."
-}
-$devices = (& $server --list-devices 2>&1 | Out-String)
-if ($LASTEXITCODE -ne 0 -or $devices -notmatch 'Vulkan\d+:') {
-    throw 'The pinned Vulkan server found no Vulkan GPU. Check the graphics driver.'
-}
+$packages = $pins.runtime.packages
+& $python -m pip install --disable-pip-version-check --no-input `
+    "torch==$($packages.torch)" "torchvision==$($packages.torchvision)" --index-url $pins.runtime.torch_index_url
+if ($LASTEXITCODE -ne 0) { throw 'Pinned torch install failed.' }
+& $python -m pip install --disable-pip-version-check --no-input `
+    "transformers==$($packages.transformers)" "safetensors==$($packages.safetensors)" `
+    "huggingface_hub==$($packages.huggingface_hub)" "numpy==$($packages.numpy)" "pillow==$($packages.pillow)" `
+    "laya @ git+$($pins.runtime.laya.repository)@$($pins.runtime.laya.commit)"
+if ($LASTEXITCODE -ne 0) { throw 'Pinned Laya package install failed.' }
+
+$cuda = (& $python -c "import torch; print(torch.cuda.is_available())" 2>$null | Out-String).Trim()
+if ($cuda -ne 'True') { throw 'The pinned CUDA torch build found no CUDA GPU. Check the NVIDIA driver.' }
 
 if ($DownloadModel) {
     & (Join-Path $root 'download-model.ps1')
@@ -79,4 +64,4 @@ if (-not $SkipBuild) {
         Pop-Location
     }
 }
-Write-Output 'Windows setup complete. Start the foreground server with scripts/start-vlm.ps1, then run doctor.'
+Write-Output 'Windows setup complete. Start the foreground Laya server with scripts/start-vlm.ps1, then run doctor.'

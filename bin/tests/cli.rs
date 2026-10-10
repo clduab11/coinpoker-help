@@ -99,7 +99,7 @@ fn assert_evaluation_category(response: serde_json::Value, category: &str) {
         "--evaluate",
         path.to_str().unwrap(),
         "--vlm-endpoint",
-        "http://127.0.0.1:0/v1/chat/completions",
+        "http://127.0.0.1:18090/v1/laya/predict",
     ]);
     std::fs::remove_file(path).unwrap();
     assert!(output.status.success());
@@ -186,6 +186,8 @@ fn help_prints_usage_and_succeeds() {
     assert!(stdout.contains("--list-windows"));
     assert!(stdout.contains("--exe-name"));
     assert!(stdout.contains("--window-hwnd"));
+    assert!(stdout.contains("--decision-budget-ms"));
+    assert!(stdout.contains("18090"));
 }
 
 #[test]
@@ -199,11 +201,70 @@ fn unknown_and_extra_arguments_exit_with_usage() {
 }
 
 #[test]
-fn ui_option_truthfully_reports_unimplemented_feed() {
+fn removed_remote_vlm_opt_in_is_a_usage_error() {
+    for args in [
+        &["--allow-remote-vlm"][..],
+        &["--doctor", "--allow-remote-vlm"][..],
+    ] {
+        let output = run(args);
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+        assert!(stderr.contains("unknown option or extra argument: --allow-remote-vlm"));
+        assert!(stderr.contains("Usage: coinpoker [OPTION]"));
+        assert!(!stderr.contains("allow-remote-vlm  "));
+    }
+}
+
+#[test]
+fn remote_or_out_of_range_laya_settings_exit_with_usage() {
+    for args in [
+        &[
+            "--doctor",
+            "--vlm-endpoint",
+            "https://example.com/v1/laya/predict",
+        ][..],
+        &["--doctor", "--laya-threshold", "0.5"][..],
+        &["--doctor", "--timeout-secs", "0"][..],
+        &["--doctor", "--decision-budget-ms", "5001"][..],
+    ] {
+        let output = run(args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+        assert!(stderr.contains("Usage: coinpoker [OPTION]"));
+    }
+}
+
+#[test]
+fn retired_product_ports_fail_before_doctor_or_capture_can_start() {
+    for endpoint in [
+        "http://127.0.0.1:8080/v1/laya/predict",
+        "http://127.0.0.1:18080/v1/laya/predict",
+        "http://127.0.0.1:0/v1/laya/predict",
+    ] {
+        for mode in ["--doctor", "--evaluate"] {
+            let mut args = vec![mode];
+            if mode == "--evaluate" {
+                args.push("nonexistent-synthetic-manifest.json");
+            }
+            args.extend(["--vlm-endpoint", endpoint]);
+            let output = run(&args);
+            assert_eq!(output.status.code(), Some(2));
+            assert!(output.stdout.is_empty());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("canonical loopback port 18090")
+            );
+        }
+    }
+}
+
+#[test]
+fn ui_option_points_to_the_separately_launched_read_only_dashboard() {
     let output = run(&["--ui"]);
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
-    assert!(stderr.contains("interactive feed is not implemented"));
+    assert!(stderr.contains("no native interactive UI"));
+    assert!(stderr.contains("http://127.0.0.1:18090/"));
+    assert!(stderr.contains("read-only"));
     assert!(stderr.contains("--stdin"));
 }
 

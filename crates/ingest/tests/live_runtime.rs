@@ -103,6 +103,18 @@ fn lobby() -> ScreenObservation {
     })
     .unwrap()
 }
+fn unseated() -> ScreenObservation {
+    let mut observation = table();
+    observation.evidence.hero_cards = false;
+    observation.evidence.action_controls = false;
+    let state = observation.state.as_mut().unwrap();
+    state.hero_cards.clear();
+    state.players.clear();
+    state.hero_chips = 0;
+    state.action_required = false;
+    state.available_actions.clear();
+    observation
+}
 fn rig(config: RuntimeConfig) -> (Runtime, Source, Worker) {
     let window = WindowInfo {
         hwnd: 7,
@@ -149,6 +161,28 @@ fn finish(worker: &Worker, observation: ScreenObservation) {
         observation,
         recommendation: Some("check"),
     }));
+}
+fn finish_without_advice(worker: &Worker, observation: ScreenObservation) {
+    worker.0.borrow_mut().ready = Some(Ok(Analysis {
+        observation,
+        recommendation: None,
+    }));
+}
+fn activate_observation(runtime: &mut Runtime, worker: &Worker) -> Vec<LiveEvent<&'static str>> {
+    start(runtime);
+    finish_without_advice(worker, unseated());
+    assert!(!runtime
+        .tick(&Time(400))
+        .iter()
+        .any(|event| matches!(event, LiveEvent::Observation { .. })));
+    runtime.tick(&Time(500));
+    finish_without_advice(worker, unseated());
+    let events = runtime.tick(&Time(600));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, LiveEvent::Observation { .. })));
+    assert!(!events.iter().any(is_decision));
+    events
 }
 fn rig_with_discovery(
     discovery: DiscoveryConfig,
@@ -728,4 +762,305 @@ fn persistently_animated_tile_does_not_starve_inference() {
             ..
         }
     )));
+}
+
+#[test]
+fn admitted_unseated_observation_has_a_source_lease_and_no_placeholder_controls() {
+    let (mut runtime, _, worker) = rig(RuntimeConfig::default());
+    let events = activate_observation(&mut runtime, &worker);
+    let (ticket, value, valid_for_ms) = events
+        .iter()
+        .find_map(|event| match event {
+            LiveEvent::Observation {
+                ticket,
+                value,
+                valid_for_ms,
+            } => Some((ticket, value, valid_for_ms)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(ticket.generation, 2);
+    assert_eq!(ticket.captured_at_ms, 500);
+    assert_eq!(*valid_for_ms, 4_900);
+    assert_eq!(value.pot_size, Some(100));
+    assert_eq!(value.to_call, None);
+    assert_eq!(value.hero_chips, None);
+    assert_eq!(value.available_actions, None);
+    assert_eq!(value.role, ingest::runtime::ObservationRole::Uncertain);
+    assert_eq!(
+        value.hero_seated, None,
+        "this generic worker has no seating evidence"
+    );
+    assert_eq!(value.action_required, None);
+    assert_eq!(value.acting_seat, None);
+    assert_eq!(value.acting_to_call, None);
+    assert!(value.wagers.is_empty());
+    assert_eq!(
+        value.metrics,
+        ingest::runtime::ObservationMetrics::default()
+    );
+    assert!(!value.quality_approved);
+    assert_eq!(clears(&events), 0);
+}
+
+#[test]
+fn observations_invalidate_on_change_target_loss_and_capture_loss_without_any_advice() {
+    for cause in ["frame-changed", "window-changed", "capture-access-required"] {
+        let (mut runtime, source, worker) = rig(RuntimeConfig::default());
+        activate_observation(&mut runtime, &worker);
+        let now = match cause {
+            "frame-changed" => {
+                change(&source, 255);
+                700
+            }
+            "window-changed" => {
+                source.0.borrow_mut().snapshot = DiscoverySnapshot::default();
+                1_000
+            }
+            _ => {
+                source.0.borrow_mut().permission = false;
+                700
+            }
+        };
+        let events = runtime.tick(&Time(now));
+        assert!(events.iter().any(|event| matches!(event, LiveEvent::ObservationInvalidated { reason, .. } if *reason == cause)), "{cause}");
+        assert_eq!(clears(&events), 0, "no recommendation was ever active");
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, LiveEvent::Observation { .. })));
+    }
+}
+
+#[test]
+fn observation_expiry_invalidates_without_a_recommendation() {
+    let (mut runtime, _, worker) = rig(RuntimeConfig::default());
+    activate_observation(&mut runtime, &worker);
+    let events = runtime.tick(&Time(5_500));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        LiveEvent::ObservationInvalidated {
+            reason: "observation-expired",
+            ..
+        }
+    )));
+    assert_eq!(clears(&events), 0);
+    assert!(
+        runtime.active_count() == 1,
+        "expired controls require fresh re-analysis"
+    );
+}
+
+#[test]
+fn inference_error_invalidates_even_before_any_advice_or_observation() {
+    let (mut runtime, _, worker) = rig(RuntimeConfig::default());
+    start(&mut runtime);
+    worker.0.borrow_mut().ready = Some(Err(InferenceFailure {
+        code: "invalid-vlm-schema",
+    }));
+    let events = runtime.tick(&Time(400));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        LiveEvent::ObservationInvalidated {
+            reason: "invalid-vlm-schema",
+            ..
+        }
+    )));
+    assert_eq!(clears(&events), 0);
+}
+
+#[test]
+fn weak_card_agreement_does_not_publish_an_admitted_observation() {
+    let (mut runtime, _, worker) = rig(RuntimeConfig::default());
+    start(&mut runtime);
+    finish_without_advice(&worker, unseated());
+    runtime.tick(&Time(400));
+    runtime.tick(&Time(500));
+    let mut changed_pot = unseated();
+    changed_pot.state.as_mut().unwrap().pot_size += 1;
+    finish_without_advice(&worker, changed_pot);
+    let events = runtime.tick(&Time(600));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, LiveEvent::Table { .. })));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, LiveEvent::Observation { .. })));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, LiveEvent::ObservationInvalidated { .. })));
+}
+
+#[test]
+fn obsolete_same_window_completion_cannot_seed_observation_consensus() {
+    let (mut runtime, source, worker) = rig(RuntimeConfig::default());
+    start(&mut runtime);
+    change(&source, 255);
+    runtime.tick(&Time(400));
+    finish_without_advice(&worker, unseated());
+    let events = runtime.tick(&Time(500));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        LiveEvent::Observation { .. } | LiveEvent::Table { .. }
+    )));
+    runtime.tick(&Time(600));
+    runtime.tick(&Time(700));
+    finish_without_advice(&worker, unseated());
+    let events = runtime.tick(&Time(800));
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            LiveEvent::Observation { .. } | LiveEvent::Table { .. }
+        )),
+        "first new-epoch read cannot pair with obsolete work"
+    );
+    runtime.tick(&Time(900));
+    finish_without_advice(&worker, unseated());
+    assert!(runtime
+        .tick(&Time(1_000))
+        .iter()
+        .any(|event| matches!(event, LiveEvent::Observation { .. })));
+}
+
+#[test]
+fn over_age_unseated_result_emits_neither_controls_nor_table() {
+    let (mut runtime, _, worker) = rig(RuntimeConfig {
+        max_frame_age_ms: 1_000,
+        ..RuntimeConfig::default()
+    });
+    start(&mut runtime);
+    finish_without_advice(&worker, unseated());
+    let events = runtime.tick(&Time(1_300));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        LiveEvent::Discarded {
+            reason: "observation-expired",
+            ..
+        }
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        LiveEvent::Observation { .. } | LiveEvent::Table { .. }
+    )));
+}
+
+#[test]
+fn total_decision_deadline_discards_before_the_independent_eight_second_frame_age() {
+    let (mut runtime, _, worker) = rig(RuntimeConfig {
+        force_refresh_ms: 10_000,
+        ..RuntimeConfig::default()
+    });
+    start(&mut runtime);
+    finish_without_advice(&worker, unseated());
+    let events = runtime.tick(&Time(5_300));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        LiveEvent::Discarded {
+            reason: "decision-deadline-exceeded",
+            ..
+        }
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        LiveEvent::Observation { .. } | LiveEvent::Table { .. }
+    )));
+    finish_without_advice(&worker, unseated());
+    assert!(!runtime
+        .tick(&Time(5_400))
+        .iter()
+        .any(|event| matches!(event, LiveEvent::Observation { .. })));
+    runtime.tick(&Time(5_500));
+    finish_without_advice(&worker, unseated());
+    assert!(runtime
+        .tick(&Time(5_600))
+        .iter()
+        .any(|event| matches!(event, LiveEvent::Observation { .. })));
+}
+
+#[test]
+fn total_deadline_reports_without_releasing_or_restarting_a_blocked_worker() {
+    let (mut runtime, _, worker) = rig(RuntimeConfig {
+        decision_budget_ms: 1_000,
+        force_refresh_ms: 10_000,
+        ..RuntimeConfig::default()
+    });
+    start(&mut runtime);
+    let events = runtime.tick(&Time(1_300));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        LiveEvent::ObservationInvalidated {
+            reason: "decision-deadline-exceeded",
+            ..
+        }
+    )));
+    assert_eq!(runtime.active_count(), 1);
+    assert_eq!(worker.0.borrow().started, vec![1]);
+    let events = runtime.tick(&Time(1_400));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        LiveEvent::ObservationInvalidated {
+            reason: "decision-deadline-exceeded",
+            ..
+        }
+    )));
+    assert_eq!(worker.0.borrow().started, vec![1]);
+}
+
+#[test]
+fn heartbeat_is_throttled_counts_fresh_frames_and_reports_loss_and_no_frames() {
+    let (mut runtime, source, _) = rig(RuntimeConfig::default());
+    let first = runtime.tick(&Time(0));
+    assert!(first.iter().any(|event| matches!(
+        event,
+        LiveEvent::CaptureHealth {
+            frame_count: 1,
+            frame_width: Some(160),
+            frame_height: Some(120),
+            fresh_capture: true,
+            ..
+        }
+    )));
+    for now in [100, 200, 300, 400, 500, 600, 700, 800, 900] {
+        assert!(!runtime
+            .tick(&Time(now))
+            .iter()
+            .any(|event| matches!(event, LiveEvent::CaptureHealth { .. })));
+    }
+    let events = runtime.tick(&Time(1_000));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        LiveEvent::CaptureHealth {
+            frame_count: 11,
+            captured_at_ms: Some(1_000),
+            fresh_capture: true,
+            ..
+        }
+    )));
+    source.0.borrow_mut().permission = false;
+    runtime.tick(&Time(1_100));
+    let events = runtime.tick(&Time(2_000));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        LiveEvent::CaptureHealth {
+            frame_count: 11,
+            frame_width: None,
+            frame_height: None,
+            fresh_capture: false,
+            identity: None,
+            ..
+        }
+    )));
+
+    let (mut runtime, source, _) = rig(RuntimeConfig::default());
+    source.0.borrow_mut().snapshot = DiscoverySnapshot::default();
+    for now in [0, 1_000, 2_000] {
+        assert!(runtime.tick(&Time(now)).iter().any(|event| matches!(
+            event,
+            LiveEvent::CaptureHealth {
+                frame_count: 0,
+                fresh_capture: false,
+                identity: None,
+                ..
+            }
+        )));
+    }
 }

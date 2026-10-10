@@ -13,3 +13,4 @@
 pub mod classifier;
 pub mod exploit;
 pub mod features;
+pub mod observer;

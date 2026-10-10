@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Windows diagnostics. Only generated color PNGs go to loopback.
+"""Read-only Windows diagnostics for the Laya Vision runtime. Only generated color PNGs go to loopback.
 
 --list-windows reads metadata only. Local SHA256 checks need no network.
 --offline skips HTTP; no image or report is saved by default.
@@ -24,10 +24,17 @@ import urllib.parse
 import urllib.request
 import zlib
 
-PINS = json.loads(Path(__file__).with_name("vlm-pins.json").read_text(encoding="utf-8"))
-MODEL = PINS["model"]["alias"]
+PINS_PATH = Path(__file__).with_name("laya-pins.json")
+DEFAULT_ENDPOINT = "http://127.0.0.1:18090/v1/laya/predict"
 LIMIT = 1024 * 1024
 PROBE_TIMEOUT_SECS = 120
+PROBE_QUESTION = {"type": "choice", "instructions": "What is the dominant colour of the image?",
+                  "criteria": {"red": "mostly red", "blue": "mostly blue"}}
+
+
+def load_pins(path=PINS_PATH):
+    """Pins are read lazily so a missing or broken pin file is a failed check, not an import crash."""
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def loopback_endpoint(endpoint):
@@ -39,9 +46,11 @@ def loopback_endpoint(endpoint):
     except ValueError:
         loopback = url.hostname.lower() == "localhost"
     if not loopback:
-        raise ValueError("doctor refuses remote endpoints even with remote opt-in")
-    if not url.path.endswith("/chat/completions"):
-        raise ValueError("endpoint must end with /chat/completions")
+        raise ValueError("doctor refuses remote endpoints")
+    if url.port != 18090:
+        raise ValueError("Laya service requires port 18090; retired or alternate product ports are refused")
+    if not url.path.endswith("/v1/laya/predict"):
+        raise ValueError("endpoint must end with /v1/laya/predict")
     return url
 
 
@@ -54,8 +63,6 @@ def request_json(url, body=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     data = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    # Cold projector/model inference exceeded 30 s on the target PC. This is
-    # a setup probe, not the live advice latency budget.
     with opener.open(request, timeout=PROBE_TIMEOUT_SECS) as response:
         data = response.read(LIMIT + 1)
         if len(data) > LIMIT:
@@ -72,10 +79,9 @@ def color_png(rgb):
 
 
 def probe_body(model, rgb):
-    image = "data:image/png;base64," + base64.b64encode(color_png(rgb)).decode("ascii")
-    return {"model": model, "temperature": 0.1, "max_tokens": 1024, "stream": False,
-            "messages": [{"role": "system", "content": 'Inspect the image, not the text. Return ONLY JSON {"dominant_color":"red"} or {"dominant_color":"blue"}, according to the pixels.'},
-                         {"role": "user", "content": [{"type": "text", "text": "What is the dominant color of the image?"}, {"type": "image_url", "image_url": {"url": image}}]}]}
+    return {"model": model, "pass": "doctor_probe", "note": "Generated colour test image.", "layout": "full",
+            "images_png_b64": [base64.b64encode(color_png(rgb)).decode("ascii")],
+            "questions": {"dominant_color": PROBE_QUESTION}}
 
 
 def model_available(response, model):
@@ -86,12 +92,9 @@ def model_available(response, model):
 
 def verify_probe(response, expected):
     try:
-        choice = response["choices"][0]
-        if choice.get("finish_reason") != "stop":
-            return False
-        content = choice["message"]["content"]
-        return isinstance(content, str) and json.loads(content) == {"dominant_color": expected}
-    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        answer = response["answers"]["dominant_color"]
+        return answer["type"] == "choice" and answer["choice"] == expected and answer.get("truncated") is False
+    except (KeyError, IndexError, TypeError, AttributeError):
         return False
 
 
@@ -103,31 +106,73 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def check_model_files(root, pins=PINS):
+def _check_files(root, files, what, allowed_root=None):
     root = root.resolve()
-    model = pins["model"]
-    expected = ["format=2", f"repository={model['repository']}", f"revision={model['revision']}",
-                f"model={model['files'][0]['name']}", f"projector={model['files'][1]['name']}"]
-    provenance = (root / "SOURCE_REVISION").resolve()
-    if not provenance.is_relative_to(root) or provenance.read_text(encoding="utf-8").splitlines() != expected:
-        raise ValueError("model provenance mismatch")
-    for artifact in model["files"]:
-        path = (root / artifact["name"]).resolve()
-        if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size != artifact["size"]:
-            raise ValueError("missing, wrong-sized, or escaping model artifact")
+    allowed_root = (allowed_root or root).resolve()
+    if not files:
+        raise ValueError("no pinned %s files" % what)
+    for artifact in files:
+        relative = Path(artifact["path"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("escaping %s artifact path" % what)
+        path = (root / relative).resolve()
+        if not path.is_relative_to(allowed_root) or not path.is_file() or path.stat().st_size != artifact["size"]:
+            raise ValueError("missing, wrong-sized, or escaping %s artifact" % what)
         if sha256_file(path) != artifact["sha256"]:
-            raise ValueError("model artifact SHA256 mismatch")
+            raise ValueError("%s artifact SHA256 mismatch" % what)
 
 
-def check_runtime_archive(root, pins=PINS):
-    runtime = pins["runtime"]
-    archive = root / ".local" / "vlm-runtime" / runtime["tag"] / runtime["asset"]
-    if not archive.is_file() or sha256_file(archive) != runtime["sha256"]:
-        raise ValueError("pinned llama.cpp archive missing or SHA256 mismatch")
-    server = archive.parent / "bin" / "llama-server.exe"
-    if not server.is_file():
-        raise ValueError("pinned llama.cpp server executable missing")
-    return server
+def check_model_files(repo, pins):
+    """Base checkpoint snapshot (HF revision) and the local fine-tuned checkpoint, by size and SHA-256."""
+    model = pins["model"]
+    hf_home = repo / model["hf_home"]
+    hub = hf_home / "hub"
+    cache = hub / ("models--" + model["repository"].replace("/", "--"))
+    snap = cache / "snapshots" / model["revision"]
+    # HF uses both repository-local blobs and a shared hub/blobs content store.
+    _check_files(snap, model["files"], "base model", allowed_root=hub)
+    ft = model.get("finetuned")
+    if not ft:
+        raise ValueError("no fine-tuned checkpoint pinned")
+    _check_files(repo / ft["path"], ft["files"], "fine-tuned model")
+
+
+def runtime_python(root, pins):
+    exe = root / pins["runtime"]["env_prefix"] / ("python.exe" if os.name == "nt" else "bin/python")
+    if not exe.is_file():
+        raise ValueError("Laya runtime environment missing")
+    return exe
+
+
+RUNTIME_PROBE = (
+    "import json, importlib.metadata as m\n"
+    "out = {}\n"
+    "for p in %r:\n"
+    "    try: out[p] = m.version(p)\n"
+    "    except m.PackageNotFoundError: out[p] = None\n"
+    "try:\n"
+    "    out['laya_commit'] = json.loads(m.distribution('laya').read_text('direct_url.json') or '{}').get('vcs_info', {}).get('commit_id')\n"
+    "except Exception: out['laya_commit'] = None\n"
+    "print(json.dumps(out))\n"
+)
+
+CUDA_PROBE = ("import json, torch\n"
+              "ok = torch.cuda.is_available()\n"
+              "print(json.dumps({'cuda': ok, 'name': torch.cuda.get_device_name(0) if ok else None}))\n")
+
+
+def check_runtime(root, pins):
+    exe = runtime_python(root, pins)
+    packages = pins["runtime"]["packages"]
+    result = run_command([str(exe), "-c", RUNTIME_PROBE % (list(packages),)], timeout=120)
+    if result.returncode != 0:
+        raise ValueError("runtime probe failed")
+    found = json.loads(result.stdout.strip().splitlines()[-1])
+    if any(found.get(p) != v for p, v in packages.items()):
+        raise ValueError("runtime package versions differ from pins")
+    if found.get("laya_commit") != pins["runtime"]["laya"]["commit"]:
+        raise ValueError("laya commit differs from pin")
+    return exe
 
 
 def run_command(args, timeout=30, cwd=None):
@@ -216,7 +261,7 @@ def collect(root, binary, offline=False):
     supported = build is not None and build >= 18362
     outcome("windows_capture_os", supported, f"requires Windows 10 build 18362+; observed {platform.system()} build {build}")
     outcome("windows_x64", build is not None and platform.machine().lower() in ("amd64", "x86_64"),
-            "pinned llama.cpp Vulkan asset requires Windows x64")
+            "pinned CUDA PyTorch wheels require Windows x64")
     if build is not None:
         try:
             record("host_resources", "pass", resource_detail(root))
@@ -232,34 +277,39 @@ def collect(root, binary, offline=False):
         record("rust_toolchain", "info", "source-free candidate bundle uses its prebuilt executable; Rust is not required")
 
     try:
-        server = check_runtime_archive(root)
-        version = run_command([str(server), "--version"])
-        build_id = PINS["runtime"]["tag"][1:]
-        commit = PINS["runtime"]["commit"][:9]
-        version_text = version.stdout + version.stderr
-        outcome("runtime_asset", version.returncode == 0 and f"build {build_id}" in version_text and commit in version_text,
-                "pinned llama.cpp archive SHA256 and executable build/commit")
-        devices = run_command([str(server), "--list-devices"])
-        outcome("vulkan_device", devices.returncode == 0 and re.search(r"Vulkan\d+:", devices.stdout) is not None,
-                "Vulkan GPU visible to pinned server; performance unmeasured")
-    except (OSError, ValueError, subprocess.SubprocessError):
-        record("runtime_asset", "fail", "pinned server absent/invalid; run scripts/setup-windows.ps1")
-        record("vulkan_device", "blocked", "server unavailable")
-    try:
-        check_model_files(root / "models" / PINS["model"]["directory"])
-        record("model_files_sha256", "pass", "GGUF and vision projector match pinned sizes/SHA256 and provenance")
+        pins = load_pins()
+        alias = pins["server"]["alias"]
     except (OSError, ValueError, KeyError):
-        record("model_files_sha256", "fail", "pinned model/projector absent or invalid; run download-model.ps1")
+        pins, alias = None, "coinpoker-laya-vision"
+        record("laya_pins", "fail", "scripts/laya-pins.json missing or invalid")
+    if pins is not None:
+        try:
+            exe = check_runtime(root, pins)
+            record("runtime_asset", "pass", "Laya Python environment matches pinned packages and laya commit")
+            try:
+                cuda = run_command([str(exe), "-c", CUDA_PROBE], timeout=120)
+                info = json.loads(cuda.stdout.strip().splitlines()[-1]) if cuda.returncode == 0 else {}
+                outcome("cuda_device", info.get("cuda") is True, "CUDA GPU visible to the pinned torch build; performance unmeasured")
+            except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+                record("cuda_device", "fail", "CUDA probe failed")
+        except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError):
+            record("runtime_asset", "fail", "Laya environment absent/invalid; run scripts/setup-windows.ps1")
+            record("cuda_device", "blocked", "runtime unavailable")
+        try:
+            check_model_files(root, pins)
+            record("model_files_sha256", "pass", "base and fine-tuned Laya checkpoints match pinned sizes/SHA256")
+        except (OSError, ValueError, KeyError):
+            record("model_files_sha256", "fail", "pinned artifacts absent or invalid; inspect pins/local checkpoint without automatic redownload or retraining")
 
-    endpoint = os.environ.get("COINPOKER_VLM_ENDPOINT") or "http://127.0.0.1:18080/v1/chat/completions"
-    model = os.environ.get("COINPOKER_VLM_MODEL") or MODEL
+    endpoint = os.environ.get("COINPOKER_VLM_ENDPOINT") or DEFAULT_ENDPOINT
+    model = os.environ.get("COINPOKER_VLM_MODEL") or alias
     try:
         url = loopback_endpoint(endpoint)
         if offline:
             record("vlm_models", "blocked", "offline: no HTTP requests made")
             record("multimodal_api", "blocked", "offline: no synthetic-image requests made")
         else:
-            models_url = urllib.parse.urlunsplit((url.scheme, url.netloc, url.path.removesuffix("chat/completions") + "models", "", ""))
+            models_url = urllib.parse.urlunsplit((url.scheme, url.netloc, url.path.removesuffix("laya/predict") + "models", "", ""))
             models = request_json(models_url)
             available = model_available(models, model)
             outcome("vlm_models", available, "GET /v1/models must list the exact configured local alias")
@@ -311,8 +361,8 @@ def main():
     root = Path(__file__).resolve().parents[1]
     binary = args.binary or root / "target/release/coinpoker.exe"
     checks = collect(root, binary, args.offline)
-    report = {"format": 2, "event": "doctor", "checks": checks, "screenshots_captured": False,
-              "screenshots_saved": False, "physical_acceptance": False}
+    report = {"format": 2, "event": "doctor", "perception": "laya-vision", "checks": checks,
+              "screenshots_captured": False, "screenshots_saved": False, "physical_acceptance": False}
     print(json.dumps(report, indent=2))
     expected_offline_skips = {"vlm_models", "multimodal_api"} if args.offline else set()
     return 0 if all(c["status"] in ("pass", "info") or

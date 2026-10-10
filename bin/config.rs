@@ -9,7 +9,7 @@ pub const USAGE: &str = "Usage: coinpoker [OPTION] [CONFIGURATION]\n\n\
   --list-windows     Print application/window identity JSON lines; no pixels\n\
   --doctor           Run local installation/model/capture diagnostics\n\
   --evaluate PATH    Evaluate a version-2 local visual fixture manifest\n\
-  --ui               Rejected: no interactive feed is implemented (exit 2)\n\
+  --ui               Rejected: use the read-only browser dashboard (exit 2)\n\
   -h, --help         Print this help\n\n\
 Configuration (CLI > nonempty environment > defaults):\n\
   --exe-name NAME             COINPOKER_EXE_NAME (exact; calibrate first)\n\
@@ -18,10 +18,11 @@ Configuration (CLI > nonempty environment > defaults):\n\
   --table-title TEXT          COINPOKER_WINDOW_TITLE (calibrated substring)\n\
   --lobby-title TEXT          COINPOKER_LOBBY_TITLE (lobby veto substring)\n\
   --lobby-size WIDTHxHEIGHT   COINPOKER_LOBBY_SIZE (observed lobby size)\n\
-  --vlm-endpoint URL          COINPOKER_VLM_ENDPOINT (loopback by default)\n\
-  --vlm-model NAME            COINPOKER_VLM_MODEL (local server model name)\n\
-  --allow-remote-vlm          COINPOKER_ALLOW_REMOTE_VLM=1 (HTTPS only)\n\
-  --timeout-secs N            COINPOKER_VLM_TIMEOUT_SECS (1..120)\n\
+  --vlm-endpoint URL          COINPOKER_VLM_ENDPOINT (loopback port 18090; /v1/laya/predict)\n\
+  --vlm-model NAME            COINPOKER_VLM_MODEL (Laya server model alias)\n\
+  --laya-threshold N          COINPOKER_LAYA_THRESHOLD (0.80..0.99; only raises)\n\
+  --timeout-secs N            COINPOKER_VLM_TIMEOUT_SECS (1..120, default 5)\n\
+  --decision-budget-ms N      COINPOKER_DECISION_BUDGET_MS (500..5000, default 5000 total)\n\
   --poll-ms N                 COINPOKER_POLL_MS (50..1000)\n\
   --discovery-ms N            COINPOKER_DISCOVERY_MS (500..5000)\n\
   --retry-ms N                COINPOKER_RETRY_MS (500..30000)\n\
@@ -61,7 +62,9 @@ const FLAGS: &[(&str, &str)] = &[
     ("--lobby-size", "COINPOKER_LOBBY_SIZE"),
     ("--vlm-endpoint", "COINPOKER_VLM_ENDPOINT"),
     ("--vlm-model", "COINPOKER_VLM_MODEL"),
+    ("--laya-threshold", "COINPOKER_LAYA_THRESHOLD"),
     ("--timeout-secs", "COINPOKER_VLM_TIMEOUT_SECS"),
+    ("--decision-budget-ms", "COINPOKER_DECISION_BUDGET_MS"),
     ("--poll-ms", "COINPOKER_POLL_MS"),
     ("--discovery-ms", "COINPOKER_DISCOVERY_MS"),
     ("--retry-ms", "COINPOKER_RETRY_MS"),
@@ -83,15 +86,13 @@ pub fn parse(
     let mut overrides = HashMap::new();
     let mut args = args.into_iter();
     let mut mode = None;
-    let mut allow_remote = false;
     while let Some(arg) = args.next() {
         let next_mode = match arg.as_str() {
             "--stdin" => Some(Mode::Stdin), "--list-windows" => Some(Mode::ListWindows),
             "--doctor" => Some(Mode::Doctor),
             "--help" | "-h" => Some(Mode::Help),
             "--evaluate" => Some(Mode::Evaluate(args.next().ok_or("--evaluate requires a manifest path")?)),
-            "--ui" => return Err("--ui is unavailable: the interactive feed is not implemented; use --stdin for JSON-lines output".into()),
-            "--allow-remote-vlm" => { allow_remote = true; None },
+            "--ui" => return Err("--ui is unavailable: no native interactive UI; open the separately launched read-only dashboard at http://127.0.0.1:18090/ or use --stdin for legacy JSON-lines output".into()),
             _ => {
                 if let Some((flag, _)) = FLAGS.iter().find(|(flag, _)| *flag == arg) {
                     let value = args.next().filter(|v| !v.trim().is_empty() && !v.starts_with("--"))
@@ -167,6 +168,7 @@ pub fn parse(
         };
     }
     set!(options.vlm.timeout_secs, "--timeout-secs");
+    set!(options.runtime.decision_budget_ms, "--decision-budget-ms");
     set!(options.runtime.poll_ms, "--poll-ms");
     set!(options.runtime.discovery_ms, "--discovery-ms");
     set!(options.runtime.retry_ms, "--retry-ms");
@@ -192,13 +194,16 @@ pub fn parse(
     if !(1..=120).contains(&options.vlm.timeout_secs) {
         return Err("timeout must be 1..120 seconds".into());
     }
-    let allowed = allow_remote
-        || env("COINPOKER_ALLOW_REMOTE_VLM")
-            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-    options.vlm.allow_remote = allowed && matches!(options.mode, Mode::Capture);
-    // Offline calibration doesn't make HTTP requests. Doctor/evaluation NEVER opt in to remote screenshots.
+    if let Some(threshold) = number::<f32>(value("--laya-threshold"), "--laya-threshold")? {
+        // The global threshold can only raise per-pass thresholds (0.80 in 0.4.0).
+        if !(0.80..=0.99).contains(&threshold) {
+            return Err("--laya-threshold must be 0.80..0.99".into());
+        }
+        options.vlm.threshold = Some(threshold);
+    }
+    // Offline calibration doesn't make HTTP requests. Screenshots never leave loopback.
     if !matches!(options.mode, Mode::ListWindows) {
-        validate_vlm_endpoint(&options.vlm.endpoint, options.vlm.allow_remote)?;
+        validate_vlm_endpoint(&options.vlm.endpoint)?;
     }
     Ok(options)
 }
@@ -232,34 +237,12 @@ fn parse_hwnd(value: &str) -> Result<usize, String> {
     })
 }
 
-pub fn validate_vlm_endpoint(endpoint: &str, remote_allowed: bool) -> Result<(), String> {
-    let parsed = url::Url::parse(endpoint).map_err(|_| "invalid COINPOKER_VLM_ENDPOINT")?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("VLM endpoint must use HTTP or HTTPS".into());
-    }
-    if !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.fragment().is_some()
-        || parsed.query().is_some()
-    {
-        return Err(
-            "VLM endpoint must not contain credentials, query strings, or fragments".into(),
-        );
-    }
-    let loopback = match parsed.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => return Err("VLM endpoint must include a host".into()),
-    };
-    if loopback {
-        return Ok(());
-    }
-    if !remote_allowed {
-        return Err("refusing non-loopback COINPOKER_VLM_ENDPOINT; capture requires COINPOKER_ALLOW_REMOTE_VLM=1 after reviewing privacy; doctor/evaluation are local-only".into());
-    }
-    if parsed.scheme() != "https" {
-        return Err("remote VLM endpoints must use HTTPS".into());
+/// Product endpoint policy; library transports retain arbitrary loopback test ports.
+pub fn validate_vlm_endpoint(endpoint: &str) -> Result<(), String> {
+    let parsed = ingest::vlm::validate_endpoint(endpoint)
+        .map_err(|error| format!("refusing COINPOKER_VLM_ENDPOINT: {error}"))?;
+    if parsed.port() != Some(18090) || parsed.path() != "/v1/laya/predict" {
+        return Err("refusing COINPOKER_VLM_ENDPOINT: use the canonical loopback port 18090 and /v1/laya/predict (default http://127.0.0.1:18090/v1/laya/predict); alternate or retired product ports are not supported".into());
     }
     Ok(())
 }
@@ -334,39 +317,128 @@ mod tests {
         assert!(parse(["--stdin".into()], |_| Some("bad value".into())).is_ok());
     }
     #[test]
-    fn diagnostics_cannot_opt_in_to_remote_data() {
-        assert!(parse(
-            [
-                "--doctor",
-                "--allow-remote-vlm",
-                "--vlm-endpoint",
-                "https://example.com/v1/chat/completions"
-            ]
-            .map(String::from),
-            |_| None
-        )
-        .is_err());
+    fn laya_defaults_apply_without_configuration() {
+        let options = parse(std::iter::empty(), |_| None).unwrap();
+        assert_eq!(options.mode, Mode::Capture);
+        assert_eq!(options.vlm, VlmConfig::default());
+        assert_eq!(
+            options.vlm.endpoint,
+            "http://127.0.0.1:18090/v1/laya/predict"
+        );
+        assert_eq!(options.vlm.model, "coinpoker-laya-vision");
+        assert_eq!(options.vlm.timeout_secs, 5);
+        assert_eq!(options.runtime.decision_budget_ms, 5_000);
+        assert_eq!(options.runtime.max_frame_age_ms, 8_000);
+        assert_eq!(options.vlm.threshold, None);
+        assert!(USAGE.contains("--laya-threshold"));
+        assert!(!USAGE.contains("allow-remote"));
     }
 
     #[test]
-    fn capture_remote_opt_in_reaches_backend_config() {
-        let endpoint = "https://example.com/v1/chat/completions";
-        assert!(parse(["--vlm-endpoint", endpoint].map(String::from), |_| None).is_err());
-        let options = parse(
-            ["--allow-remote-vlm", "--vlm-endpoint", endpoint].map(String::from),
-            |_| None,
-        )
-        .expect("explicit HTTPS opt-in");
-        assert!(options.vlm.allow_remote);
+    fn laya_threshold_is_bounded_and_overridable_by_cli() {
+        let options = parse(["--laya-threshold", "0.9"].map(String::from), |_| None).unwrap();
+        assert_eq!(options.vlm.threshold, Some(0.9));
+        let options = parse(["--laya-threshold", "0.85"].map(String::from), |key| {
+            (key == "COINPOKER_LAYA_THRESHOLD").then(|| "0.95".into())
+        })
+        .unwrap();
+        assert_eq!(options.vlm.threshold, Some(0.85));
+        let from_env = parse(std::iter::empty(), |key| {
+            (key == "COINPOKER_LAYA_THRESHOLD").then(|| "0.99".into())
+        })
+        .unwrap();
+        assert_eq!(from_env.vlm.threshold, Some(0.99));
+        for bad in ["0.79", "0.995", "1", "0", "NaN", "inf", "-0.9", "high"] {
+            assert!(
+                parse(["--laya-threshold", bad].map(String::from), |_| None).is_err(),
+                "{bad}"
+            );
+        }
+        for bad in ["0", "121"] {
+            assert!(parse(["--timeout-secs", bad].map(String::from), |_| None).is_err());
+        }
+    }
+
+    #[test]
+    fn removed_remote_opt_in_is_a_usage_error_and_remote_is_always_refused() {
+        let error = parse(["--allow-remote-vlm".to_string()], |_| None).unwrap_err();
+        assert!(error.contains("unknown option"), "{error}");
+        for mode in [None, Some("--doctor"), Some("--evaluate")] {
+            let mut args: Vec<String> = mode.into_iter().map(String::from).collect();
+            if args.first().is_some_and(|m| m == "--evaluate") {
+                args.push("manifest.json".into());
+            }
+            args.extend(
+                ["--vlm-endpoint", "https://example.com/v1/laya/predict"].map(String::from),
+            );
+            assert!(
+                parse(args, |key| {
+                    (key == "COINPOKER_ALLOW_REMOTE_VLM").then(|| "1".into())
+                })
+                .is_err(),
+                "{mode:?}"
+            );
+        }
+        assert!(parse(std::iter::empty(), |key| {
+            (key == "COINPOKER_VLM_ENDPOINT").then(|| "http://192.168.1.2/v1/laya/predict".into())
+        })
+        .is_err());
+        // Offline window listing makes no HTTP requests and skips the endpoint check.
         assert!(parse(
-            [
-                "--allow-remote-vlm",
-                "--vlm-endpoint",
-                "http://example.com/v1/chat/completions"
-            ]
-            .map(String::from),
+            ["--list-windows", "--vlm-endpoint", "https://example.com/"].map(String::from),
             |_| None
         )
-        .is_err());
+        .is_ok());
+    }
+
+    #[test]
+    fn total_decision_budget_is_independent_bounded_and_cli_overridable() {
+        let options = parse(
+            [
+                "--decision-budget-ms",
+                "3000",
+                "--timeout-secs",
+                "120",
+                "--max-frame-age-ms",
+                "8000",
+            ]
+            .map(String::from),
+            |key| (key == "COINPOKER_DECISION_BUDGET_MS").then(|| "4000".into()),
+        )
+        .unwrap();
+        assert_eq!(options.runtime.decision_budget_ms, 3_000);
+        assert_eq!(options.vlm.timeout_secs, 120);
+        assert_eq!(options.runtime.max_frame_age_ms, 8_000);
+        let from_env = parse(std::iter::empty(), |key| {
+            (key == "COINPOKER_DECISION_BUDGET_MS").then(|| "2500".into())
+        })
+        .unwrap();
+        assert_eq!(from_env.runtime.decision_budget_ms, 2_500);
+        for value in ["0", "499", "5001", "8000", "NaN"] {
+            assert!(parse(["--decision-budget-ms", value].map(String::from), |_| None).is_err());
+        }
+    }
+
+    #[test]
+    fn product_cli_rejects_retired_alternate_ports_and_wrong_routes_before_io() {
+        for endpoint in [
+            "http://127.0.0.1:8080/v1/laya/predict",
+            "http://localhost:18080/v1/laya/predict",
+            "http://127.0.0.1:0/v1/laya/predict",
+            "http://127.0.0.1/v1/laya/predict",
+            "http://127.0.0.1:18090/v1/chat/completions",
+        ] {
+            let error = validate_vlm_endpoint(endpoint).unwrap_err();
+            assert!(error.contains("18090"), "{error}");
+            assert!(parse(
+                ["--doctor", "--vlm-endpoint", endpoint].map(String::from),
+                |_| None
+            )
+            .is_err());
+            assert!(parse(std::iter::empty(), |key| {
+                (key == "COINPOKER_VLM_ENDPOINT").then(|| endpoint.into())
+            })
+            .is_err());
+        }
     }
 }
