@@ -976,3 +976,192 @@ statements in these chronological addenda are historical, superseded by this
 primary-source check. The local command logger's console encoding was fixed
 after a BOM in old Git history caused a preliminary log-print failure; the full
 history was then rechecked successfully with a separate retained receipt.
+
+### Addendum 12 Continuation: Approved B and NLH Correction
+
+B was explicitly approved via the question tool after push3d7a1d5. Goal resumed
+at `2026-10-10T14:26:32Z`; initial tracked worktree was clean. At `15:03:16Z`
+the user explicitly removed practice/lobby/cash title-discrimination requirements
+and selected CoinPoker windows beginning NLH plus digits. The built-in rule now
+uses `^NLH\s*[0-9]+`, positive actual bounds/visibility and exactly one match.
+Missing private profile is allowed; no confirmation is fabricated. PID/HWND key
+ignores role, dimensions and title suffix. Actual normalized capture geometry
+scales to window size. Lobby image stays private/reference, never seated data.
+
+Implemented native recorder: new UTC-practice directory only, no overwrite or
+delete, synced PNG before append-only synced SHA-256 manifest acknowledgement,
+opaque provenance/actual source UTC and capture-start monotonic time, null unknown
+generation. Defaults7200frames/1GiB/500ms; hard20000/2GiB/250..60000ms. Complete
+means eligible sampled prefix, not all frames. Cap/I/O failure keeps evidence,
+latches incomplete and does not restart recording. Browser gets counters only.
+Current-health snapshots feed observer gaps without guessing seats/actions or
+promoting unvalidated recognition; role changes keep table/session/history.
+
+Read-only confidence audit found a dormant native-floor gap below fitted it1
+thresholds. Acceptance report `calibration.json` remains byte-identical and is
+now separately pinned: size2297, SHA256
+`fb58984f894a6aeabeaac9de7c06e33e796a75752fc13423d342ad7332c626e7`.
+It is not the temperature-artifact hash. Server-generated per-pass floors and
+native f64 comparisons enforce max(vendor,fitted,override), p0.995/board1.0,
+both noul polarities/no_card; .99999999 cannot round into acceptance. No fit,
+dataset, weight, calibrated:false, R17, quality or advice promotion was changed.
+
+Actual UTC records, all 2026-10-10, in `.local/laya/train/checkpoint-b-20261010/`:
+
+| Check | UTC start..end | Result |
+| --- | --- | --- |
+| Corrected OS inspection | `14:30:44.979914Z`..`14:30:48.279923Z` | Existing solePID24372, no duplicate model. Initial quoted-shell failure retained. |
+| Listing under NLH rule | `15:09:15.867776Z`..`15:09:17.048402Z` | Metadata only; summary at15:10:13 found0 eligibleNLHwindows. |
+| Current-source history | `15:17:00.462432Z`..`15:17:13.589788Z` | 19 tests pass; earlier duplicate capture-reference test failure retained/fixed. |
+| Native build | `15:21:08.585227Z`..`15:21:15.035507Z` | Exit0, no capture/model startup. |
+| Existing artifacts verify | `15:22:57.022590Z`..`15:22:59.660258Z` | Exit0, no download/model load. |
+| Full Rust suite | `15:24:33.951977Z`..`15:25:33.029272Z` | 425 passed, one ignored, exit0. |
+| Full Python suite | `15:41:35.521017Z`..`15:41:41.484751Z` | 159 passed, exit0. |
+| Rust format/whitespace | `15:41:35Z`..`15:41:36Z` | Checks exit0. |
+| Owned old service stop | `15:44:47.172034Z`..`15:44:50.247996Z` | Identity checked, PID24372 stopped, port-free verified, exit0. |
+| Existing launcher start | `15:45:14.076490Z` | Persistent service, not finished; no end timestamp invented. |
+| Refreshed ready state | `15:47:59.344827Z`..`15:47:59.560382Z` | it1 ready/floors loaded, qualityFailed, idle/blocked, zero recordings. Earlier503 during async load retained. |
+| Replacement OS/model meta | `15:49:06Z`..`15:49:10Z` | OnlyPID67552 on18090; no secondmodel. |
+| Desktop UI final | `15:59:11.054Z`..`15:59:11.061Z` | Eight actual-helper checks pass at1366x900. |
+| Exact400px UI final | `16:00:08.252Z`..`16:00:08.258Z` | Eight actual-helper checks pass at400x844. |
+
+Focused synthetic recorder/CLI tests15, revised NLH selector tests36, native
+floor tests40 and supervisor/server tests88 also pass with separate receipts.
+Clippy is not claimed clean: large LiveEvent variant remains; equivalent nested-
+if and recorder fixture-array cleanups remove other warnings. Browser no JS
+errors; inspected traffic read-only local state, no Reference or external fetch.
+Initial lazy-Reference assertion failed before opening its tab; Chrome resize
+minimum yielded500px, so final400px uses device-metrics emulation. Failed/setup
+attempts retained, not counted as passes. Page now distinguishes blocked target
+from transport disconnection using one compact NLH waiting message.
+
+**Blocked physical verification:** no eligible visible NLH-number game window is
+running. The refreshed automatic service waits safely; actual frame/recording
+counts remain0 and readiness UI_READY, not COLLECTOR_READY/ADVICE_READY. Real
+manifest/hash verification, observing/seated recognition and warm capture-to-
+Monitor p50/p95 are unmeasured. No C/D/F human session, newdataset/Etraining,
+real-money acceptance, newPS1 source, release/workflow edit, upload or Bcommit.
+Sixmax/thinlobby/cursor/localweights/packaging/currencyglyph limits remain;
+template matching remains a user option. User deletesrootlobby image, notagent.
+Goal execution forbids questions: report blocked and stop before any C approval.
+
+### Addendum 12 Continuation: Confirmed Actual Window and Real B Recording
+
+User reported an observing table `2026-10-10T16:52:31Z`. Metadata plus desktop
+inspection showed that logo/NLH/number is drawn inside a game window whose OS
+title is `CoinPoker`. The user explicitly confirmed using that actual window
+and beginning B checks via question tool. Private profile now selects exact
+`^CoinPoker$` plus executable. Default NLH remains, no unconfirmed lobby fallback,
+no fixed resolution, no PID/HWND persisted. Calibration means window identity,
+not practice/cash proof or perception-quality approval. Scope is user-declared.
+
+Actual UTC receipts under `.local/laya/train/checkpoint-b-20261010/`:
+
+| Check | UTC start..end, 2026-10-10 | Actual result |
+| --- | --- | --- |
+| Confirmed selector tests | `16:58:21.448655Z`..`16:58:23.598577Z` |38 passes; exact/default isolation, confirmation, ambiguity and resizing. |
+| Current measured selector | `16:58:21.466229Z`..`16:58:22.069962Z` |Unique900x686 game-window match. |
+| Controlled old-service stop | `16:58:43.721650Z`..`16:58:48.473539Z` |Only owned model stopped, port free. |
+| Launcher tracking retry |OS inspection `16:59:16.008483Z`..`16:59:19.581946Z`|First persistent tracking failed; no model/listener remained before retry. Session-tracked helper now runs, not a duplicate. No fabricated end/exit for killed tracker. |
+| Full Python suite | `16:59:57.152759Z`..`17:00:05.265334Z` |161 passes, exit0. |
+| First live-state receipt | `16:59:57.389602Z`..`16:59:57.709320Z` |Active900x686,3 acknowledged PNGs, model ready, no accepted observation/advice. |
+| Initial hash audit | `17:02:00.141523Z`..`17:02:00.730719Z` |199/199 verified,140818142bytes. |
+| Actual400px UI | `17:02:51.764Z`..`17:02:51.772Z` |8 checks pass; concise uncertainty, recording counters, no fake readings/overflow. No console errors. |
+| Owned processes | `17:02:52.853793Z`..`17:02:55.805483Z` |One it1 model, one passive native feed. |
+| User replacement report | `17:03:46Z` |Automatic new-source attachment, no model reload/manual reconnect. |
+| Replacement fresh state | `17:04:29.332044Z`..`17:04:29.671541Z` |Active879x670,80 recordings; same replacement stream/history. |
+| Original final audit | `17:04:52.431212Z`..`17:04:53.357519Z` |322/322 hashes correct,223457967bytes,900x686. |
+| Replacement prefix audit | `17:04:52.409193Z`..`17:04:52.877572Z` |118/118 hashes correct,76558576bytes;21 at800x613 and97 at879x670 in one session. |
+| Transition audit | `17:04:52.543728Z`..`17:04:52.718133Z` |9/9 correct,2984581bytes,1280x778; unlabelled transition evidence. |
+
+First original capture16:59:55.804Z; last17:03:17.015Z. Source rotation uses new
+private sessions, preserving all old images/ledgers. Resize retained source/
+session and actual dimensions changed safely. Replacement's first frame was a
+loading window, followed by the actual table; integrity checks are not labels.
+No raw names, accounts or captured betting values are reproduced in public docs.
+
+The no-window blocker is resolved; perception acceptance is not. Audited ledgers
+contain zero admitted observations, with screen-not-accepted and changed/obsolete
+source rejections. Monitor correctly shows one Reading uncertain line, not false
+Observing/cards/pot/odds or betting counts. History is partial/unvalidated gaps.
+Health-only p50/p95(first141samples)=109.68/150.86ms; replacement48samples=
+108.66/152.27ms. These exclude inference/browser and cannot pass full reading
+capture-to-Monitor latency. No fitted floor, GateF failure, calibrated:false,
+humanUNVERIFIED or advice/metric gate was changed. All images remain ignored local.
+
+Real B recording/rotation checks are complete. No timed C was approved/counted;
+user setup/rotation is not permission to seat, play, run C/D/F, label/train E,
+upload captures or commit/push B. Explain recognition failure at the next explicit
+checkpoint. Root lobby image remains for the user to delete, not the agent.
+
+### Addendum 12 continuation: perception repair stage 1 (2026-10-10 UTC)
+
+The user now requests implementation, subject to stopping after diagnosis/design
+and before production changes. That first gate is reached, not bypassed. Existing
+checkpoint B code and earlier artifacts remain; no production extraction, profile,
+model, dataset, launcher, release/workflow source was changed in stage 1. Private
+harnesses/receipts: `.local/laya/train/perception-diagnosis-20261010T1751Z/`.
+Full design, sources, targets and later gates are at the top of the active plan.
+
+Replay ran `2026-10-10T17:56:12.120597Z` to `17:56:28.224808Z`, exit 0, empty
+stderr: 36 sequential existing-helper requests across three genuine table sizes
+and one negative lobby frame. PID 87008 remained sole 18090 it1 listener; no model
+load/restart, new live session, training, parallel GPU instance, upload, commit
+or push. Initial nested-PowerShell quoting preflight failed (exit 1), retained;
+corrected listener/process checks exited 0. CPU inventory and it1 audit exited 0.
+
+Concrete blockers: unseated controls 0.9808 <0.995 at 900x686; phase
+0.8725 <0.995 at 800x613; not-seated classification 0.9925 <0.995 at 879x670.
+The latter also confidently calls five board cards turn at 0.9976. All 30 table
+board answers remain below 1.0: zero accepted identities, failure. Pot and 13/14
+visibly occupied stack examples meet existing glyph floors/syntax; one stack
+glyph fails. These are diagnostic candidates, not human precision/coverage or
+Monitor acceptance. Four empty stack crops remain unknown, not zero/open-seat.
+
+Native skips trained p5 stacks, discards players, lacks wager/badge/button/acting
+passes; board failure prevents even trying pot. Full-state consensus precedes
+dashboard field flags, and live history receives unapproved gap-only snapshots.
+Observing-empty preflop collides with the actionable inter-hand guard. No original
+per-question traces exist: replay is not claimed as original live inference.
+Audit-time helper capture was unavailable. Selected table batteries took
+4696.0/4624.9/4735.2 ms including encoding, not capture-to-Monitor p95; capture,
+queue, assembly, publish/render timing remains null/unmeasured.
+
+Proposed typed `PartialObservation` is separate from unchanged actionable
+`GameState`/R17: per-capability calibration, physical six-slot mapping, frozen
+hand roster/positions, occupant epochs, distinct stack/wager/live credit/street
+contribution/pot, source/field expiry and observed-versus-inferred gaps. Cache
+never disguises source age. New untrained passes are shadow-only. Proposed
+72-frame human checklist is private/all pending, not a new labelled dataset.
+
+Gate F remains historical FAIL, human verification UNVERIFIED, suggestions OFF,
+six-max visual scope only. Stage 2 requires approval; live observing, seated
+collection, human verification and GPU training have separate gates. CoinPoker's
+published tools policy prohibits gameplay-connected tracking/RTA; no practice/
+observing exemption is established. Resolve that separate live-use risk before
+a new live acceptance session.
+
+Final private checks ended `2026-10-10T18:06:32.399907Z` (diagnostic/checklist,
+exit 0) and `18:06:33.410952Z` (pinned packages/files, exit 0), both empty stderr.
+Seventy-two checklist hashes and agent amount comparisons checked, still no
+human approval, live observation or advice. `git diff --check` passed; existing
+production tests were not rerun or counted as new extraction validation.
+
+### Addendum 12 continuation: approved stage2 outcome (2026-10-10)
+
+Independent typed partial fields, six stacks, disabled-by-default wager/seat-scene
+paths, exact latest-region witnesses, original leases and strict-sibling veto are
+implemented. Anonymous hand-position/occupant/betting helpers and private bounded
+diagnostics are tested; unsupported or contextless data staysunknown, no action
+guesses/quality promotion. Exactly Monitor/Reference and R17/suggestionsOFF remain.
+
+Receipts `.local/laya/train/perception-stage2-20261010T1810Z/`: workspace506pass/
+1liveignored20:04:51.413426Z–20:05:21.849401Z exit0; Python/Node207pass
+19:54:44.199857Z–19:54:51.521075Z exit0; strictclippy20:24:50.949364Z–
+20:24:53.044757Z exit0. Earlier failures/corrections retained. Saved-answer
+regression retains pot+3/5/5stacks withstrictnull; no new model/live quality claim.
+NEWprivateobserving-v2-staging index has72hash-checked existingframes, all labels/
+splits pending, training/calibration/activation disabled. ExistingB/it1 preserved;
+helper not restarted, binaries isolated, noGPU/newcapture/gameinput/uploads/commits.
+Stop afterstage2. Real quality, warmtotalp95, actualhand/convention and human/data/
+provider-policy gates remain; GateF FAIL, humanUNVERIFIED, no full live acceptance.

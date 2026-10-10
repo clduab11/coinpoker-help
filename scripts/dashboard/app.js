@@ -67,6 +67,42 @@
         "title": "Do You Know How To Play Pocket Aces? Quiz Answers and Explanations",
         "url": "https://upswingpoker.com/pocket-aces-quiz-answers/",
         "publisher": "Upswing Poker"
+      },
+      {
+        "id": "pokerstars-position",
+        "title": "Position and Action Order",
+        "url": "https://www.pokerstars.com/poker/learn/lesson/position/",
+        "publisher": "PokerStars Learn"
+      },
+      {
+        "id": "poker888-position-terms",
+        "title": "Position: Terms and Lojack Alias",
+        "url": "https://www.888poker.com/magazine/poker-terms/position",
+        "publisher": "888poker"
+      },
+      {
+        "id": "poker888-position-names",
+        "title": "Poker Position Names",
+        "url": "https://www.888poker.com/magazine/strategy/poker-position-names",
+        "publisher": "888poker"
+      },
+      {
+        "id": "pokernews-position",
+        "title": "How to Learn Poker: Position Groups",
+        "url": "https://www.pokernews.com/strategy/wpt-global-how-to-learn-poker-from-scratch-43778.htm",
+        "publisher": "PokerNews"
+      },
+      {
+        "id": "tda-2026",
+        "title": "Poker TDA Rules 2026 v1.0: Button and Heads-Up",
+        "url": "https://www.pokertda.com/view-poker-tda-rules/",
+        "publisher": "Poker TDA (tournament rules, not client policy)"
+      },
+      {
+        "id": "roberts-button",
+        "title": "Robert's Rules of Poker v11: Button and Blinds",
+        "url": "https://homepokertourney.org/roberts-rules-of-poker.htm",
+        "publisher": "Home Poker Tourney (third-party reproduction)"
       }
     ],
     "sections": [
@@ -173,30 +209,49 @@
       },
       {
         "id": "six-max-positions",
-        "title": "Six-Max Positions",
-        "scope": "Six occupied seats, no straddle; seat labels depend on the button, not physical seat numbers.",
+        "title": "Positions, Aliases and Action Order",
+        "scope": "Monitor geometry is six-max only. Nine-handed names below are reference only. Standard dealt-in rosters, no straddle; physical slots are not poker positions.",
         "paragraphs": [
-          "This bundle labels the first non-blind UTG; some six-max material calls that same seat LJ (lojack). HJ is the next seat, not a second name for UTG in this six-seat convention. With fewer occupied seats, count remaining players and relabel; do not apply six-seat ranges unchanged.",
-          "Preflop action begins left of the BB. After the flop it begins with the first remaining player left of the button. The BTN therefore acts last postflop when still in the hand. RFI means raising first in after all earlier players folded, with only the blinds posted."
+          "At six-max, UTG and LJ (lojack) name the same first non-blind position in this bundle; HJ (hijack) is the next seat. CO is cutoff, BTN is button, SB is small blind and BB is big blind. Our group convention is UTG/LJ early, HJ middle, CO/BTN late, with blinds separate. Educators differ on grouping HJ; exact names and action order are more precise than early/middle/late.",
+          "Preflop opening action starts left of the BB and moves clockwise relative to the table. Postflop it starts with the first remaining player left of the button; BTN acts last when still in the hand. The tables give first-round order with everyone participating, not an assurance that a folded or all-in player acts. Later reopened betting follows the applicable rules.",
+          "Positions belong to the original dealt-in roster for that hand. Folds do not relabel survivors, and a mid-hand arrival does not become a dealt-in participant. A new shorter-handed deal needs its own validated roster/button/blinds. RFI means raising first in after all earlier players folded, with only blinds posted."
         ],
         "bullets": [
-          "BB has no raise-first-in opportunity in an unopened pot: if all five other players fold, the hand is over. Raising over an SB limp is an isolation raise, not RFI; facing an SB raise is defense, not RFI."
+          "A hand dealt heads-up uses BTN = SB: button/small blind acts first preflop and last postflop; BB acts last preflop and first postflop. Two survivors of a multiway hand retain their original positions; they are not automatically a new heads-up deal.",
+          "Empty seats are not players, but a dead-button rule can place the button at an empty seat. Two occupied screen slots and a dealer marker do not prove a heads-up roster or a moving-button policy. Missing or ambiguous roster/button/blind evidence leaves positions unknown.",
+          "Poker TDA 2026 rules 34 and 36-C establish tournament dead-button and heads-up conventions; Robert's Rules describes button/blind alternatives. Neither proves CoinPoker cash/practice policy or validates these screenshots.",
+          "BB has no raise-first-in opportunity in an unopened pot: if all other players fold, the hand is over. Raising over an SB limp is an isolation raise, not RFI; facing an SB raise is defense, not RFI."
         ],
         "tables": [
           {
-            "caption": "Six-seat preflop order and postflop context",
-            "columns": ["Position", "Preflop order", "Context"],
+            "caption": "Six-max dealt roster: this bundle's grouping and actual opening order",
+            "columns": ["Position / alias", "Group", "Preflop order", "Postflop order"],
             "rows": [
-              ["UTG", 1, "First non-blind; LJ in an alternate convention; five players behind."],
-              ["HJ", 2, "Hijack; distinct from UTG; four players behind."],
-              ["CO", 3, "Cutoff; immediately before BTN."],
-              ["BTN", 4, "Button; last postflop when in the hand."],
-              ["SB", 5, "Small blind; first postflop when in the hand."],
-              ["BB", 6, "Big blind; last preflop before any reopened action; no unopened-pot RFI."]
+              ["UTG / LJ", "Early", 1, 3],
+              ["HJ", "Middle", 2, 4],
+              ["CO", "Late", 3, 5],
+              ["BTN", "Late", 4, 6],
+              ["SB", "Blind", 5, 1],
+              ["BB", "Blind", 6, 2]
+            ]
+          },
+          {
+            "caption": "Nine-handed reference only: not nine-seat visual support",
+            "columns": ["Position", "Group", "Preflop order", "Postflop order"],
+            "rows": [
+              ["UTG", "Early", 1, 3],
+              ["UTG+1", "Early", 2, 4],
+              ["UTG+2", "Early", 3, 5],
+              ["LJ", "Middle", 4, 6],
+              ["HJ", "Middle", 5, 7],
+              ["CO", "Late", 6, 8],
+              ["BTN", "Late", 7, 9],
+              ["SB", "Blind", 8, 1],
+              ["BB", "Blind", 9, 2]
             ]
           }
         ],
-        "source_ids": ["upswing-six-max", "upswing-bet-numbering"]
+        "source_ids": ["pokerstars-position", "poker888-position-terms", "poker888-position-names", "pokernews-position", "tda-2026", "roberts-button", "upswing-six-max"]
       },
       {
         "id": "opening-examples",
@@ -315,8 +370,9 @@
   const ROLE_NAMES = { observing: "Observing", seated_waiting: "Seated / waiting", your_turn: "Your turn", uncertain: "Uncertain" };
   const ROLE_MESSAGES = { observing: "Watching the table", seated_waiting: "Waiting for your turn", your_turn: "Suggestions off", uncertain: "Reading uncertain" };
   const PHASE_NAMES = { preflop: "Preflop", flop: "Flop", turn: "Turn", river: "River", showdown: "Showdown", lobby: "Lobby", unseated: "Unseated", waiting: "Waiting", unknown: "Unknown" };
+  const SEAT_LOCATIONS = ["Top", "Upper right", "Lower right", "Bottom", "Lower left", "Upper left"];
   const MODEL_STATES = ["disabled", "loading", "ready", "failed"];
-  const CAPTURE_STATES = ["idle", "starting", "active", "unavailable", "disconnected"];
+  const CAPTURE_STATES = ["idle", "starting", "active", "unavailable", "disconnected", "blocked"];
   const SUITS = {
     s: { name: "spades", symbol: 0x2660, red: false },
     h: { name: "hearts", symbol: 0x2665, red: true },
@@ -482,9 +538,6 @@
         wagers.push({ seat: entry.seat, amount: integer(entry.amount) ? entry.amount : null });
       }
     }
-    const metrics = record(value.metrics) ? value.metrics : {};
-    const odds = metrics.pot_odds;
-    const draw = metrics.draw;
     return {
       generation: integer(value.generation) ? value.generation : null,
       epoch: integer(value.epoch) ? value.epoch : null,
@@ -494,14 +547,68 @@
       phase, role, heroSeated, actionRequired,
       actingSeat: seatNumber(value.acting_seat) ? value.acting_seat : null,
       hero: heroSeated === true ? hero : [], board, amounts, wagers, controls: labels,
-      metrics: {
-        rank: safeLabel(metrics.hand_rank, null, 120),
-        odds: record(odds) && (odds.seat === null || seatNumber(odds.seat)) && percentage(odds.required_equity_pct) &&
-          (role !== "observing" || seatNumber(value.acting_seat) && odds.seat === value.acting_seat) ? { seat: odds.seat, pct: odds.required_equity_pct } : null,
-        draw: record(draw) && integer(draw.outs) && draw.outs <= 52 && percentage(draw.next_card_pct) && percentage(draw.by_river_pct) ? { outs: draw.outs, next: draw.next_card_pct, river: draw.by_river_pct } : null,
-        equity: percentage(metrics.equity_pct) ? metrics.equity_pct : null
-      },
+      seats: SEAT_LOCATIONS.map((_, index) => ({ seat: index + 1, displayed_stack: null,
+        visible_wager: wagers.find((entry) => entry.seat === index + 1)?.amount ?? null, street_contribution: null })),
+      metrics: { rank: null, odds: null, draw: null, equity: null },
+      partial: false,
       experimental: value.experimental === true
+    };
+  }
+
+  function normalizePartialObservation(value) {
+    if (!record(value) || value.quality_approved !== false || value.experimental !== true ||
+        !Array.isArray(value.board_slots) || value.board_slots.length !== 5 ||
+        !Array.isArray(value.seats) || value.seats.length !== 6) return null;
+    const seats = new Map();
+    for (const entry of value.seats) {
+      if (!record(entry) || !seatNumber(entry.seat) || seats.has(entry.seat)) return null;
+      // Only the server's per-field projection can qualify a wager; no capability upgrade here.
+      const sceneFields = ["occupied", "status", "badge", "dealer", "small_blind", "big_blind", "acting"];
+      const verifiedScene = Array.isArray(entry.scene_fields) && entry.scene_fields.length <= 7 ?
+        new Set(entry.scene_fields.filter((field) => sceneFields.includes(field))) : new Set();
+      const scene = Object.fromEntries(sceneFields.map((field) => [field, null]));
+      for (const field of ["occupied", "dealer", "small_blind", "big_blind", "acting"]) {
+        if (verifiedScene.has(field) && typeof entry[field] === "boolean") scene[field] = entry[field];
+      }
+      if (verifiedScene.has("status") && ["active", "folded", "all_in", "sitting_out"].includes(entry.status)) scene.status = entry.status;
+      if (verifiedScene.has("badge") && ["none", "fold", "check", "call", "bet", "raise", "all_in", "small_blind", "big_blind"].includes(entry.badge)) scene.badge = entry.badge;
+      seats.set(entry.seat, { seat: entry.seat, displayed_stack: integer(entry.displayed_stack) ? entry.displayed_stack : null,
+        visible_wager: entry.visible_wager_status === "accepted" && integer(entry.visible_wager) ? entry.visible_wager : null,
+        street_contribution: null, ...scene });
+    }
+    const board = value.board_slots.map(normalizeCard);
+    const seen = new Set();
+    const duplicates = new Set();
+    for (const card of board.filter(Boolean)) {
+      const key = card.rank + card.suit;
+      if (seen.has(key)) duplicates.add(key);
+      seen.add(key);
+    }
+    for (let i = 0; i < board.length; i += 1) if (board[i] && duplicates.has(board[i].rank + board[i].suit)) board[i] = null;
+    let boardCount = [0, 3, 4, 5].includes(value.board_count) ? value.board_count : null;
+    let phase = allowed(value.game_phase, ["preflop", "flop", "turn", "river", "showdown"], "unknown");
+    const expected = { preflop: 0, flop: 3, turn: 4, river: 5, showdown: 5 };
+    if (phase !== "unknown" && (boardCount !== null && boardCount !== expected[phase] || board.slice(expected[phase]).some(Boolean)) ||
+        boardCount !== null && board.slice(boardCount).some(Boolean)) {
+      phase = "unknown";
+      boardCount = null;
+      board.fill(null);
+    }
+    const seated = typeof value.hero_seated === "boolean" ? value.hero_seated : null;
+    const role = value.role === "observing" && seated === false ? "observing" : "uncertain";
+    return {
+      generation: integer(value.generation) ? value.generation : null,
+      epoch: integer(value.epoch) ? value.epoch : null,
+      expires: integer(value.expires_at_unix_ms) ? value.expires_at_unix_ms : null,
+      remaining: integer(value.remaining_ms) ? value.remaining_ms : null,
+      captured: integer(value.captured_at_unix_ms) && value.captured_at_unix_ms > 0 ? value.captured_at_unix_ms : null,
+      phase, role, heroSeated: seated, actionRequired: null,
+      actingSeat: [...seats.values()].filter((entry) => entry.acting === true).length === 1 ?
+        [...seats.values()].find((entry) => entry.acting === true).seat : null,
+      hero: [], board, boardCount, amounts: { pot_size: integer(value.pot_size) ? value.pot_size : null,
+        to_call: null, acting_to_call: null, hero_chips: null, min_raise_to: null, max_raise_to: null },
+      seats: SEAT_LOCATIONS.map((_, index) => seats.get(index + 1)), wagers: [], controls: new Map(),
+      metrics: { rank: null, odds: null, draw: null, equity: null }, partial: true, experimental: true
     };
   }
 
@@ -548,7 +655,7 @@
         state: capture.state, fresh: capture.fresh_capture,
         heartbeat: integer(capture.last_heartbeat_unix_ms) && capture.last_heartbeat_unix_ms > 0 ? capture.last_heartbeat_unix_ms : null
       },
-      observation: normalizeObservation(value.observation),
+      observation: value.partial_observation != null ? normalizePartialObservation(value.partial_observation) : normalizeObservation(value.observation),
       history: normalizeHistory(value.history)
     };
   }
@@ -602,7 +709,7 @@
     node("role-status").hidden = role === "uncertain";
     text("action-move", ROLE_MESSAGES[role]);
     text("action-amount", "-");
-    node("action-amount-wrap").hidden = role === "uncertain";
+    node("action-amount-wrap").hidden = true;
     text("action-reason", role === "observing" ? "Readings and history continue while you observe." :
       role === "seated_waiting" ? "Readings and history continue between turns." : "Suggestions stay off until seated readings are validated.");
     node("action-reason").hidden = role === "uncertain";
@@ -610,21 +717,36 @@
 
   function renderObservation(observation) {
     renderAction(observation);
-    node("monitor-readings").hidden = !observation;
-    node("monitor-empty").hidden = !!observation;
+    const readable = !!observation && (!observation.partial || observation.phase !== "unknown" ||
+      observation.boardCount !== null || observation.board.some(Boolean) || observation.amounts.pot_size !== null ||
+      observation.seats.some((entry) => entry.displayed_stack !== null || entry.visible_wager !== null ||
+        [entry.occupied, entry.status, entry.badge, entry.dealer, entry.small_blind, entry.big_blind, entry.acting].some((v) => v != null)));
+    node("monitor-readings").hidden = !readable;
+    node("monitor-empty").hidden = readable;
     node("monitor-grid").classList.toggle("no-reading", !observation);
     node("history-panel").hidden = !observation || node("monitor-grid").classList.contains("no-history");
-    if (!observation) text("monitor-empty", connected && snapshot && snapshot.source === "live" ? "Waiting for a fresh table reading." : "Waiting for a table reading.");
+    if (!readable) text("monitor-empty", observation ? "Reading uncertain" : connected && snapshot && snapshot.capture.state === "blocked" ?
+      "Waiting for a unique CoinPoker game window." : connected && snapshot && snapshot.source === "live" ?
+        "Reading uncertain" : "Waiting for a table reading.");
     renderCards("hero-cards", observation ? observation.hero : [], 2, "Hero");
-    renderCards("board-cards", observation ? observation.board : [], 5, "Board");
+    const board = observation ? observation.partial ? observation.board.slice(0, observation.boardCount ??
+      observation.board.reduce((last, card, index) => card ? index + 1 : last, 0)) : observation.board : [];
+    renderCards("board-cards", board, 5, "Board");
+    if (observation?.partial && observation.boardCount === 0) text("board-cards", "No community cards");
+    node("hero-card-group").hidden = !observation || observation.heroSeated !== true;
     renderControls("control-states", observation ? observation.controls : null);
-    text("game-phase", observation ? PHASE_NAMES[observation.phase] : "-");
+    text("game-phase", observation && observation.phase !== "unknown" ? PHASE_NAMES[observation.phase] : "-");
     text("acting-seat", observation && observation.actingSeat !== null ? `Seat ${observation.actingSeat}` : "-");
     const observing = observation && observation.role === "observing";
     const seated = observation && ["seated_waiting", "your_turn"].includes(observation.role);
     text("call-label", observing ? observation.actingSeat === null ? "Acting-seat call" : `Acting seat ${observation.actingSeat} to call` : seated ? "Your call" : "Call");
     amount("amount-call", observation ? observing ? observation.amounts.acting_to_call : seated ? observation.amounts.to_call : null : null);
     for (const [id, key] of [["amount-pot", "pot_size"], ["amount-stack", "hero_chips"], ["amount-min", "min_raise_to"], ["amount-max", "max_raise_to"]]) amount(id, observation ? observation.amounts[key] : null);
+    node("hero-stack-reading").hidden = !seated;
+    node("call-reading").hidden = !observation || observation.partial;
+    node("actor-reading").hidden = !observation || observation.actingSeat === null;
+    node("controls-reading").hidden = !observation || observation.partial;
+    node("raise-bounds").hidden = !observation || observation.amounts.min_raise_to === null && observation.amounts.max_raise_to === null;
     const wagers = document.createDocumentFragment();
     for (const entry of observation ? observation.wagers : []) {
       const item = make("li");
@@ -633,6 +755,29 @@
     }
     if (!wagers.childNodes.length) wagers.append(make("li", "unknown-value", "-"));
     node("visible-wagers").replaceChildren(wagers);
+    node("wagers-reading").hidden = !observation || observation.partial;
+    const seatGrid = document.createDocumentFragment();
+    for (const entry of observation ? observation.seats : []) {
+      const item = make("li", "seat-reading");
+      item.dataset.seat = String(entry.seat);
+      const heading = make("div", "seat-heading");
+      heading.append(make("h4", "", `Seat ${entry.seat}`), make("span", "seat-location", SEAT_LOCATIONS[entry.seat - 1]));
+      const markers = [entry.occupied === true ? "Occupied" : entry.occupied === false ? "Open" : null,
+        entry.status?.replaceAll("_", " "), entry.dealer === true ? "BTN" : null,
+        entry.small_blind === true ? "SB" : null, entry.big_blind === true ? "BB" : null,
+        entry.acting === true ? "Acting" : null, entry.badge && entry.badge !== "none" ? `Badge: ${entry.badge.replaceAll("_", " ")}` : null];
+      if (markers.some(Boolean)) heading.append(make("span", "seat-location", markers.filter(Boolean).join(" / ")));
+      const amounts = make("dl", "seat-amounts");
+      for (const [label, key] of [["Displayed stack", "displayed_stack"], ["Visible wager", "visible_wager"], ["Street contribution", "street_contribution"]]) {
+        const field = make("div");
+        field.append(make("dt", "", label), make("dd", integer(entry[key]) ? "" : "unknown-value", chips(entry[key])));
+        amounts.append(field);
+      }
+      item.append(heading, amounts);
+      seatGrid.append(item);
+    }
+    node("seat-readings").replaceChildren(seatGrid);
+    node("seats-reading").hidden = !observation;
     const metrics = observation ? observation.metrics : {};
     const oddsSeat = observing ? observation.actingSeat : metrics.odds ? metrics.odds.seat : null;
     text("metric-odds-label", observing ? oddsSeat === null ? "Acting-seat pot odds / required equity" : `Seat ${oddsSeat} pot odds / required equity` : "Pot odds / required equity");
@@ -642,6 +787,12 @@
     text("metric-draw-next", percent(metrics.draw ? metrics.draw.next : null));
     text("metric-draw-river", percent(metrics.draw ? metrics.draw.river : null));
     text("metric-equity", percent(metrics.equity));
+    node("metrics-readings").hidden = true;
+    text("reading-limit", observation?.partial ? (observation.seats.some((entry) => entry.visible_wager !== null ||
+      entry.occupied != null || entry.status != null || entry.badge != null) ?
+      "Seat fields have separate evidence. Hand positions, street contributions and math require validated context. Suggestions off." :
+      "Wagers, street contributions and seat markers are untrained; unknown. Metrics and suggestions off.") :
+      "A dash is unknown. Metrics and suggestions off.");
   }
 
   function captureHealthy() {
@@ -749,6 +900,11 @@
       return;
     }
     const sameLease = activeLease && activeLease.key === key;
+    if (sameLease && observation.captured !== activeLease.observation.captured) {
+      closeObservation(observation);
+      clearObservation();
+      return;
+    }
     if (!sameLease && previousSequence >= 0 && value.sequence <= previousSequence) {
       closeObservation(observation);
       clearObservation();

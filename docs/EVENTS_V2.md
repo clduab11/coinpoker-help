@@ -10,6 +10,55 @@ The stream never prints screenshots, PNG data URLs, raw model responses, player
 names or backend response bodies. Consumers may ignore unknown additive fields or
 events but must never infer a recommendation from `status`.
 
+## Checkpoint B Additions
+
+The B recorder adds metadata-only `recording_enabled`, `recorded_frames`,
+`recorded_bytes`, `recording_status` and `recording_complete`. Status is
+`disabled`, `active`, `count_limit`, `disk_limit` or `io_failure`. Counters
+acknowledge PNG plus append-only manifest rows durably synced under a new
+`.local/captures/<UTC>-practice/` session. Defaults are 7,200 frames, 1 GiB and
+500 ms; hard bounds are 20,000 frames, 2 GiB and 250..60,000 ms. Caps/failures
+preserve the prefix and do not reset, delete evidence or create another run.
+Monitoring may continue after recording stops. Complete means an uninterrupted
+eligible sampled prefix, not every frame or validated game history.
+
+Manifest rows contain source UTC, capture-call-start monotonic time, dimensions,
+frame index, PNG size/SHA-256 and opaque provenance. Generation stays null when
+unknown. Images, paths, titles and private candidates never enter the browser.
+Enabled B telemetry supersedes the fixed first-phase no-recorder fields below.
+
+The user's `2026-10-10T15:03:16Z` correction selects the unique visible CoinPoker
+window matching `^NLH\s*[0-9]+`, without practice/lobby/cash title distinctions.
+Practice-six-max is user-declared scope, not mode proof from a title. Stable
+executable/PID/HWND identity survives resizing, title suffix and role changes.
+Capture reads current dimensions; normalized six-max regions scale and
+letter/pillar-box to them. Missing/ambiguous windows block. Lobby imagery stays
+reference only, never seated-positive data.
+
+Source-current health reaches the observer even if model admission fails.
+Opaque capture references advance for genuine new captures, including identical
+images whose generation stays unchanged. Age is checked after output writes.
+Role changes do not reset history; unknown seats/actions yield unvalidated gaps,
+never fabricated betting statistics.
+
+The immutable it1 `calibration.json` acceptance report is separately size/SHA
+pinned from temperature calibration. Responses carry `acceptance_floor`;
+native comparisons are f64 and use `max(vendor, fitted, optional override)`.
+Missing/invalid floors fail closed. P0 0.995 and board 1.0 are not clamped to the
+CLI override bound; 0.99999999 cannot round into a confident board card.
+Untrained passes remain unrun, metrics/advice remain off and Gate F is unchanged.
+
+Actual-window calibration after the user's `16:52:31Z` table report found the
+logo/NLH/number caption drawn internally while Win32 exposes exact `CoinPoker`.
+After explicit question-tool confirmation, a private profile can select exact
+`^CoinPoker$` on the same executable. This does not broaden the default NLH rule
+or approve perception, and multiple matching visible windows still block.
+Changed PID/HWND during table rotation begins a separate stream/recorder while
+retaining prior files/ledgers; resizing the same identity retains its stream and
+history. Real B captures verified both cases. Loading/transition captures remain
+unlabelled, never implicit positive table or seated examples. Hash/manifest
+integrity and fresh capture health do not establish accepted poker readings.
+
 ## Live records
 
 | Event | Required fields and meaning |
@@ -184,6 +233,68 @@ after one-time `--list-windows` calibration is checkpoint B, not implemented or
 started in checkpoint A. Checkpoint A reuses the existing model service without
 restarting it; changed Python imports/routes take effect at the controlled B
 restart. The updated bundled Reference/static page already works without one.
+
+## Per-field observing contract (stage2 implemented)
+
+Implemented2026-10-10: independently leased `partial_observation` bundles use
+nullable phase/board slots/count/pot and six explicit physical seats1..6, separate
+from strictactionable GameState. Closed field/capability allowlists gate each value;
+p6wager/p7scene registries defaultdisabled, requiring pinned per-seat ownfloor/crop/
+model/evidence/human-held-out proof. Source-region SHA256 comparisons and original
+expiry withhold changed/late/stale data; negativeproof also vetoes strictsiblings.
+Same-ticket fullobservations cannot refill rejectedpartialfields. No advice/R17
+promotion or unknown-to-zero conversion. Hand/roster/order/convention gaps block
+derivedevents/positions/math, not independently accepted amounts.
+
+`perception_diagnostics` is bounded, closed-vocabulary PRIVATE journaling only,
+including obsolete zero-lease outcomes, exactcrops/floors/answers and eligibility
+versusadmission. Unmeasuredtimings null; no pixels/prompts/names/fingerprints in
+browserstate. Browser gets only sanitized amount/scene status markers. Exactly
+Monitor/Reference. Offline506Rust/207Python-Node regressions andclippy passed;
+realwarmtotal latency/perception/humanacceptance remainpending. The earlier
+designhistory below is retained but its not-implemented claims are superseded.
+
+Stage 1 (2026-10-10) confirms existing `observation`/`verified_fields` sanitize
+fully admitted states downstream, not independent native field admission. Laya
+skips trained stack passes, lacks wagers/badges/dealer/acting and discards players.
+Historical diagnostic candidates must never be injected into current observations.
+See section 7 of `LAYA_VISION_PHASE_A.md` and the active practice/history plan.
+
+Proposed `partial_observation` is **distinct from actionable GameState and existing
+observation**. No producer or consumer supports it yet. Proposed invariants:
+
+- Bind opaque session/table/geometry identity, optional validated hand/street,
+  original capture time, monotonic sequence, absolute expiry and per-field evidence
+  IDs. Browser exposes no raw score/prompt/crop/pixel/path/name/backend payload.
+- Each field is optional, never default zero: phase, board count/cards, pot, six
+  physical slots with occupancy/participation/fold/all-in, displayed stack, visible
+  wager, established street contribution/live credit, dealer/blinds, hand-relative
+  position/group, badge/action and acting indication. Hero fields require seated
+  evidence and their own approved capability; hidden opponent cards are not inferred.
+- Read-only capability/floor/dependency approval is separate from actionable
+  quality. Uncertain role/card identity cannot erase independent accepted pot/stack;
+  unknown hand/street blocks dependent commitments/events/positions. Confidence
+  does not cure contradiction. Partial observations never enable suggestions.
+- Polling never renews leases; changes invalidate dependent fields. Replacement,
+  source loss, unknown hand transition or geometry reassociation veto context.
+  Reject expired/out-of-order/cross-hand combinations and uncertain occupant transfer.
+- Freeze dealt-in roster across folds, exclude mid-hand arrivals, keep blind labels
+  distinct from early/middle/late and retain actual preflop/postflop order separately.
+- History preserves observed/inferred provenance, forced money, badge occurrences,
+  ordering uncertainty, gaps, returns/side pots and confirmed street resets. Stack
+  changes alone are not actions; visible chips are not proven total contribution
+  or a complete 3-bet/4-bet prefix. Unknown remains unknown, not zero.
+- Acting-seat call cost/odds need legal bring-in/live credit/remaining chips and
+  eligible pot convention; never 'your call' while observing. Do not double-count
+  wagers already included in displayed pot.
+
+Private diagnostics retain source/session/hand/hash/age, pass/question, exact crop
+bounds/dimensions, closed-vocabulary answer, score/effective floor, score decision
+versus admission decision and specific reason; capture/preprocess/encode/queue/
+inference/assembly/publish/render timings are separate. Unmeasured stages are null.
+Historical score eligibility is not live admission or human capability approval.
+Strict advice events/validator/R17 remain unchanged. Stage 2 implementation and
+later live observing acceptance each require their own explicit approval.
 
 ## Replay, listing, doctor and evaluation
 

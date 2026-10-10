@@ -720,10 +720,10 @@ impl Observer {
             if !sequential || !changed.is_empty() {
                 self.gap(capture, GapReason::StreetTransition);
             }
-            if previous_street == Some(Street::Preflop) {
-                if snapshot.preflop_complete.known() != Some(&true) {
-                    self.gap(capture, GapReason::MissingEvidence);
-                }
+            if previous_street == Some(Street::Preflop)
+                && snapshot.preflop_complete.known() != Some(&true)
+            {
+                self.gap(capture, GapReason::MissingEvidence);
             }
         }
 

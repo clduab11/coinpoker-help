@@ -15,6 +15,9 @@ use crate::capture::{CaptureError, CaptureSource, Frame, WindowInfo};
 use crate::change_detect::{ChangeDetectorConfig, FrameTracker, StabilityConfig};
 use crate::discovery::{CaptureManager, DiscoveryConfig, DiscoveryState, TableIdentity};
 use crate::parser::{Card, GamePhase, GameState};
+use crate::partial::{
+    DiagnosticAdmission, PartialObservation, PartialObservationView, PerceptionDiagnostics,
+};
 use crate::screen::{
     inspect_frame, MetadataEvidence, ScreenKind, ScreenObservation, TableGate, VisualEvidence,
 };
@@ -121,6 +124,8 @@ pub struct InferenceJob {
 }
 pub struct Analysis<T> {
     pub observation: ScreenObservation,
+    pub partial: Option<PartialObservation>,
+    pub diagnostics: Option<PerceptionDiagnostics>,
     pub recommendation: Option<T>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,14 +160,27 @@ impl<T: Send + 'static> ThreadWorker<T> {
                         code: DECISION_DEADLINE_CODE,
                     })
                 } else {
-                    let result = analyze(&job);
+                    let mut result = analyze(&job);
                     if Instant::now() >= job.deadline {
-                        Err(InferenceFailure {
-                            code: DECISION_DEADLINE_CODE,
-                        })
-                    } else {
-                        result
+                        if let Ok(analysis) = &mut result {
+                            if let Some(diagnostics) = &mut analysis.diagnostics {
+                                // Retain private traces, but the runtime must discard all readings.
+                                diagnostics.set_admission(
+                                    DiagnosticAdmission::DecisionBudgetExpired,
+                                    None,
+                                );
+                            } else {
+                                result = Err(InferenceFailure {
+                                    code: DECISION_DEADLINE_CODE,
+                                });
+                            }
+                        } else {
+                            result = Err(InferenceFailure {
+                                code: DECISION_DEADLINE_CODE,
+                            });
+                        }
                     }
+                    result
                 };
                 if output
                     .send(Completion {
@@ -389,6 +407,17 @@ pub enum LiveEvent<T> {
         value: ObservationView,
         valid_for_ms: u64,
     },
+    PartialObservation {
+        ticket: Ticket,
+        value: Box<PartialObservationView>,
+        valid_for_ms: u64,
+    },
+    /// Source-leased private diagnostic event, never a browser reading.
+    PerceptionDiagnostics {
+        ticket: Ticket,
+        value: PerceptionDiagnostics,
+        valid_for_ms: u64,
+    },
     ObservationInvalidated {
         reason: &'static str,
         generation: u64,
@@ -429,6 +458,8 @@ pub struct LiveRuntime<S: CaptureSource, W, T> {
     queued: Option<InferenceJob>,
     recommendation_deadline: Option<u64>,
     observation_deadline: Option<u64>,
+    partial_candidate: Option<(Ticket, PartialObservation)>,
+    frame_geometry: Option<(u32, u32)>,
     next_health: u64,
     frame_count: u64,
     next_discovery: u64,
@@ -465,6 +496,8 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
             queued: None,
             recommendation_deadline: None,
             observation_deadline: None,
+            partial_candidate: None,
+            frame_geometry: None,
             next_health: 0,
             frame_count: 0,
             next_discovery: 0,
@@ -496,21 +529,49 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
             self.invalidate_observation("observation-expired", &mut events);
             self.needs_analysis = true;
             self.gate.break_consensus();
+            self.partial_candidate = None;
         }
         if now >= self.next_discovery {
             match self.capture.refresh() {
                 Ok(selection) => {
                     self.worker_failures = 0;
-                    let selection_changed = self.selected != selection.window;
+                    let previous_metadata = self.metadata();
+                    let selection_changed = self.selected.as_ref().map(WindowInfo::identity)
+                        != selection.window.as_ref().map(WindowInfo::identity);
+                    let geometry_changed = !selection_changed
+                        && self
+                            .selected
+                            .as_ref()
+                            .zip(selection.window.as_ref())
+                            .is_some_and(|(old, new)| {
+                                (old.width, old.height) != (new.width, new.height)
+                            });
+                    self.selected = selection.window;
+                    let scope_changed = !selection_changed && previous_metadata != self.metadata();
                     if selection_changed {
-                        self.selected = selection.window;
                         self.invalidate("window-changed", true, &mut events);
                         self.last_table = None;
                         self.tracker.reset();
+                        self.frame_geometry = None;
+                        self.last_analysis = None;
+                        self.next_analysis = 0;
+                    } else if geometry_changed {
+                        // Geometry obsoletes crops, not the stable table/history identity.
+                        self.invalidate("geometry-changed", false, &mut events);
+                        self.tracker.reset();
+                        self.frame_geometry = None;
+                        self.last_analysis = None;
+                        self.next_analysis = 0;
+                    } else if scope_changed {
+                        self.invalidate("scope-changed", false, &mut events);
                         self.last_analysis = None;
                         self.next_analysis = 0;
                     }
-                    if selection_changed || self.selected.is_none() || self.last_status.is_none() {
+                    if selection_changed
+                        || scope_changed
+                        || self.selected.is_none()
+                        || self.last_status.is_none()
+                    {
                         self.status(
                             discovery_code(selection.state),
                             selection.reason,
@@ -539,6 +600,16 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     dimensions = Some((frame.width, frame.height));
                     captured_at = Some(captured_at_ms);
                     fresh_capture = frame.validate().is_ok();
+                    if self
+                        .frame_geometry
+                        .is_some_and(|size| size != (frame.width, frame.height))
+                    {
+                        self.invalidate("geometry-changed", false, &mut events);
+                        self.tracker.reset();
+                        self.last_analysis = None;
+                        self.next_analysis = now;
+                    }
+                    self.frame_geometry = dimensions;
                     let progress = self.tracker.observe(&frame, now);
                     if progress.changed {
                         self.invalidate("frame-changed", false, &mut events);
@@ -603,10 +674,20 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     );
                 let expired = now.saturating_sub(completion.ticket.captured_at_ms)
                     >= self.config.max_frame_age_ms;
-                let over_budget = now.saturating_sub(completion.ticket.captured_at_ms)
-                    >= self.config.decision_budget_ms;
+                let worker_expired = matches!(&completion.result, Ok(analysis)
+                    if analysis.diagnostics.as_ref().is_some_and(|d|
+                        d.admission == DiagnosticAdmission::DecisionBudgetExpired));
+                let over_budget = worker_expired
+                    || now.saturating_sub(completion.ticket.captured_at_ms)
+                        >= self.config.decision_budget_ms;
                 if fresh && !over_budget {
-                    self.complete(completion, now, &mut events);
+                    self.complete(
+                        completion,
+                        now,
+                        current.as_ref().map(|(frame, _, _)| frame),
+                        clock,
+                        &mut events,
+                    );
                 } else {
                     let reason = if expired {
                         "observation-expired"
@@ -615,6 +696,25 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     } else {
                         "obsolete-observation"
                     };
+                    if let Ok(analysis) = completion.result {
+                        if let Some(mut value) = analysis.diagnostics {
+                            value.set_admission(
+                                if expired {
+                                    DiagnosticAdmission::ObservationExpired
+                                } else if over_budget {
+                                    DiagnosticAdmission::DecisionBudgetExpired
+                                } else {
+                                    DiagnosticAdmission::ObsoleteObservation
+                                },
+                                None,
+                            );
+                            events.push(LiveEvent::PerceptionDiagnostics {
+                                ticket: completion.ticket.clone(),
+                                value,
+                                valid_for_ms: 0,
+                            });
+                        }
+                    }
                     events.push(LiveEvent::Discarded {
                         generation: completion.ticket.generation,
                         reason,
@@ -624,6 +724,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     self.invalidate_observation(reason, &mut events);
                     self.needs_analysis = true;
                     self.gate.break_consensus();
+                    self.partial_candidate = None;
                 }
             }
             Ok(None) => {
@@ -714,18 +815,168 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
         self.status("recovering", error.code, events);
     }
 
-    fn complete(&mut self, completion: Completion<T>, now: u64, events: &mut Vec<LiveEvent<T>>) {
+    fn complete(
+        &mut self,
+        completion: Completion<T>,
+        now: u64,
+        latest_frame: Option<&Frame>,
+        clock: &impl Clock,
+        events: &mut Vec<LiveEvent<T>>,
+    ) {
         match completion.result {
             Err(error) => {
                 self.clear(error.code, events);
                 self.invalidate_observation(error.code, events);
                 self.gate.break_consensus();
+                self.partial_candidate = None;
                 self.needs_analysis = true;
                 self.next_analysis = now.saturating_add(self.config.retry_ms);
                 self.status("recovering", error.code, events);
             }
             Ok(analysis) => {
                 let metadata = self.metadata();
+                let deadline = completion.ticket.captured_at_ms.saturating_add(
+                    self.config
+                        .max_frame_age_ms
+                        .min(self.config.decision_budget_ms),
+                );
+                let mut diagnostics = analysis.diagnostics;
+                let mut partial_admitted = false;
+                let mut admitted_view = None;
+                let mut strict_source_veto = None;
+                let mut partial = analysis.partial.filter(|candidate| {
+                    candidate.core_accepted()
+                        && metadata == MetadataEvidence::TableTitle
+                        && analysis.observation.screen_kind == ScreenKind::PokerTable
+                        && self.frame_geometry
+                            == Some((candidate.frame_width, candidate.frame_height))
+                });
+                if let Some(candidate) = &mut partial {
+                    let bound = latest_frame
+                        .is_some_and(|frame| candidate.retain_source_current_fields(frame));
+                    if candidate.evidence.iter().any(|f| {
+                        f.admission_reason == crate::partial::DiagnosticReason::MissingSourceWitness
+                    }) {
+                        strict_source_veto = Some("missing-source-witness");
+                    } else if candidate.evidence.iter().any(|f| {
+                        f.admission_reason == crate::partial::DiagnosticReason::SourceRegionChanged
+                    }) {
+                        strict_source_veto = Some("source-region-changed");
+                    }
+                    if let Some(diagnostics) = &mut diagnostics {
+                        diagnostics.fields.clone_from(&candidate.evidence);
+                    }
+                    if !bound {
+                        partial = None;
+                    }
+                    if let Some((_, previous)) = &mut self.partial_candidate {
+                        if let Some(frame) = latest_frame {
+                            previous.retain_source_current_fields(frame);
+                        }
+                    }
+                }
+                // Pixel hashing cannot extend the original source lease or admit a late result.
+                let now = clock.now_ms().max(now);
+                if now.saturating_sub(completion.ticket.captured_at_ms)
+                    >= self
+                        .config
+                        .max_frame_age_ms
+                        .min(self.config.decision_budget_ms)
+                {
+                    let expired = now.saturating_sub(completion.ticket.captured_at_ms)
+                        >= self.config.max_frame_age_ms;
+                    let reason = if expired {
+                        "observation-expired"
+                    } else {
+                        DECISION_DEADLINE_CODE
+                    };
+                    if let Some(mut value) = diagnostics {
+                        value.set_admission(
+                            if expired {
+                                DiagnosticAdmission::ObservationExpired
+                            } else {
+                                DiagnosticAdmission::DecisionBudgetExpired
+                            },
+                            None,
+                        );
+                        events.push(LiveEvent::PerceptionDiagnostics {
+                            ticket: completion.ticket.clone(),
+                            value,
+                            valid_for_ms: 0,
+                        });
+                    }
+                    events.push(LiveEvent::Discarded {
+                        generation: completion.ticket.generation,
+                        reason,
+                    });
+                    self.clear(reason, events);
+                    self.invalidate_observation(reason, events);
+                    self.gate.break_consensus();
+                    self.partial_candidate = None;
+                    self.needs_analysis = true;
+                    return;
+                }
+                let partial_pending = partial.is_some();
+                if let Some(candidate) = partial {
+                    if let Some((previous_ticket, previous)) = self.partial_candidate.as_ref() {
+                        if previous_ticket.identity == completion.ticket.identity
+                            && previous_ticket.epoch == completion.ticket.epoch
+                            && previous_ticket.generation < completion.ticket.generation
+                            && previous_ticket.captured_at_ms < completion.ticket.captured_at_ms
+                            && now.saturating_sub(previous_ticket.captured_at_ms)
+                                < self
+                                    .config
+                                    .max_frame_age_ms
+                                    .min(self.config.decision_budget_ms)
+                            && previous.frame_width == candidate.frame_width
+                            && previous.frame_height == candidate.frame_height
+                        {
+                            let value = candidate.consensus(previous);
+                            // No all-null packet masquerades as admitted perception.
+                            if !value.verified_fields.is_empty() {
+                                self.observation_deadline = Some(deadline);
+                                admitted_view = Some(value.clone());
+                                events.push(LiveEvent::PartialObservation {
+                                    ticket: completion.ticket.clone(),
+                                    value: Box::new(value),
+                                    valid_for_ms: deadline.saturating_sub(now),
+                                });
+                                partial_admitted = true;
+                            }
+                        }
+                    }
+                    self.partial_candidate = Some((completion.ticket.clone(), candidate));
+                } else {
+                    self.partial_candidate = None;
+                }
+                if let Some(mut value) = diagnostics.take() {
+                    value.set_admission(DiagnosticAdmission::SourceCurrent, admitted_view.as_ref());
+                    events.push(LiveEvent::PerceptionDiagnostics {
+                        ticket: completion.ticket.clone(),
+                        value,
+                        valid_for_ms: deadline.saturating_sub(now),
+                    });
+                }
+                if let Some(reason) = strict_source_veto {
+                    // Additional source veto, never a relaxation of GameState/R17 validation.
+                    self.gate.break_consensus();
+                    self.clear(reason, events);
+                    if !partial_admitted {
+                        self.invalidate_observation(reason, events);
+                    }
+                    self.needs_analysis = !partial_admitted;
+                    self.next_analysis = now.saturating_add(self.config.retry_ms);
+                    self.status(
+                        if partial_admitted {
+                            "capturing_table"
+                        } else {
+                            "recovering"
+                        },
+                        reason,
+                        events,
+                    );
+                    return;
+                }
                 let outcome = self.gate.observe(
                     &completion.ticket.identity,
                     &analysis.observation,
@@ -782,17 +1033,33 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     }
                     None => {
                         self.clear("screen-not-accepted", events);
-                        self.invalidate_observation("screen-not-accepted", events);
+                        if !partial_admitted {
+                            self.invalidate_observation("screen-not-accepted", events);
+                        }
                         let state = match outcome.kind {
                             ScreenKind::Lobby => "lobby_detected",
                             ScreenKind::PokerTable => "candidate_table",
                             ScreenKind::OtherCoinPokerWindow => "other_coin_poker_window",
                             ScreenKind::Unknown => "unknown",
                         };
-                        self.status(state, outcome.reason, events);
-                        self.needs_analysis = true;
+                        self.status(
+                            if partial_admitted {
+                                "capturing_table"
+                            } else {
+                                state
+                            },
+                            if partial_admitted {
+                                "matching-partial-fields"
+                            } else {
+                                outcome.reason
+                            },
+                            events,
+                        );
+                        self.needs_analysis = !partial_admitted;
                         self.next_analysis = now.saturating_add(
-                            if outcome.reason == "waiting for a second matching observation" {
+                            if partial_pending
+                                || outcome.reason == "waiting for a second matching observation"
+                            {
                                 self.config.poll_ms
                             } else {
                                 self.config.retry_ms
@@ -840,6 +1107,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
         events: &mut Vec<LiveEvent<T>>,
     ) {
         self.epoch += 1;
+        self.partial_candidate = None;
         self.queued = None;
         self.needs_analysis = true;
         if reset_gate {
@@ -891,6 +1159,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
         self.observation_deadline = None;
         self.needs_analysis = true;
         self.gate.break_consensus();
+        self.partial_candidate = None;
     }
 
     pub fn queued_count(&self) -> usize {
@@ -1062,6 +1331,8 @@ mod tests {
                     },
                     state: None,
                 },
+                partial: None,
+                diagnostics: None,
                 recommendation: None::<()>,
             })
         });

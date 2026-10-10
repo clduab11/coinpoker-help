@@ -10,7 +10,10 @@
 //! - `classifier` — archetype classification (LAG/TAG/LP/TP)
 //! - `exploit`    — profile-based action adjustments
 
+pub mod betting;
 pub mod classifier;
 pub mod exploit;
 pub mod features;
 pub mod observer;
+pub mod observing;
+pub mod position;

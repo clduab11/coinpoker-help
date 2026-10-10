@@ -1,4 +1,5 @@
 use ingest::discovery::DiscoveryConfig;
+use ingest::recorder::{RecorderConfig, PRIVATE_CAPTURE_DIR};
 use ingest::runtime::RuntimeConfig;
 use ingest::vlm::VlmConfig;
 use std::collections::HashMap;
@@ -34,7 +35,15 @@ Configuration (CLI > nonempty environment > defaults):\n\
   --changed-fraction N        COINPOKER_CHANGED_FRACTION (0.000001..1)\n\
   --local-fraction N          COINPOKER_LOCAL_FRACTION (0.000001..1)\n\
   --tile-size N               COINPOKER_TILE_SIZE (8..128)\n\
-  --sample-stride N           COINPOKER_SAMPLE_STRIDE (1..64)\n";
+  --sample-stride N           COINPOKER_SAMPLE_STRIDE (1..64)\n\n\
+Approved observing capabilities (capture mode, CLI opt-in only):\n\
+  --wager-registry .local/PATH.json   Versioned per-seat proof; unapproved seats stay unknown\n\n\
+  --scene-registry .local/PATH.json   Versioned seat-scene proof; disabled without approval\n\n\
+Private recording (capture mode, CLI opt-in only):\n\
+  --record-dir .local/captures  Fixed private base; new UTC practice session only\n\
+  --record-max-frames N        1..20000, default 7200\n\
+  --record-max-bytes N         1..2147483648, default 1073741824 (PNG + manifest)\n\
+  --record-interval-ms N       250..60000, default 500; sampled, not every frame\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
@@ -51,7 +60,17 @@ pub struct Options {
     pub discovery: DiscoveryConfig,
     pub runtime: RuntimeConfig,
     pub vlm: VlmConfig,
+    pub recording: Option<RecorderConfig>,
+    pub wager_registry: Option<String>,
+    pub scene_registry: Option<String>,
 }
+
+const RECORD_FLAGS: &[&str] = &[
+    "--record-dir",
+    "--record-max-frames",
+    "--record-max-bytes",
+    "--record-interval-ms",
+];
 
 const FLAGS: &[(&str, &str)] = &[
     ("--exe-name", "COINPOKER_EXE_NAME"),
@@ -94,10 +113,11 @@ pub fn parse(
             "--evaluate" => Some(Mode::Evaluate(args.next().ok_or("--evaluate requires a manifest path")?)),
             "--ui" => return Err("--ui is unavailable: no native interactive UI; open the separately launched read-only dashboard at http://127.0.0.1:18090/ or use --stdin for legacy JSON-lines output".into()),
             _ => {
-                if let Some((flag, _)) = FLAGS.iter().find(|(flag, _)| *flag == arg) {
+                if let Some(flag) = FLAGS.iter().map(|(flag, _)| *flag)
+                    .chain(RECORD_FLAGS.iter().copied()).chain(["--wager-registry", "--scene-registry"]).find(|flag| *flag == arg) {
                     let value = args.next().filter(|v| !v.trim().is_empty() && !v.starts_with("--"))
                         .ok_or_else(|| format!("{flag} requires a nonempty value"))?;
-                    if overrides.insert(*flag, value).is_some() { return Err(format!("duplicate option {flag}")); }
+                    if overrides.insert(flag, value).is_some() { return Err(format!("duplicate option {flag}")); }
                 } else { return Err(format!("unknown option or extra argument: {arg}")); }
                 None
             }
@@ -114,7 +134,39 @@ pub fn parse(
         discovery: DiscoveryConfig::default(),
         runtime: RuntimeConfig::default(),
         vlm: VlmConfig::default(),
+        recording: None,
+        wager_registry: None,
+        scene_registry: None,
     };
+    let recording_requested = RECORD_FLAGS.iter().any(|flag| overrides.contains_key(flag));
+    if recording_requested && !matches!(options.mode, Mode::Capture | Mode::Help) {
+        return Err("private recording is available only in capture mode".into());
+    }
+    for flag in ["--wager-registry", "--scene-registry"] {
+        if let Some(path) = overrides.get(flag) {
+            if !matches!(options.mode, Mode::Capture | Mode::Help) {
+                return Err("wager registry is available only in capture mode".into());
+            }
+            let file = std::path::Path::new(path);
+            if path.len() > 4096
+                || path.bytes().any(|b| b < 32 || b == 127)
+                || path.contains(':')
+                || file.is_absolute()
+                || !file.starts_with(".local")
+                || file.extension().is_none_or(|ext| ext != "json")
+                || file
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err("wager registry must be a private relative .local JSON path".into());
+            }
+            if flag == "--wager-registry" {
+                options.wager_registry = Some(path.clone());
+            } else {
+                options.scene_registry = Some(path.clone());
+            }
+        }
+    }
     // Replay/help must not depend on capture/VLM environment configuration.
     if matches!(options.mode, Mode::Stdin | Mode::Help) {
         return Ok(options);
@@ -190,6 +242,20 @@ pub fn parse(
     );
     set!(options.runtime.change.tile_size, "--tile-size");
     set!(options.runtime.change.sample_stride, "--sample-stride");
+    if recording_requested {
+        let directory = overrides
+            .get("--record-dir")
+            .ok_or("recorder limits require --record-dir .local/captures opt-in")?;
+        if directory != PRIVATE_CAPTURE_DIR && directory != ".local\\captures" {
+            return Err("--record-dir accepts only .local/captures; arbitrary paths and traversal are refused".into());
+        }
+        let mut recording = RecorderConfig::default();
+        set!(recording.max_frames, "--record-max-frames");
+        set!(recording.max_bytes, "--record-max-bytes");
+        set!(recording.interval_ms, "--record-interval-ms");
+        recording.validate()?;
+        options.recording = Some(recording);
+    }
     options.runtime.validate()?;
     if !(1..=120).contains(&options.vlm.timeout_secs) {
         return Err("timeout must be 1..120 seconds".into());
@@ -250,6 +316,170 @@ pub fn validate_vlm_endpoint(endpoint: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wager_registry_is_explicit_private_capture_only_and_not_an_environment_activation() {
+        let defaults = parse([], |name| {
+            (name == "COINPOKER_WAGER_REGISTRY").then(|| ".local/should-not-activate.json".into())
+        })
+        .unwrap();
+        assert!(defaults.wager_registry.is_none());
+        assert!(
+            parse(["--stdin".into()], |_| Some(".local/ignored.json".into()))
+                .unwrap()
+                .wager_registry
+                .is_none()
+        );
+        let valid = parse(
+            ["--wager-registry", ".local/data/v2/wager.json"].map(String::from),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(
+            valid.wager_registry.as_deref(),
+            Some(".local/data/v2/wager.json")
+        );
+        for mode in ["--stdin", "--doctor", "--list-windows"] {
+            assert!(parse(
+                [mode, "--wager-registry", ".local/v2.json"].map(String::from),
+                |_| None
+            )
+            .is_err());
+        }
+        for path in [
+            "models/approved.json",
+            ".local/../secret.json",
+            "C:\\data.json",
+            "https://example.com/data.json",
+            ".local/data.json:stream",
+            ".local/data.txt",
+        ] {
+            assert!(parse(["--wager-registry", path].map(String::from), |_| None).is_err());
+        }
+        assert!(parse(
+            [
+                "--wager-registry",
+                ".local/a.json",
+                "--wager-registry",
+                ".local/b.json"
+            ]
+            .map(String::from),
+            |_| None
+        )
+        .is_err());
+    }
+    #[test]
+    fn recorder_config_is_opt_in_cli_only_and_reports_bounded_defaults() {
+        let default = parse(std::iter::empty(), |_| None).unwrap();
+        assert!(default.recording.is_none());
+        let ignored_env = parse(std::iter::empty(), |key| {
+            key.starts_with("COINPOKER_RECORD_")
+                .then(|| "unsafe".into())
+        })
+        .unwrap();
+        assert!(ignored_env.recording.is_none());
+        for directory in [".local/captures", ".local\\captures"] {
+            let options = parse(["--record-dir", directory].map(String::from), |_| None).unwrap();
+            assert_eq!(options.recording, Some(RecorderConfig::default()));
+        }
+        let options = parse(
+            [
+                "--record-dir",
+                ".local/captures",
+                "--record-max-frames",
+                "20",
+                "--record-max-bytes",
+                "4096",
+                "--record-interval-ms",
+                "1000",
+            ]
+            .map(String::from),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(
+            options.recording,
+            Some(RecorderConfig {
+                max_frames: 20,
+                max_bytes: 4096,
+                interval_ms: 1000
+            })
+        );
+        for flag in RECORD_FLAGS {
+            assert!(USAGE.contains(flag));
+        }
+    }
+
+    #[test]
+    fn recorder_config_refuses_other_modes_paths_duplicates_and_unbounded_limits() {
+        for directory in [
+            ".",
+            "captures",
+            "public/captures",
+            ".local/captures/session",
+            ".local/../public",
+            ".local/captures/../captures",
+            ".local//captures",
+            "C:\\captures",
+            "C:\\private\\.local\\captures",
+            "\\\\server\\captures",
+        ] {
+            assert!(
+                parse(["--record-dir", directory].map(String::from), |_| None).is_err(),
+                "{directory}"
+            );
+        }
+        for mode in ["--stdin", "--doctor", "--list-windows"] {
+            assert!(parse(
+                [mode, "--record-dir", ".local/captures"].map(String::from),
+                |_| None
+            )
+            .is_err());
+        }
+        assert!(parse(
+            [
+                "--evaluate",
+                "synthetic.json",
+                "--record-dir",
+                ".local/captures"
+            ]
+            .map(String::from),
+            |_| None
+        )
+        .is_err());
+        assert!(parse(["--record-max-frames", "1"].map(String::from), |_| None).is_err());
+        assert!(parse(
+            [
+                "--record-dir",
+                ".local/captures",
+                "--record-dir",
+                ".local/captures"
+            ]
+            .map(String::from),
+            |_| None
+        )
+        .is_err());
+        for (flag, values) in [
+            ("--record-max-frames", ["0", "20001", "-1", "NaN"]),
+            (
+                "--record-max-bytes",
+                ["0", "2147483649", "-1", "18446744073709551616"],
+            ),
+            ("--record-interval-ms", ["0", "249", "60001", "NaN"]),
+        ] {
+            for value in values {
+                assert!(
+                    parse(
+                        ["--record-dir", ".local/captures", flag, value].map(String::from),
+                        |_| None
+                    )
+                    .is_err(),
+                    "{flag} {value}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn cli_overrides_environment_and_defaults() {
         let cfg = parse(

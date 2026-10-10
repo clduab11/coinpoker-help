@@ -95,8 +95,14 @@
         "note": "SHA-256 copied from the run log; computed after an approximately 2-example change, not a guaranteed byte-exact snapshot of the training input."
       },
       "calibration_file": "laya-calibration.json",
+      "acceptance_file": "calibration.json",
       "question_set_calibrated": false,
       "files": [
+        {
+          "path": "calibration.json",
+          "size": 2297,
+          "sha256": "fb58984f894a6aeabeaac9de7c06e33e796a75752fc13423d342ad7332c626e7"
+        },
         {
           "path": "backbone/config.json",
           "size": 5482,

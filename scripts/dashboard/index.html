@@ -41,30 +41,31 @@
         <p id="monitor-empty" class="monitor-empty" role="status">Waiting for a table reading.</p>
         <div id="monitor-grid" class="monitor-grid no-reading no-history">
           <section id="suggested-action" class="panel action-panel" aria-labelledby="action-title" data-role="uncertain" hidden>
-            <header class="action-heading"><h2 id="action-title" class="eyebrow">Suggested action</h2><span id="role-status" class="badge" hidden></span></header>
+            <header class="action-heading"><h2 id="action-title" class="eyebrow">Observation status</h2><span id="role-status" class="badge" hidden></span></header>
             <div class="action-choice"><p id="action-move" class="action-move">Reading uncertain</p><div id="action-amount-wrap" class="action-amount" hidden><span class="eyebrow">Amount</span><strong id="action-amount">-</strong></div></div>
             <p id="action-reason" class="action-reason" hidden>Baseline gate FAILED.</p>
           </section>
 
           <section id="monitor-readings" class="panel readings-panel" aria-labelledby="observation-title" hidden>
             <header class="panel-heading"><div><p class="eyebrow">Supporting readings</p><h2 id="observation-title">At the table</h2></div><span class="badge" data-tone="warning">Experimental</span></header>
-            <dl class="table-meta"><div><dt>Phase</dt><dd id="game-phase">-</dd></div><div><dt>Acting seat</dt><dd id="acting-seat">-</dd></div></dl>
-            <div class="card-deck"><div class="card-group board-group"><h3>Board</h3><div id="board-cards" class="cards" aria-label="Experimental board cards"></div></div><div class="card-group"><h3>Hero</h3><div id="hero-cards" class="cards" aria-label="Experimental hero cards"></div></div></div>
+            <dl class="table-meta"><div><dt>Phase</dt><dd id="game-phase">-</dd></div><div id="actor-reading"><dt>Acting seat</dt><dd id="acting-seat">-</dd></div></dl>
+            <div class="card-deck"><div class="card-group board-group"><h3>Board</h3><div id="board-cards" class="cards" aria-label="Experimental board cards"></div></div><div id="hero-card-group" class="card-group"><h3>Hero</h3><div id="hero-cards" class="cards" aria-label="Experimental hero cards"></div></div></div>
             <dl class="amount-grid">
               <div><dt>Pot</dt><dd id="amount-pot">-</dd></div>
-              <div><dt id="call-label">Call</dt><dd id="amount-call">-</dd></div>
-              <div><dt>Hero stack</dt><dd id="amount-stack">-</dd></div>
+              <div id="call-reading"><dt id="call-label">Call</dt><dd id="amount-call">-</dd></div>
+              <div id="hero-stack-reading"><dt>Hero stack</dt><dd id="amount-stack">-</dd></div>
             </dl>
-            <section class="reading-row" aria-labelledby="wagers-title"><h3 id="wagers-title">Visible wagers</h3><ul id="visible-wagers" class="wager-list"></ul></section>
-            <section class="reading-row" aria-labelledby="controls-title"><h3 id="controls-title">Offered actions</h3><ul id="control-states" class="control-list" aria-label="Observed labels, not action buttons"></ul><p class="footnote">Presence and enabled state are separate. These labels are not legal-action approval.</p></section>
-            <dl class="raise-bounds"><div><dt>Min raise to</dt><dd id="amount-min">-</dd></div><div><dt>Max raise to</dt><dd id="amount-max">-</dd></div></dl>
-            <dl class="metric-grid">
+            <section id="seats-reading" class="reading-row" aria-labelledby="seats-title"><h3 id="seats-title">Six physical seats / top clockwise</h3><ol id="seat-readings" class="seat-grid" aria-label="Seat-by-seat displayed stacks, wagers and street contributions"></ol></section>
+            <section id="wagers-reading" class="reading-row" aria-labelledby="wagers-title"><h3 id="wagers-title">Visible wagers</h3><ul id="visible-wagers" class="wager-list"></ul></section>
+            <section id="controls-reading" class="reading-row" aria-labelledby="controls-title"><h3 id="controls-title">Offered actions</h3><ul id="control-states" class="control-list" aria-label="Observed labels, not action buttons"></ul><p class="footnote">Presence and enabled state are separate. These labels are not legal-action approval.</p></section>
+            <dl id="raise-bounds" class="raise-bounds"><div><dt>Min raise to</dt><dd id="amount-min">-</dd></div><div><dt>Max raise to</dt><dd id="amount-max">-</dd></div></dl>
+            <dl id="metrics-readings" class="metric-grid" hidden>
               <div><dt>Hand rank</dt><dd id="metric-rank">-</dd></div>
               <div><dt id="metric-odds-label">Pot odds / required equity</dt><dd id="metric-odds">-</dd></div>
               <div class="draw-reading"><dt>Draw completion</dt><dd><dl class="draw-metrics"><div><dt>Outs</dt><dd id="metric-draw-outs">-</dd></div><div><dt>Next card</dt><dd id="metric-draw-next">-</dd></div><div><dt>By river</dt><dd id="metric-draw-river">-</dd></div></dl></dd></div>
               <div><dt>Win equity</dt><dd id="metric-equity">-</dd></div>
             </dl>
-            <p class="footnote">Amounts are practice chips. A dash is unknown; draw completion is not win equity.</p>
+            <p id="reading-limit" class="footnote">A dash is unknown. Metrics and suggestions off.</p>
           </section>
 
           <aside id="history-panel" class="panel history-panel" aria-labelledby="history-title" hidden>

@@ -67,18 +67,37 @@ of unavailable fields. Expiry, heartbeat loss, hidden/resumed tabs and disconnec
 clear current readings without renewing their leases. Runtime/lease/ledger details
 and synthetic fixtures stay behind the scenes, not in extra app views.
 
-**Checkpoint A is UI/contract work, not live recognition acceptance.** The retained
-server is intentionally capture-idle. The next explicitly approved checkpoint
-integrates the bounded private recorder and automatic practice-table attachment,
-after one-time executable/title calibration using local `--list-windows` output.
-The planned automatic attachment supersedes an operator-launched CLI profile as
-the normal Monitor workflow; it is not yet active in checkpoint A. Existing
-`-LiveConfig` remains internal feed tooling, not a browser connect step.
+Normal startup follows the unique visible `CoinPoker.exe` window using the
+private confirmed selector when present. This client's confirmed OS title is
+`CoinPoker`; the visible logo/NLH number are drawn inside the window. No NLH
+OS-title, practice/lobby/cash distinction or fixed resolution is required for
+that confirmed profile. Current dimensions drive normalized six-max crops.
+Missing or ambiguous matches keep Monitor waiting. The built-in NLH-number title
+rule remains for clients that expose it, not a requirement imposed on this client.
+Practice-six-max is user-declared scope, not a mode the title proves.
+`-DashboardOnly` does not attach; `-NoAutoAttach` is diagnostic only, not a browser
+connect step. Resize/replacement invalidates current evidence; history/source
+identity protections are separate from recognition quality.
 
-Currently the native feed reports capture health, **not image recording**:
-`recording_enabled:false`, `recorded_frames:0`. Page/model readiness is not
-`COLLECTOR_READY`. No real observing/seated session or end-to-end latency acceptance
-has occurred in checkpoint A. Seated controls/hero amounts and calculated metrics
+Some client windows draw the CoinPoker logo and `NLH` number inside their frame
+but expose only `CoinPoker` as the OS title. A confirmed private selector can
+use that exact OS title. This is **not** an automatic lobby fallback: it requires
+explicit user confirmation and still fails on multiple visible matches. Source
+identity, current dimensions and perception-quality gates stay independent;
+transition/loading/lobby captures are not positive table labels.
+
+The native recorder saves only private PNGs and a durable SHA-256 manifest under
+`.local/captures/<UTC>-practice/`. Defaults are 7,200 frames, 1 GiB and 500 ms.
+Caps or I/O failures preserve the prefix and stop new recording without deleting
+evidence or restarting monitoring/history. No images, paths or window titles are
+served to the browser. Real counters are separate from capture-health counters.
+The confirmed real-window B check recorded 900x686 frames, followed the
+replacement table and captured its 800x613-to-879x670 resize. SHA-256 audits passed
+for 322 original, 9 transition and 118 replacement-prefix frames; old evidence
+remains in separate private sessions. This establishes capture and recording,
+**not usable recognition**: no observations passed the fitted gate, so Monitor
+shows `Reading uncertain`. No timed C/seated session or full reading-to-Monitor
+latency acceptance has occurred. Seated controls/hero amounts and calculated metrics
 require the later genuine-data/quality checkpoints; a null metric is not zero.
 Private session history uses opaque IDs, not player names or cross-session guesses.
 
@@ -87,6 +106,14 @@ passed, and 47 desktop/400px browser checks passed with no JavaScript errors or
 mutation/external requests. Doctor has ten passes and discovery blocked (exit 1).
 These tests use synthetic role observations, not real seated recognition or
 capture-to-Monitor latency acceptance. Receipts remain private under `.local/`.
+
+Checkpoint B software verification: 425 Rust passes (one ignored), 161 Python
+passes, successful pinned-artifact verification, and refreshed desktop/400px UI
+checks without JavaScript errors. The existing launcher replaced the old service
+only after verifying it stopped; one it1 model remains on 18090. Capture and
+manifest checks now pass; source-current poker readings remain unaccepted.
+The old it1 fitted acceptance floors are now enforced independently from
+temperature calibration; board `1.0` is never lowered or rounded into acceptance.
 
 The baseline receipt stays failed: board threshold `1.0` gave **0/330 confident
 board units** on the 66 agent-reviewed frames, despite raw accuracy
@@ -98,6 +125,42 @@ calibration is not capability approval; source/vendor `calibrated:false` remains
 Positive real UI data and approved human-held-out calibration/evaluation are
 required before seated advice.
 
+**Perception repair stage2 (2026-10-10):** approved implementation is verified
+offline, not live-accepted. Partial read-only fields are separate from strict
+GameState/R17. Independent pot/sixstacks, source-region witnesses/originalexpiry,
+gated per-seat wagers and occupancy/status/badge/button/blind/acting paths are
+wired. New capabilities require their own pinned crop/floor/evidence/human-held-out
+proof; defaults remainuntrained/unknown. No suggestions/metrics or qualitypromotion.
+Monitor/Reference remain the onlyviews, with separate stack/wager/contribution rows.
+
+Workspace506pass/1realcaptureignored, offlinePython/Node207pass, strictclippy pass.
+Saved-answer regression preserves pot+3/5/5stackcandidates withstrictnull, not live
+accuracy/latencyproof. Private receipts andNEWunlabeled72framev2 index staylocal.
+No helper/modelreload, GPUtraining, new observing/capture or gameinput occurred.
+Realquality, hand/convention evidence, browser/mobile and warmtotalp95 are pending
+separate gates; GateF FAIL/humanUNVERIFIED/suggestionsOFF unchanged.
+
+Historical stage1 diagnosis: native observing assembly previously skipped trained stack
+passes, discards players and lacks wagers/badges/dealer/acting-seat extraction.
+This is a recognition/integration failure, not successful tracking. Saved-frame
+replay isolated failed unseated/phase questions and zero board admission at the
+unchanged 1.0 floor; independent pot/stack glyphs often meet their own old floors.
+A confident wrong phase also shows why semantic checks remain necessary. These
+historical diagnostic candidates are not Monitor reads or human acceptance.
+
+Proposed repair separates calibrated source-leased **partial read-only
+observations** from fully validated actionable `GameState`, with explicit six
+physical slots, distinct stacks/wagers/street contributions, hand positions and
+betting gaps. R17 and suggestions OFF remain. No warm total capture-to-Monitor
+latency/live recognition gate has passed. [Vision section 7](docs/LAYA_VISION_PHASE_A.md)
+records outcomes and later gates; private receipts and a pending 72-frame human
+checklist remain local.
+
+[CoinPoker's tools policy](https://coinpoker.com/third-party-tools) prohibits
+gameplay-connected HUD/tracking/opponent analysis and real-time assistance. An
+observing/practice/anonymity exemption has not been established; provider
+clarification is a separate risk/gate before a live use/session.
+
 `screenshot-1.png`, `screenshot-2.png` and `poker-info-sheet.pdf` are odds,
 six-handed raise-first-in and rules references, respectively. They remain
 historical deterministic calculation material, not the source of the new
@@ -108,7 +171,7 @@ Reference displays are not live recommendations.
 
 ```text
 Windows process and window metadata (exe name, PID, HWND)
-  -> calibrated table/lobby title selection, explicit ambiguity
+  -> unique source-specific confirmed game-window selection, explicit ambiguity
   -> Windows Graphics Capture for the selected window, RGBA frame
   -> cumulative and local pixel change checks, persistently animated tiles
      suppressed (seat avatars, badges, glows), stability gate
@@ -122,8 +185,8 @@ Windows process and window metadata (exe name, PID, HWND)
 
 The native capture loop continues during a blocking local Laya
 request. A changed or lost window, ambiguous selection, stale frame, or expired
-lease clears active advice. A configured
-table-only title is required before a visual recommendation can be emitted. Repeated
+lease clears active advice. Configured source identity and strict recognition,
+quality and action validation are required before a visual recommendation. Repeated
 model agreement is not independent proof of correct recognition; the held-out
 real-image gate remains necessary.
 

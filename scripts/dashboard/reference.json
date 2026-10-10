@@ -63,6 +63,42 @@
       "title": "Do You Know How To Play Pocket Aces? Quiz Answers and Explanations",
       "url": "https://upswingpoker.com/pocket-aces-quiz-answers/",
       "publisher": "Upswing Poker"
+    },
+    {
+      "id": "pokerstars-position",
+      "title": "Position and Action Order",
+      "url": "https://www.pokerstars.com/poker/learn/lesson/position/",
+      "publisher": "PokerStars Learn"
+    },
+    {
+      "id": "poker888-position-terms",
+      "title": "Position: Terms and Lojack Alias",
+      "url": "https://www.888poker.com/magazine/poker-terms/position",
+      "publisher": "888poker"
+    },
+    {
+      "id": "poker888-position-names",
+      "title": "Poker Position Names",
+      "url": "https://www.888poker.com/magazine/strategy/poker-position-names",
+      "publisher": "888poker"
+    },
+    {
+      "id": "pokernews-position",
+      "title": "How to Learn Poker: Position Groups",
+      "url": "https://www.pokernews.com/strategy/wpt-global-how-to-learn-poker-from-scratch-43778.htm",
+      "publisher": "PokerNews"
+    },
+    {
+      "id": "tda-2026",
+      "title": "Poker TDA Rules 2026 v1.0: Button and Heads-Up",
+      "url": "https://www.pokertda.com/view-poker-tda-rules/",
+      "publisher": "Poker TDA (tournament rules, not client policy)"
+    },
+    {
+      "id": "roberts-button",
+      "title": "Robert's Rules of Poker v11: Button and Blinds",
+      "url": "https://homepokertourney.org/roberts-rules-of-poker.htm",
+      "publisher": "Home Poker Tourney (third-party reproduction)"
     }
   ],
   "sections": [
@@ -169,30 +205,49 @@
     },
     {
       "id": "six-max-positions",
-      "title": "Six-Max Positions",
-      "scope": "Six occupied seats, no straddle; seat labels depend on the button, not physical seat numbers.",
+      "title": "Positions, Aliases and Action Order",
+      "scope": "Monitor geometry is six-max only. Nine-handed names below are reference only. Standard dealt-in rosters, no straddle; physical slots are not poker positions.",
       "paragraphs": [
-        "This bundle labels the first non-blind UTG; some six-max material calls that same seat LJ (lojack). HJ is the next seat, not a second name for UTG in this six-seat convention. With fewer occupied seats, count remaining players and relabel; do not apply six-seat ranges unchanged.",
-        "Preflop action begins left of the BB. After the flop it begins with the first remaining player left of the button. The BTN therefore acts last postflop when still in the hand. RFI means raising first in after all earlier players folded, with only the blinds posted."
+        "At six-max, UTG and LJ (lojack) name the same first non-blind position in this bundle; HJ (hijack) is the next seat. CO is cutoff, BTN is button, SB is small blind and BB is big blind. Our group convention is UTG/LJ early, HJ middle, CO/BTN late, with blinds separate. Educators differ on grouping HJ; exact names and action order are more precise than early/middle/late.",
+        "Preflop opening action starts left of the BB and moves clockwise relative to the table. Postflop it starts with the first remaining player left of the button; BTN acts last when still in the hand. The tables give first-round order with everyone participating, not an assurance that a folded or all-in player acts. Later reopened betting follows the applicable rules.",
+        "Positions belong to the original dealt-in roster for that hand. Folds do not relabel survivors, and a mid-hand arrival does not become a dealt-in participant. A new shorter-handed deal needs its own validated roster/button/blinds. RFI means raising first in after all earlier players folded, with only blinds posted."
       ],
       "bullets": [
-        "BB has no raise-first-in opportunity in an unopened pot: if all five other players fold, the hand is over. Raising over an SB limp is an isolation raise, not RFI; facing an SB raise is defense, not RFI."
+        "A hand dealt heads-up uses BTN = SB: button/small blind acts first preflop and last postflop; BB acts last preflop and first postflop. Two survivors of a multiway hand retain their original positions; they are not automatically a new heads-up deal.",
+        "Empty seats are not players, but a dead-button rule can place the button at an empty seat. Two occupied screen slots and a dealer marker do not prove a heads-up roster or a moving-button policy. Missing or ambiguous roster/button/blind evidence leaves positions unknown.",
+        "Poker TDA 2026 rules 34 and 36-C establish tournament dead-button and heads-up conventions; Robert's Rules describes button/blind alternatives. Neither proves CoinPoker cash/practice policy or validates these screenshots.",
+        "BB has no raise-first-in opportunity in an unopened pot: if all other players fold, the hand is over. Raising over an SB limp is an isolation raise, not RFI; facing an SB raise is defense, not RFI."
       ],
       "tables": [
         {
-          "caption": "Six-seat preflop order and postflop context",
-          "columns": ["Position", "Preflop order", "Context"],
+          "caption": "Six-max dealt roster: this bundle's grouping and actual opening order",
+          "columns": ["Position / alias", "Group", "Preflop order", "Postflop order"],
           "rows": [
-            ["UTG", 1, "First non-blind; LJ in an alternate convention; five players behind."],
-            ["HJ", 2, "Hijack; distinct from UTG; four players behind."],
-            ["CO", 3, "Cutoff; immediately before BTN."],
-            ["BTN", 4, "Button; last postflop when in the hand."],
-            ["SB", 5, "Small blind; first postflop when in the hand."],
-            ["BB", 6, "Big blind; last preflop before any reopened action; no unopened-pot RFI."]
+            ["UTG / LJ", "Early", 1, 3],
+            ["HJ", "Middle", 2, 4],
+            ["CO", "Late", 3, 5],
+            ["BTN", "Late", 4, 6],
+            ["SB", "Blind", 5, 1],
+            ["BB", "Blind", 6, 2]
+          ]
+        },
+        {
+          "caption": "Nine-handed reference only: not nine-seat visual support",
+          "columns": ["Position", "Group", "Preflop order", "Postflop order"],
+          "rows": [
+            ["UTG", "Early", 1, 3],
+            ["UTG+1", "Early", 2, 4],
+            ["UTG+2", "Early", 3, 5],
+            ["LJ", "Middle", 4, 6],
+            ["HJ", "Middle", 5, 7],
+            ["CO", "Late", 6, 8],
+            ["BTN", "Late", 7, 9],
+            ["SB", "Blind", 8, 1],
+            ["BB", "Blind", 9, 2]
           ]
         }
       ],
-      "source_ids": ["upswing-six-max", "upswing-bet-numbering"]
+      "source_ids": ["pokerstars-position", "poker888-position-terms", "poker888-position-names", "pokernews-position", "tda-2026", "roberts-button", "upswing-six-max"]
     },
     {
       "id": "opening-examples",

@@ -30,6 +30,7 @@ import binascii
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import struct
@@ -37,6 +38,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from functools import lru_cache
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +46,7 @@ import laya_dashboard as dashboard
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(SCRIPTS)
+ROOT = Path(REPO)
 PINS_PATH = os.path.join(SCRIPTS, "laya-pins.json")
 
 HOST = "127.0.0.1"
@@ -55,7 +58,9 @@ MAX_INSTRUCTIONS = 2000
 MAX_OPTION_TEXT = 200
 MAX_NOTE = 500
 MAX_IMAGE_PIXELS = 4096 * 4096
+MAX_REFERENCE_EDGE = 16384
 MAX_GLYPHS = 8
+MAX_GLYPH_BATCH = 6
 ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 LAYOUTS = ("full", "slots", "glyphs")
 GLYPH_STYLES = ("white", "gold")
@@ -67,6 +72,23 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8")}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
        "img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+ACCEPTANCE_PASSES = frozenset({"p0_full", "p2_board", "p3_pot",
+                              *("p5_seat_" + str(n) + "_stack" for n in range(1, 7))})
+STACK_PASSES = frozenset("p5_seat_%d_stack" % n for n in range(1, 7))
+WAGER_PASSES = frozenset("p6_seat_%d_wager" % n for n in range(1, 7))
+SCENE_PASSES = frozenset("p7_seat_%d_scene" % n for n in range(1, 7))
+WAGER_NOTE = "Observed per-seat visible wager glyphs; not stack, street contribution or call cost."
+SCENE_NOTE = "Observed per-seat visible scene only; not names, hidden cards, hand roster or actions."
+SCENE_QUESTIONS = {
+    "occupied": ("Is this physical seat visibly occupied or open?", ["occupied", "open", "unknown"]),
+    "status": ("Read only the visible participation status of this seat.", ["active", "folded", "all_in", "sitting_out", "unknown"]),
+    "badge": ("Read only this seat's visible badge, or none if visibly absent.", ["none", "fold", "check", "call", "bet", "raise", "all_in", "small_blind", "big_blind", "unknown"]),
+    "dealer": ("Is the dealer button visibly at this seat?", ["dealer_here", "not_dealer", "unknown"]),
+    "small_blind": ("Is the small-blind marker visibly at this seat?", ["small_blind_here", "not_small_blind", "unknown"]),
+    "big_blind": ("Is the big-blind marker visibly at this seat?", ["big_blind_here", "not_big_blind", "unknown"]),
+    "acting": ("Does visible acting evidence identify this seat as the current actor?", ["yes", "no", "unknown"]),
+}
+MAX_ACCEPTANCE_REPORT = 64 * 1024
 
 
 class RequestError(Exception):
@@ -180,12 +202,178 @@ def shape_answers(result, questions):
     return out
 
 
+def load_acceptance_floors(pins):
+    """Read the separately pinned fitted report; this is not quality approval."""
+    model = pins.get("model") if isinstance(pins, dict) else None
+    ft = model.get("finetuned") if isinstance(model, dict) else None
+    if not isinstance(ft, dict) or not isinstance(ft.get("files"), list):
+        raise ValueError("acceptance-report-unpinned")
+    filename = ft.get("acceptance_file")
+    entries = [item for item in ft["files"] if isinstance(item, dict) and item.get("path") == filename]
+    if filename != "calibration.json" or len(entries) != 1:
+        raise ValueError("acceptance-report-unpinned")
+    expected = entries[0]
+    size, digest = expected.get("size"), expected.get("sha256")
+    checkpoint = ft.get("path")
+    if (type(size) is not int or not 0 < size <= MAX_ACCEPTANCE_REPORT
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or not isinstance(checkpoint, str) or not checkpoint
+            or Path(checkpoint).is_absolute() or ".." in Path(checkpoint).parts):
+        raise ValueError("acceptance-report-invalid")
+    root = Path(REPO).resolve()
+    base = (root / checkpoint).resolve()
+    path = (base / filename).resolve()
+    if (base != root / checkpoint or not base.is_relative_to(root) or path != base / filename
+            or path.stat().st_size != size):
+        raise ValueError("acceptance-report-invalid")
+    with path.open("rb") as stream:
+        data = stream.read(MAX_ACCEPTANCE_REPORT + 1)
+    if len(data) != size:
+        raise ValueError("acceptance-report-invalid")
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError("acceptance-report-digest-mismatch")
+
+    def unique(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("acceptance-report-invalid")
+            result[key] = value
+        return result
+
+    def finite(text):
+        value = float(text)
+        if not math.isfinite(value):
+            raise ValueError("acceptance-report-invalid")
+        return value
+
+    report = json.loads(data, parse_constant=dashboard._reject_constant, parse_float=finite, object_pairs_hook=unique)
+    floors = report.get("thresholds_per_pass") if isinstance(report, dict) else None
+    if (not isinstance(report, dict) or report.get("ckpt") != checkpoint
+            or not isinstance(floors, dict) or set(floors) != ACCEPTANCE_PASSES
+            or any(type(value) not in (int, float) or not 0 <= value <= 1 or not math.isfinite(value)
+                    for value in floors.values())):
+        raise ValueError("acceptance-report-invalid")
+    return {key: float(value) for key, value in floors.items()}
+
+
+def load_seat_registry(pins, kind):
+    """Optional per-seat evidence, absent for it1. Never caller or global approval."""
+    ft = pins["model"].get("finetuned") or {}
+    if kind not in ("wager", "scene"):
+        raise ValueError("invalid registry kind")
+    prefix = "p6" if kind == "wager" else "p7"
+    name = ft.get(kind + "_registry")
+    if name is None:
+        return {}
+    files = ft.get("files", {})
+    if not isinstance(name, str) or name not in files:
+        raise ValueError("wager-registry-not-pinned")
+    base = (ROOT / ft["path"]).resolve()
+    if not base.is_relative_to(ROOT.resolve()):
+        raise ValueError("wager-registry-path")
+
+    def read_pinned(filename):
+        path = (base / filename).resolve()
+        if not path.is_relative_to(base) or path.stat().st_size > MAX_BODY:
+            raise ValueError("wager-evidence-path")
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != files[filename]:
+            raise ValueError("wager-evidence-hash")
+        return json.loads(raw.decode("utf-8"), parse_constant=dashboard._reject_constant)
+
+    registry = read_pinned(name)
+    alias = pins["server"]["alias"]
+    if (not isinstance(registry, dict) or type(registry.get("version")) is not int
+        or registry["version"] != 1 or registry.get("model_alias") != alias
+        or not isinstance(registry.get("passes"), list) or len(registry["passes"]) > 6):
+        raise ValueError("wager-registry-schema")
+    model_hash = files.get("model.safetensors")
+    if not isinstance(model_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", model_hash) or set(model_hash) == {"0"}:
+        raise ValueError("wager-model-not-pinned")
+    candidate_hash = hashlib.sha256(json.dumps(
+        {key: value for key, value in files.items()
+         if key not in (ft.get("wager_registry"), ft.get("scene_registry"))},
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    qualified, seen = {}, set()
+    for entry in registry["passes"]:
+        if not isinstance(entry, dict) or type(entry.get("seat")) is not int:
+            raise ValueError("wager-registry-seat")
+        seat, pid = entry["seat"], entry.get("pass")
+        if not 1 <= seat <= 6 or pid != "%s_seat_%d_%s" % (prefix, seat, kind) or seat in seen:
+            raise ValueError("wager-registry-seat")
+        seen.add(seat)
+        floor, region = entry.get("fitted_floor"), entry.get("region")
+        valid = (entry.get("trained_candidate") is True and entry.get("held_out_approved") is True
+                 and entry.get("human_verified") is True
+                 and entry.get("provenance") == "observation-only-calibrated-pass"
+                 and type(floor) in (int, float) and 0 < floor <= 1 and math.isfinite(floor)
+                 and entry.get("candidate_sha256") == candidate_hash
+                 and entry.get("model_sha256") == model_hash
+                 and isinstance(region, dict) and region.get("id") == "seat_%d_%s" % (seat, kind))
+        if not valid:
+            continue
+        dimensions, bounds = region.get("reference_dimensions"), region.get("bounds")
+        if (not isinstance(dimensions, list) or len(dimensions) != 2
+            or any(type(n) is not int or not 2 <= n <= MAX_REFERENCE_EDGE for n in dimensions)
+            or not isinstance(bounds, list) or len(bounds) != 4 or any(type(n) is not int for n in bounds)
+            or not 0 <= bounds[0] < bounds[2] <= dimensions[0]
+            or not 0 <= bounds[1] < bounds[3] <= dimensions[1]):
+            continue
+        proof_names = [key for key, digest in files.items()
+                       if key != name and digest == entry.get("capability_evidence_sha256")]
+        if len(proof_names) != 1:
+            continue
+        proof = read_pinned(proof_names[0])
+        if (not isinstance(proof, dict) or type(proof.get("schema_version")) is not int or proof.get("schema_version") != 1
+            or proof.get("human_verification") != "VERIFIED" or proof.get("model_sha256") != model_hash
+            or not isinstance(proof.get("passes"), dict)):
+            continue
+        metrics = proof["passes"].get(pid, {})
+        if (not isinstance(metrics, dict) or type(metrics.get("fitted_floor")) not in (int, float)
+            or metrics.get("fitted_floor") != floor
+            or metrics.get("session_grouped") is not True
+            or metrics.get("calibration_separate_from_held_out") is not True):
+            continue
+        def passes_target(m, coverage, recall=False):
+            return (isinstance(m, dict) and type(m.get("precision")) in (int, float) and .99 <= m["precision"] <= 1
+                    and type(m.get("coverage")) in (int, float) and coverage <= m["coverage"] <= 1
+                    and type(m.get("confident_items")) is int and m["confident_items"] > 0
+                    and type(m.get("positive_opportunities")) is int and m["positive_opportunities"] >= 20
+                    and (not recall or type(m.get("recall")) in (int, float) and .95 <= m["recall"] <= 1))
+        if kind == "wager":
+            if not passes_target(metrics, .85):
+                continue
+        else:
+            fields = metrics.get("fields", {})
+            if not isinstance(fields, dict) or not all(passes_target(fields.get(field),
+                .85 if field in ("status", "badge") else .95, field == "acting") for field in SCENE_QUESTIONS):
+                continue
+        safe = {key: entry[key] for key in ("seat", "pass", "region", "fitted_floor", "trained_candidate",
+            "candidate_sha256", "model_sha256", "capability_evidence_sha256", "held_out_approved",
+            "human_verified", "provenance")}
+        safe["fitted_floor"] = float(floor)
+        qualified[pid] = {**safe, "registry_version": 1, "model_alias": alias}
+    return qualified
+
+
+def load_wager_registry(pins):
+    return load_seat_registry(pins, "wager")
+
+
+def load_scene_registry(pins):
+    return load_seat_registry(pins, "scene")
+
+
 class Engine:
     """Lazy GPU side: decode, prepare, predict. Replaced by a fake in tests."""
 
     def __init__(self, pins, batch_size=32):
         self.pins = pins
         self.batch_size = batch_size
+        self.acceptance_floors = load_acceptance_floors(pins)
+        self.wager_registry = load_wager_registry(pins)
+        self.scene_registry = load_scene_registry(pins)
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
         os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -224,17 +412,175 @@ class Engine:
         torch.cuda.synchronize()
         return res
 
+    def predict_batch(self, samples):
+        """Collate compatible question rows, without changing their original states."""
+        import numpy as np
+        import torch
+        from laya import vlm
+
+        agent = self.agent
+        if self.calibration is not None:
+            self.calibration.check(vlm.checkpoint_identity(agent))
+        temperatures = vlm.resolve_temperature(None, self.calibration)
+        rows, definitions, prefixes, pixels, masks = [], [], [], [], []
+        with torch.no_grad():
+            for sample_index, (images, note, questions) in enumerate(samples):
+                state = {"images": images, "note": note}
+                prefix = vlm.vlm_prefix(agent.processor, images, agent.prep)
+                if prefix["raw_images"] is not None:
+                    pv, pam = agent.prep.pixel_values(prefix["raw_images"], device=agent.device,
+                                                      dtype=agent._torch_dtype())
+                else:
+                    pv = prefix["pixel_values"].to(agent.device, agent._torch_dtype())
+                    pam = prefix["pixel_attention_mask"].to(agent.device)
+                pixels.append(pv)
+                masks.append(pam)
+                prefixes.append(prefix["n_images"])
+                for qid, question in questions.items():
+                    internal = agent._to_internal(question)
+                    item = vlm.build_vlm_inputs(agent.processor, state, internal,
+                        agent.cfg.get("max_len", 1024), agent.cfg.get("head_max_len", 256), prefix=prefix)
+                    options = len(vlm.render_options(internal))
+                    if len(item["markers"]) != options:
+                        raise ValueError("batch-question-invalid")
+                    item["qtype"] = vlm.QTYPES[internal["t"]]
+                    item["sample_index"] = sample_index
+                    rows.append(item)
+                    definitions.append((sample_index, qid, internal,
+                                        vlm.truncation_answer(item["truncation"], internal)))
+            # One bounded image-encoder battery; no concatenated multi-seat prompt.
+            all_pixels, all_masks = torch.cat(pixels), torch.cat(masks)
+            encoded = []
+            for offset in range(0, len(all_pixels), self.batch_size):
+                encoded.append(agent.model.encode_images(all_pixels[offset:offset+self.batch_size],
+                                                        all_masks[offset:offset+self.batch_size]))
+            image_features = torch.cat(encoded)
+            starts = [0]
+            for count in prefixes:
+                starts.append(starts[-1] + count)
+            logits = []
+            for offset in range(0, len(rows), self.batch_size):
+                chunk = rows[offset:offset+self.batch_size]
+                batch = vlm.collate_vlm(chunk, agent.processor.tokenizer.pad_token_id, with_pixels=False)
+                features = torch.cat([image_features[starts[r["sample_index"]]:starts[r["sample_index"]+1]]
+                                      for r in chunk])
+                args = [batch[k].to(agent.device) for k in
+                        ("input_ids", "attention_mask", "marker_pos", "marker_mask", "qtype")]
+                scored, _ = agent.model(*args, image_hidden_states=features,
+                                       option_span=batch["option_span"].to(agent.device))
+                logits.extend(scored.float().cpu().numpy())
+            torch.cuda.synchronize()
+        output = [{"answers": {}} for _ in samples]
+        for (sample_index, qid, question, truncated), scored in zip(definitions, logits):
+            options = list(question["crit"])
+            scale = temperatures.get(vlm.QTYPES[question["t"]],
+                                     agent._checkpoint_temperature(vlm.QTYPES[question["t"]], len(options)))
+            z = np.asarray(scored[:len(options)], dtype=np.float64) / max(1e-3, float(scale))
+            probabilities = np.exp(z-z.max())
+            probabilities /= probabilities.sum()
+            answer = {"type": "choice", "choice": options[int(probabilities.argmax())],
+                      "probabilities": {key: round(float(p), 4) for key, p in zip(options, probabilities)},
+                      "confidence": round(vlm.confidence_from_probs(probabilities, len(options)), 4)}
+            if truncated:
+                answer["truncated"] = truncated
+            output[sample_index]["answers"][qid] = answer
+        return output
+
+
+def answer_diagnostics(pid, answers, floor):
+    """Private closed-vocabulary score decisions; never raw caller prose or admission."""
+    allowed_ids = {"screen_kind", "hero_seat_index", "game_phase", "action_on_hero", "n_seats",
+                   "ev_table_layout", "ev_readable", "ev_board_area", "ev_pot", "ev_seat_controls",
+                   "ev_hero_cards", "ev_action_controls", "ev_consistent"}
+    if pid in SCENE_PASSES:
+        allowed_ids.update(SCENE_QUESTIONS)
+    labels = {"poker_table", "lobby", "unknown", "unreadable", "not_seated", "preflop", "flop",
+              "turn", "river", "showdown", "no_card", "not_a_character", "clubs", "diamonds",
+              "hearts", "spades", ".", ",", "10", "J", "Q", "K", "A", "T",
+              *(str(n) for n in range(10)), *("seat_%d" % n for n in range(1, 7))}
+    if pid in SCENE_PASSES:
+        labels.update(label for _, choices in SCENE_QUESTIONS.values() for label in choices)
+    safe = {}
+    for qid, answer in answers.items():
+        if (qid not in allowed_ids and not re.fullmatch(r"g[1-8]|board_[1-5]_(rank|suit)", qid)):
+            continue
+        value = answer.get("choice")
+        if answer["type"] == "choice":
+            if value not in labels:
+                continue
+            score = answer["probabilities"][value]
+        else:
+            value = answer["noul"] >= 0.5
+            score = answer["noul"] if value else 1-answer["noul"]
+        if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1:
+            continue
+        reason = ("truncated" if answer["truncated"] else "floor-unavailable" if floor is None else
+                  "below-fitted-floor" if score < floor else
+                  "unknown-answer" if value in ("unknown", "unreadable", "not_a_character") else None)
+        safe[qid] = {"v": value, "p": score, "truncated": answer["truncated"],
+                     "effective_fitted_floor": floor, "status": "rejected" if reason else "accepted",
+                     "reason": reason, "score_only_not_admission": True}
+    return safe
+
+
+@lru_cache(maxsize=1)
+def wager_questions():
+    path = ROOT / "crates/ingest/assets/laya/question-set.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"), parse_constant=dashboard._reject_constant)
+    source = next(p for p in manifest["passes"] if p["id"] == "p5_seat_1_stack")
+    return {q["id"]: {"type": q["type"], "instructions": q["instructions"],
+                      "criteria": {label: q["criteria"][label] for label in q["option_order"]}}
+            for q in source["questions"]}
+
 
 def handle_predict(engine, alias, body_bytes, log_fn=None):
     """Pure request handling (testable with a fake engine). Returns (status, payload dict)."""
     try:
-        body = json.loads(body_bytes.decode("utf-8"))
+        body = json.loads(body_bytes.decode("utf-8"), parse_constant=dashboard._reject_constant)
     except (ValueError, UnicodeDecodeError):
         return 400, {"error": "malformed"}
     try:
         pid, note, layout, style, raw, questions = validate_request(body, alias)
     except RequestError as e:
         return e.status, {"error": e.code}
+    floors = getattr(engine, "acceptance_floors", None)
+    floor = floors.get(pid) if pid != "doctor_probe" and isinstance(floors, dict) else None
+    wager_capability = None
+    scene_capability = None
+    if pid in WAGER_PASSES:
+        registry = getattr(engine, "wager_registry", {})
+        wager_capability = registry.get(pid) if isinstance(registry, dict) else None
+        if wager_capability is None:
+            return 503, {"error": "wager-capability-unavailable"}
+        if (json.dumps(body.get("wager_capability"), sort_keys=True, separators=(",", ":"))
+            != json.dumps(wager_capability, sort_keys=True, separators=(",", ":"))
+            or layout != "glyphs" or style != "white"):
+            return 400, {"error": "wager-capability-mismatch"}
+        try:
+            correct_questions = wager_questions()
+        except (OSError, ValueError, KeyError, StopIteration):
+            return 503, {"error": "wager-template-unavailable"}
+        if note != WAGER_NOTE or questions != correct_questions:
+            return 400, {"error": "wager-template-mismatch"}
+        floor = wager_capability["fitted_floor"]
+    if pid in SCENE_PASSES:
+        registry = getattr(engine, "scene_registry", {})
+        scene_capability = registry.get(pid) if isinstance(registry, dict) else None
+        if scene_capability is None:
+            return 503, {"error": "scene-capability-unavailable"}
+        if (json.dumps(body.get("scene_capability"), sort_keys=True, separators=(",", ":"))
+            != json.dumps(scene_capability, sort_keys=True, separators=(",", ":"))
+            or layout != "slots" or len(raw) != 1):
+            return 400, {"error": "scene-capability-mismatch"}
+        expected = {qid: {"type": "choice", "instructions": instructions, "criteria": labels}
+                    for qid, (instructions, labels) in SCENE_QUESTIONS.items()}
+        if note != SCENE_NOTE or questions != expected:
+            return 400, {"error": "scene-template-mismatch"}
+        floor = scene_capability["fitted_floor"]
+    if pid != "doctor_probe" and (pid not in ACCEPTANCE_PASSES and wager_capability is None and scene_capability is None
+                                 or type(floor) not in (int, float)
+                                 or not 0 <= floor <= 1 or not math.isfinite(floor)):
+        return 503, {"error": "acceptance-floor-unavailable"}
     t0 = time.perf_counter()
     try:
         images = engine.decode(raw)
@@ -258,16 +604,93 @@ def handle_predict(engine, alias, body_bytes, log_fn=None):
     t3 = time.perf_counter()
     timing = {"decode": round((t1 - t0) * 1000, 1), "prep": round((t2 - t1) * 1000, 1),
               "predict": round((t3 - t2) * 1000, 1)}
-    payload = {"model": alias, "pass": pid, "answers": answers, "timing_ms": timing}
+    payload = {"model": alias, "pass": pid, "answers": answers, "timing_ms": timing,
+               "acceptance_floor": floor}
     if segments is not None:
         payload["segments"] = segments
+    if wager_capability is not None:
+        payload["wager_capability"] = wager_capability
+    if scene_capability is not None:
+        payload["scene_capability"] = scene_capability
     if log_fn:
         log_fn({"utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds"), "pass": pid,
                 "timing_ms": timing, "segments": segments,
-                "answers": {q: {"v": a.get("choice", a.get("noul")),
-                                "p": (a["probabilities"][a["choice"]] if a["type"] == "choice" else a["noul"]),
-                                "truncated": a["truncated"]} for q, a in answers.items()}})
+                "answers": answer_diagnostics(pid, answers, floor)})
     return 200, payload
+
+
+def handle_predict_batch(engine, alias, body_bytes, log_fn=None):
+    """Bounded six-stack batching only; validates every fitted floor before decoding."""
+    try:
+        body = json.loads(body_bytes.decode("utf-8"), parse_constant=dashboard._reject_constant)
+        if not isinstance(body, dict) or body.get("model") != alias:
+            return 400, {"error": "malformed"}
+        requests = body.get("batch")
+        if not isinstance(requests, list) or not 1 <= len(requests) <= MAX_GLYPH_BATCH:
+            return 400, {"error": "malformed"}
+        validated = [validate_request(request, alias) for request in requests]
+    except (ValueError, UnicodeDecodeError):
+        return 400, {"error": "malformed"}
+    except RequestError as error:
+        return error.status, {"error": error.code}
+    ids = [row[0] for row in validated]
+    if (len(set(ids)) != len(ids) or any(pid not in STACK_PASSES or layout != "glyphs" or style != "gold"
+        or any(q["type"] != "choice" for q in questions.values())
+        for pid, _, layout, style, _, questions in validated)):
+        return 400, {"error": "incompatible-batch"}
+    floors = getattr(engine, "acceptance_floors", {})
+    if (not isinstance(floors, dict) or any(type(floors.get(pid)) not in (int, float)
+        or not math.isfinite(floors[pid]) or not 0 <= floors[pid] <= 1 for pid in ids)):
+        return 503, {"error": "acceptance-floor-unavailable"}
+    if sum(png_size(raw[0])[0]*png_size(raw[0])[1] for _, _, _, _, raw, _ in validated) > MAX_IMAGE_PIXELS:
+        return 400, {"error": "image-too-large"}
+    if not callable(getattr(engine, "predict_batch", None)):
+        return 503, {"error": "batch-unavailable"}
+    samples, active, payloads = [], [], []
+    decode_ms, prep_ms = 0.0, 0.0
+    for pid, note, _, style, raw, questions in validated:
+        start = time.perf_counter()
+        try:
+            image = engine.decode(raw)[0]
+        except Exception:
+            return 400, {"error": "invalid-image"}
+        decoded = time.perf_counter()
+        try:
+            glyphs, info = engine.prep.segment_glyphs(image, style, MAX_GLYPHS)
+            segments = {"n": int(info["n"]), "overflow": bool(info["overflow"])}
+        except Exception:
+            return 400, {"error": "invalid-image"}
+        prepared = time.perf_counter()
+        decode_ms += (decoded-start)*1000
+        prep_ms += (prepared-decoded)*1000
+        questions = {qid: q for qid, q in questions.items() if int(qid[1:]) <= len(glyphs)}
+        payloads.append({"model": alias, "pass": pid, "acceptance_floor": floors[pid],
+                         "segments": segments, "answers": {}})
+        if glyphs and questions and not segments["overflow"]:
+            active.append(len(payloads)-1)
+            samples.append((glyphs, note, questions))
+    start = time.perf_counter()
+    if samples:
+        try:
+            results = engine.predict_batch(samples)
+            if len(results) != len(samples):
+                raise ValueError("batch-result-count")
+            for index, (_, _, questions), result in zip(active, samples, results):
+                payloads[index]["answers"] = shape_answers(result, questions)
+        except Exception:
+            return 500, {"error": "predict-failed"}
+    timing = {"decode": round(decode_ms, 1), "prep": round(prep_ms, 1),
+              "predict": round((time.perf_counter()-start)*1000, 1)}
+    for payload in payloads:
+        # Shared battery timings are not a falsely attributed per-seat latency.
+        payload["timing_ms"] = timing
+        payload["timing_shared_batch"] = True
+        if log_fn:
+            log_fn({"utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds"),
+                    "pass": payload["pass"], "timing_ms": timing, "timing_shared_batch": True,
+                    "segments": payload["segments"], "answers": answer_diagnostics(
+                        payload["pass"], payload["answers"], payload["acceptance_floor"])})
+    return 200, {"model": alias, "results": payloads, "timing_ms": timing}
 
 
 class Service:
@@ -276,16 +699,18 @@ class Service:
         self.inference = threading.Lock()
         self.state = dashboard.DashboardState(alias, self.meta.get("checkpoint"))
         if engine is not None:
-            self.state.set_model("ready", calibrated=self.meta.get("calibrated", False))
+            self.state.set_model("ready", calibrated=self.meta.get("temperature_calibration_loaded", False),
+                                 floors_loaded=self.meta.get("acceptance_floors_loaded", False))
 
-    def predict(self, body):
+    def predict(self, body, batch=False):
         if self.engine is None:
             return 503, {"error": "model-not-ready"}
         if not self.inference.acquire(blocking=False):
             return 503, {"error": "inference-busy"}
         self.state.set_busy(True)
         try:
-            return handle_predict(self.engine, self.alias, body, self.log_fn)
+            handler = handle_predict_batch if batch else handle_predict
+            return handler(self.engine, self.alias, body, self.log_fn)
         except Exception:
             return 500, {"error": "predict-failed"}
         finally:
@@ -413,7 +838,7 @@ def make_handler(engine, alias, meta, log_fn, service=None):
         def do_POST(self):
             if not self._local_request():
                 return
-            if self.path != "/v1/laya/predict":
+            if self.path not in ("/v1/laya/predict", "/v1/laya/predict-batch"):
                 self._discard_body()
                 self._send(404, {"error": "not-found"})
                 return
@@ -437,7 +862,7 @@ def make_handler(engine, alias, meta, log_fn, service=None):
             if self.headers.get("Content-Type", "").split(";", 1)[0].lower() != "application/json":
                 self._send(415, {"error": "json-required"})
                 return
-            status, payload = service.predict(body)
+            status, payload = service.predict(body, batch=self.path.endswith("predict-batch"))
             self._send(status, payload)
 
     return Handler
@@ -517,7 +942,10 @@ def cmd_verify(pins):
     return 0 if not problems else 2
 
 
-def cmd_serve(pins, answers_log, batch_size, dashboard_only=False, live_config=None):
+def cmd_serve(pins, answers_log, batch_size, dashboard_only=False, live_config=None,
+              auto_attach=False, practice_config=dashboard.DEFAULT_PROFILE):
+    if live_config and (auto_attach or practice_config != dashboard.DEFAULT_PROFILE):
+        raise ValueError("choose one attachment selector")
     srv = pins["server"]
     if int(srv["port"]) != PORT:
         raise ValueError("Laya dashboard/model service requires port 18090; no alternate-port fallback")
@@ -535,7 +963,8 @@ def cmd_serve(pins, answers_log, batch_size, dashboard_only=False, live_config=N
                 fh.flush()
     ft = pins["model"].get("finetuned") or {}
     meta = {"checkpoint": ft.get("path"), "base_revision": pins["model"]["revision"],
-            "calibrated": bool(ft.get("calibration_file")),
+            "calibrated": False, "temperature_calibration_loaded": False,
+            "acceptance_floors_loaded": False,
             "quality_gate": "failed", "seated_advice_supported": False}
     service = Service(srv["alias"], meta, log_fn=log_fn)
     httpd = BoundedHTTPServer((HOST, PORT), make_handler(None, srv["alias"], meta, log_fn, service))
@@ -557,8 +986,11 @@ def cmd_serve(pins, answers_log, batch_size, dashboard_only=False, live_config=N
             engine.predict([warm], "warm-up", {"c": {"type": "choice", "instructions": "What colour is the image?",
                                                       "criteria": ["red", "blue", "green"]}})
             warm_ms = round((time.perf_counter() - t0) * 1000, 1)
+            meta.update(temperature_calibration_loaded=engine.calibration is not None,
+                        acceptance_floors_loaded=True,
+                        glyph_batching=callable(getattr(engine, "predict_batch", None)))
             service.engine = engine
-            service.state.set_model("ready", calibrated=meta["calibrated"])
+            service.state.set_model("ready", calibrated=meta["temperature_calibration_loaded"], floors_loaded=True)
             print(json.dumps({"event": "model-ready", "alias": srv["alias"], "warmup_ms": warm_ms,
                               "quality_gate": "failed", "advice_ready": False}), flush=True)
         except Exception:
@@ -570,11 +1002,12 @@ def cmd_serve(pins, answers_log, batch_size, dashboard_only=False, live_config=N
                       "dashboard": True, "advice_ready": False}), flush=True)
     if not dashboard_only:
         threading.Thread(target=initialize, daemon=True).start()
-    if live_config:
+    if auto_attach or live_config:
         try:
-            feed = dashboard.LiveFeed(live_config, service.state)
+            feed = dashboard.AutoAttachFeed(live_config or practice_config, service.state)
+            feed.start()
         except (OSError, ValueError):
-            service.state.end_stream("invalid-live-config")
+            service.state.attach_blocked("invalid-attachment-config")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -594,14 +1027,20 @@ def main(argv=None):
     ap.add_argument("--answers-log", default=None, help="JSONL of answers and timings (no image data)")
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--dashboard-only", action="store_true", help="serve read-only Monitor/Reference without loading a model")
-    ap.add_argument("--live-config", help="explicit operator-owned passive native feed profile under .local")
+    attachment = ap.add_mutually_exclusive_group()
+    attachment.add_argument("--live-config", help="internal strict selector profile under .local, never raw capture argv")
+    attachment.add_argument("--auto-attach", action="store_true", help="automatically retain one uniquely selected passive feed")
+    ap.add_argument("--practice-config", default=dashboard.DEFAULT_PROFILE, help="optional private selector profile under .local")
     a = ap.parse_args(argv)
+    if a.live_config and a.practice_config != dashboard.DEFAULT_PROFILE:
+        ap.error("choose --live-config or --practice-config, not both")
     pins = load_pins()
     if a.command == "verify":
         return cmd_verify(pins)
     if a.command == "fetch":
         return cmd_fetch(pins)
-    return cmd_serve(pins, a.answers_log, a.batch_size, a.dashboard_only, a.live_config)
+    return cmd_serve(pins, a.answers_log, a.batch_size, a.dashboard_only, a.live_config,
+                     a.auto_attach, a.practice_config)
 
 
 if __name__ == "__main__":

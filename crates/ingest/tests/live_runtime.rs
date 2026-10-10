@@ -6,7 +6,7 @@ use ingest::capture::{CaptureError, CaptureSource, Frame, WindowInfo};
 use ingest::discovery::{ApplicationInfo, DiscoveryConfig, DiscoverySnapshot};
 use ingest::runtime::{
     Analysis, Clock, Completion, InferenceFailure, InferenceJob, InferencePort, LiveEvent,
-    LiveRuntime, RuntimeConfig, Ticket,
+    LiveRuntime, RuntimeConfig, Ticket, DECISION_DEADLINE_CODE,
 };
 use ingest::screen::{parse_screen_output, ScreenObservation};
 use ingest::vlm::VlmOutput;
@@ -159,12 +159,16 @@ fn rig(config: RuntimeConfig) -> (Runtime, Source, Worker) {
 fn finish(worker: &Worker, observation: ScreenObservation) {
     worker.0.borrow_mut().ready = Some(Ok(Analysis {
         observation,
+        partial: None,
+        diagnostics: None,
         recommendation: Some("check"),
     }));
 }
 fn finish_without_advice(worker: &Worker, observation: ScreenObservation) {
     worker.0.borrow_mut().ready = Some(Ok(Analysis {
         observation,
+        partial: None,
+        diagnostics: None,
         recommendation: None,
     }));
 }
@@ -263,6 +267,637 @@ fn drive_until_active(runtime: &mut Runtime, start_ms: u64, limit_ms: u64) -> u6
     }
     assert_eq!(runtime.active_count(), 1, "expected an active inference");
     now
+}
+
+fn partial_rig() -> (Runtime, Source, Worker) {
+    let (runtime, source, worker) = rig(RuntimeConfig::default());
+    let mut state = source.0.borrow_mut();
+    state.snapshot.windows[0].width = 800;
+    state.snapshot.windows[0].height = 613;
+    state.frame = partial_source_frame();
+    drop(state);
+    (runtime, source, worker)
+}
+
+fn partial(pot: u32, changed_stack: Option<u32>) -> ingest::partial::PartialObservation {
+    let mut value = partial_score_candidate(pot, changed_stack);
+    value.bind_source_frame(&partial_source_frame()).unwrap();
+    value
+}
+
+fn partial_source_frame() -> Frame {
+    let mut pixels = vec![64; 800 * 613 * 4];
+    pixels[0] = 255;
+    Frame::new(800, 613, pixels).unwrap()
+}
+
+fn partial_score_candidate(
+    pot: u32,
+    changed_stack: Option<u32>,
+) -> ingest::partial::PartialObservation {
+    use ingest::laya::client::{Answer, PassAnswers, Segments};
+    let (value, _, _) = ingest::laya::partial::assemble_partial(
+        ingest::laya::question_set(),
+        (800, 613),
+        None,
+        None,
+        &mut |pass| {
+            let mut result = PassAnswers {
+                acceptance_floor: Some(if pass.id == "p0_full" {
+                    0.995
+                } else if pass.id == "p2_board" {
+                    1.0
+                } else {
+                    0.8
+                }),
+                ..PassAnswers::default()
+            };
+            if pass.id == "p0_full" {
+                for id in ["ev_table_layout", "ev_readable", "ev_board_area", "ev_pot"] {
+                    result.answers.insert(
+                        id.into(),
+                        Answer {
+                            choice: None,
+                            p: 1.0,
+                            truncated: false,
+                        },
+                    );
+                }
+                result.answers.insert(
+                    "screen_kind".into(),
+                    Answer {
+                        choice: Some("poker_table".into()),
+                        p: 1.0,
+                        truncated: false,
+                    },
+                );
+                // Role and phase intentionally unknown, no GameState/card gate.
+            } else if pass.id != "p2_board" {
+                let amount = if pass.id == "p3_pot" {
+                    pot
+                } else if pass.id == "p5_seat_1_stack" {
+                    changed_stack.unwrap_or(10)
+                } else {
+                    10
+                };
+                let text = amount.to_string();
+                result.segments = Some(Segments {
+                    n: text.len() as u32,
+                    overflow: false,
+                });
+                for (i, glyph) in text.chars().enumerate() {
+                    result.answers.insert(
+                        format!("g{}", i + 1),
+                        Answer {
+                            choice: Some(glyph.to_string()),
+                            p: 1.0,
+                            truncated: false,
+                        },
+                    );
+                }
+            }
+            Ok(result)
+        },
+    )
+    .unwrap();
+    value.unwrap()
+}
+
+fn finish_partial(worker: &Worker, value: ingest::partial::PartialObservation) {
+    let mut observation = unseated();
+    observation.state = None;
+    observation.evidence.readable = false; // Strict state failed, core partial remains independent.
+    worker.0.borrow_mut().ready = Some(Ok(Analysis {
+        observation,
+        partial: Some(value),
+        diagnostics: Some(ingest::partial::PerceptionDiagnostics::default()),
+        recommendation: Some("must-not-publish"),
+    }));
+}
+
+fn registered_wager_partial(wager: u32, candidate: &str) -> ingest::partial::PartialObservation {
+    use ingest::laya::client::{Answer, PassAnswers, Segments};
+    let registry: ingest::laya::wager::WagerPassRegistry = serde_json::from_value(json!({
+        "version":1,"model_alias":"coinpoker-laya-vision","passes":(1..=6).map(|seat|
+            json!({"seat":seat,"pass":format!("p6_seat_{seat}_wager"),
+                "region":{"id":format!("seat_{seat}_wager"),"reference_dimensions":[800,613],"bounds":[seat*80,100,seat*80+60,130]},
+                "fitted_floor":0.99,"trained_candidate":true,"held_out_approved":true,"human_verified":true,
+                "candidate_sha256":if seat == 1 { candidate.repeat(64) } else { "1".repeat(64) },
+                "model_sha256":"2".repeat(64),"capability_evidence_sha256":"3".repeat(64),
+                "provenance":"observation-only-calibrated-pass"})).collect::<Vec<_>>()
+    })).unwrap();
+    let (partial, _, _) = ingest::laya::partial::assemble_partial_with_wagers(
+        ingest::laya::question_set(),
+        (800, 613),
+        None,
+        None,
+        &registry,
+        &mut |pass| {
+            let mut answers = PassAnswers {
+                acceptance_floor: Some(if pass.id == "p0_full" {
+                    0.995
+                } else if pass.id == "p2_board" {
+                    1.0
+                } else if pass.id.starts_with("p6_") {
+                    0.99
+                } else {
+                    0.8
+                }),
+                ..PassAnswers::default()
+            };
+            if pass.id == "p0_full" {
+                for id in ["ev_table_layout", "ev_readable", "ev_pot"] {
+                    answers.answers.insert(
+                        id.into(),
+                        Answer {
+                            choice: None,
+                            p: 1.0,
+                            truncated: false,
+                        },
+                    );
+                }
+                answers.answers.insert(
+                    "screen_kind".into(),
+                    Answer {
+                        choice: Some("poker_table".into()),
+                        p: 1.0,
+                        truncated: false,
+                    },
+                );
+            } else if pass.id != "p2_board" {
+                let text = if pass.id == "p6_seat_1_wager" {
+                    wager.to_string()
+                } else if pass.id.starts_with("p6_") {
+                    "7".into()
+                } else {
+                    "10".into()
+                };
+                answers.segments = Some(Segments {
+                    n: text.len() as u32,
+                    overflow: false,
+                });
+                for (i, glyph) in text.chars().enumerate() {
+                    answers.answers.insert(
+                        format!("g{}", i + 1),
+                        Answer {
+                            choice: Some(glyph.to_string()),
+                            p: 1.0,
+                            truncated: false,
+                        },
+                    );
+                }
+            }
+            Ok(answers)
+        },
+    )
+    .unwrap();
+    let mut partial = partial.unwrap();
+    partial.bind_source_frame(&partial_source_frame()).unwrap();
+    partial
+}
+
+#[test]
+fn registered_wagers_need_independent_current_consensus_and_exact_candidate_identity() {
+    for change in ["none", "amount", "candidate"] {
+        let (mut runtime, _, worker) = partial_rig();
+        start(&mut runtime);
+        finish_partial(&worker, registered_wager_partial(7, "1"));
+        runtime.tick(&Time(400));
+        runtime.tick(&Time(500));
+        finish_partial(
+            &worker,
+            registered_wager_partial(
+                if change == "amount" { 8 } else { 7 },
+                if change == "candidate" { "4" } else { "1" },
+            ),
+        );
+        let events = runtime.tick(&Time(600));
+        let view = events
+            .iter()
+            .find_map(|e| match e {
+                LiveEvent::PartialObservation {
+                    value,
+                    valid_for_ms: 4900,
+                    ..
+                } => Some(value),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            view.seats[0].visible_wager,
+            (change == "none").then_some(700)
+        );
+        assert_eq!(view.seats[1].visible_wager, Some(700));
+        assert_eq!(view.seats[0].displayed_stack, Some(1000));
+        assert!(view.seats.iter().all(|s| s.street_contribution.is_none()));
+        assert!(!view.quality_approved && !events.iter().any(is_decision));
+        assert!(view
+            .verified_fields
+            .contains(&ingest::partial::VerifiedField::Wager2));
+        assert_eq!(
+            view.verified_fields
+                .contains(&ingest::partial::VerifiedField::Wager1),
+            change == "none"
+        );
+    }
+    for bad in ["identity", "deadline"] {
+        let (mut runtime, _, worker) = partial_rig();
+        start(&mut runtime);
+        finish_partial(&worker, registered_wager_partial(7, "1"));
+        if bad == "identity" {
+            worker.0.borrow_mut().ticket.as_mut().unwrap().identity.hwnd += 1;
+        }
+        let events = runtime.tick(&Time(if bad == "deadline" { 5300 } else { 400 }));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, LiveEvent::PartialObservation { .. })));
+        assert!(!events.iter().any(is_decision));
+    }
+}
+
+#[test]
+fn source_region_witnesses_withhold_masked_amount_changes_without_erasing_other_fields() {
+    use ingest::partial::{DiagnosticReason, EvidenceStatus, FieldName};
+    for changed in [
+        FieldName::PotSize,
+        FieldName::DisplayedStack,
+        FieldName::VisibleWager,
+    ] {
+        let (mut runtime, source, worker) = partial_rig();
+        start(&mut runtime);
+        finish_partial(&worker, registered_wager_partial(7, "1"));
+        runtime.tick(&Time(400));
+        runtime.tick(&Time(500));
+        let ticket = worker.0.borrow().ticket.clone().unwrap();
+        let bounds = match changed {
+            FieldName::PotSize => ingest::laya::geometry::region_px("pot", 800, 613).unwrap(),
+            FieldName::DisplayedStack => {
+                ingest::laya::geometry::region_px("seat_1_stack", 800, 613).unwrap()
+            }
+            _ => (80, 100, 140, 130),
+        };
+        // A sub-delta pixel change remains globally stable, but exact ROI provenance changes.
+        let offset = ((bounds.1 + 1) * 800 + bounds.0 + 1) as usize * 4;
+        source.0.borrow_mut().frame.rgba[offset] += 1;
+        finish_partial(&worker, registered_wager_partial(7, "1"));
+        let events = runtime.tick(&Time(600));
+        let (current, view) = events
+            .iter()
+            .find_map(|event| match event {
+                LiveEvent::PartialObservation {
+                    ticket,
+                    value,
+                    valid_for_ms: 4900,
+                } => Some((ticket, value)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            current, &ticket,
+            "whole source/generation/epoch must stay exact"
+        );
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, LiveEvent::Discarded { .. })));
+        assert_eq!(
+            view.pot_size,
+            (changed != FieldName::PotSize).then_some(1000)
+        );
+        assert_eq!(
+            view.seats[0].displayed_stack,
+            (changed != FieldName::DisplayedStack).then_some(1000)
+        );
+        assert_eq!(
+            view.seats[0].visible_wager,
+            (changed != FieldName::VisibleWager).then_some(700)
+        );
+        assert!(view.seats[1..]
+            .iter()
+            .all(|s| s.displayed_stack == Some(1000) && s.visible_wager == Some(700)));
+        assert!(events.iter().any(|event| matches!(event, LiveEvent::PerceptionDiagnostics { value, .. }
+            if value.source_current && value.fields.iter().any(|f| f.field == changed
+                && f.status == EvidenceStatus::Accepted && f.admission_status == EvidenceStatus::Rejected
+                && f.admission_reason == DiagnosticReason::SourceRegionChanged))));
+        assert!(!events.iter().any(is_decision));
+        assert!(!view.quality_approved);
+        assert!(runtime.tick(&Time(5500)).iter().any(|e| matches!(
+            e,
+            LiveEvent::ObservationInvalidated {
+                reason: "observation-expired",
+                ..
+            }
+        )));
+    }
+}
+
+#[test]
+fn score_only_candidates_without_source_witness_never_seed_or_publish_partial_consensus() {
+    let (mut runtime, _, worker) = partial_rig();
+    start(&mut runtime);
+    for (finish, next) in [(400, 2400), (2500, 4500)] {
+        finish_partial(&worker, partial_score_candidate(10, None));
+        let events = runtime.tick(&Time(finish));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, LiveEvent::PartialObservation { .. })));
+        assert!(events.iter().any(|e| matches!(e, LiveEvent::PerceptionDiagnostics { value, .. }
+            if value.fields.iter().any(|f| f.admission_status == ingest::partial::EvidenceStatus::Rejected
+                && f.admission_reason == ingest::partial::DiagnosticReason::MissingSourceWitness))));
+        assert!(!events.iter().any(is_decision));
+        runtime.tick(&Time(next));
+    }
+}
+
+#[test]
+fn time_spent_checking_source_witnesses_cannot_extend_or_cross_the_original_expiry() {
+    struct AfterProof(std::cell::Cell<usize>);
+    impl Clock for AfterProof {
+        fn now_ms(&self) -> u64 {
+            let calls = self.0.get();
+            self.0.set(calls + 1);
+            // For this already-selected tick the sixth clock read follows ROI verification.
+            if calls >= 5 {
+                5500
+            } else {
+                600
+            }
+        }
+    }
+    let (mut runtime, _, worker) = partial_rig();
+    start(&mut runtime);
+    finish_partial(&worker, partial(10, None));
+    runtime.tick(&Time(400));
+    runtime.tick(&Time(500));
+    finish_partial(&worker, partial(10, None));
+    let events = runtime.tick(&AfterProof(std::cell::Cell::new(0)));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        LiveEvent::Discarded {
+            reason: DECISION_DEADLINE_CODE,
+            ..
+        }
+    )));
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        LiveEvent::PartialObservation { .. } | LiveEvent::Observation { .. }
+    )));
+    assert!(events.iter().any(|e| matches!(e, LiveEvent::PerceptionDiagnostics { value, valid_for_ms: 0, .. }
+        if !value.source_current && value.admission == ingest::partial::DiagnosticAdmission::DecisionBudgetExpired)));
+    assert!(!events.iter().any(is_decision));
+}
+
+#[test]
+fn known_negative_pixel_proof_vetoes_strict_sibling_and_advice_without_clearing_valid_partial_fields(
+) {
+    for changed in [false, true] {
+        let (mut runtime, source, worker) = partial_rig();
+        start(&mut runtime);
+        for (finish_at, next) in [(400, 500), (600, 700)] {
+            if changed && finish_at == 600 {
+                let (a, b, _, _) = ingest::laya::geometry::region_px("pot", 800, 613).unwrap();
+                source.0.borrow_mut().frame.rgba[(b * 800 + a) as usize * 4] += 1;
+            }
+            finish(&worker, table());
+            {
+                let mut state = worker.0.borrow_mut();
+                let analysis = state.ready.as_mut().unwrap().as_mut().unwrap();
+                analysis.partial = Some(partial(10, None));
+                analysis.diagnostics = Some(ingest::partial::PerceptionDiagnostics::default());
+            }
+            let events = runtime.tick(&Time(finish_at));
+            if finish_at == 600 {
+                assert_eq!(
+                    events
+                        .iter()
+                        .any(|e| matches!(e, LiveEvent::Observation { .. })),
+                    !changed
+                );
+                assert_eq!(events.iter().any(is_decision), !changed);
+                let view = events
+                    .iter()
+                    .find_map(|e| match e {
+                        LiveEvent::PartialObservation { value, .. } => Some(value),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(view.seats.iter().all(|s| s.displayed_stack == Some(1000)));
+                assert_eq!(view.pot_size, (!changed).then_some(1000));
+                assert!(!events.iter().any(|e| matches!(e, LiveEvent::ObservationInvalidated { .. })),
+                    "negative strict-source proof must not clear independently current partial fields");
+            }
+            runtime.tick(&Time(next));
+        }
+    }
+}
+
+#[test]
+fn partial_consensus_is_fieldwise_even_when_role_cards_and_strict_state_fail() {
+    let (mut runtime, _, worker) = partial_rig();
+    start(&mut runtime);
+    finish_partial(&worker, partial(10, None));
+    assert!(!runtime
+        .tick(&Time(400))
+        .iter()
+        .any(|e| matches!(e, LiveEvent::PartialObservation { .. })));
+    runtime.tick(&Time(500));
+    finish_partial(&worker, partial(11, Some(12)));
+    let events = runtime.tick(&Time(600));
+    let (ticket, value, lease) = events
+        .iter()
+        .find_map(|e| match e {
+            LiveEvent::PartialObservation {
+                ticket,
+                value,
+                valid_for_ms,
+            } => Some((ticket, value, valid_for_ms)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(ticket.captured_at_ms, 500);
+    assert_eq!(*lease, 4900);
+    assert_eq!(
+        value.pot_size, None,
+        "pot disagreement must not erase independent stacks"
+    );
+    assert_eq!(value.seats[0].displayed_stack, None);
+    assert_eq!(value.seats[1].displayed_stack, Some(1000));
+    assert!(value.role.is_none() && value.game_phase.is_none() && value.board_count.is_none());
+    assert!(value.seats.iter().all(|seat| seat.visible_wager.is_none()));
+    assert!(!value.quality_approved);
+    assert!(!events.iter().any(is_decision));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, LiveEvent::Observation { .. })));
+    for now in [700, 800, 900] {
+        assert!(!runtime
+            .tick(&Time(now))
+            .iter()
+            .any(|e| matches!(e, LiveEvent::PartialObservation { .. })));
+    }
+    assert!(runtime.tick(&Time(5500)).iter().any(|e| matches!(
+        e,
+        LiveEvent::ObservationInvalidated {
+            reason: "observation-expired",
+            ..
+        }
+    )));
+}
+
+#[test]
+fn partial_obsolete_wrong_identity_out_of_order_and_deadline_results_cannot_seed_consensus() {
+    for cause in [
+        "frame",
+        "identity",
+        "generation",
+        "epoch",
+        "deadline",
+        "worker-deadline",
+    ] {
+        let (mut runtime, source, worker) = partial_rig();
+        start(&mut runtime);
+        finish_partial(&worker, partial(10, None));
+        match cause {
+            "frame" => change(&source, 255),
+            "identity" => worker.0.borrow_mut().ticket.as_mut().unwrap().identity.hwnd += 1,
+            "generation" => worker.0.borrow_mut().ticket.as_mut().unwrap().generation -= 1,
+            "epoch" => worker.0.borrow_mut().ticket.as_mut().unwrap().epoch += 1,
+            "worker-deadline" => {
+                worker
+                    .0
+                    .borrow_mut()
+                    .ready
+                    .as_mut()
+                    .unwrap()
+                    .as_mut()
+                    .unwrap()
+                    .diagnostics
+                    .as_mut()
+                    .unwrap()
+                    .admission = ingest::partial::DiagnosticAdmission::DecisionBudgetExpired;
+            }
+            _ => {}
+        }
+        let now = if cause == "deadline" { 5300 } else { 400 };
+        let events = runtime.tick(&Time(now));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LiveEvent::Discarded { .. })),
+            "{cause}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LiveEvent::PartialObservation { .. })),
+            "{cause}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LiveEvent::PerceptionDiagnostics {
+            value, valid_for_ms: 0, .. } if !value.source_current)),
+            "{cause}"
+        );
+        assert!(!events.iter().any(is_decision));
+    }
+}
+
+#[test]
+fn partial_lobby_or_unidentified_metadata_and_wrong_kind_never_publish() {
+    for cause in ["lobby", "metadata", "kind"] {
+        let (mut runtime, source, worker) = partial_rig();
+        if cause == "lobby" {
+            source.0.borrow_mut().snapshot.windows[0].title = Some("Synthetic lobby".into());
+        }
+        if cause == "metadata" {
+            runtime = LiveRuntime::new(
+                source.clone(),
+                worker.clone(),
+                DiscoveryConfig {
+                    exe_name: Some("test.synthetic".into()),
+                    window_hwnd: Some(7),
+                    table_title: None,
+                    ..DiscoveryConfig::default()
+                },
+                RuntimeConfig::default(),
+            )
+            .unwrap();
+        }
+        start(&mut runtime);
+        for now in [400, 2500] {
+            finish_partial(&worker, partial(10, None));
+            if cause == "kind" {
+                worker
+                    .0
+                    .borrow_mut()
+                    .ready
+                    .as_mut()
+                    .unwrap()
+                    .as_mut()
+                    .unwrap()
+                    .observation = lobby();
+            }
+            let events = runtime.tick(&Time(now));
+            assert!(!events
+                .iter()
+                .any(|e| matches!(e, LiveEvent::PartialObservation { .. })));
+            assert!(!events.iter().any(is_decision));
+            runtime.tick(&Time(now + 2000));
+        }
+    }
+}
+
+#[test]
+fn metadata_suffix_change_keeps_identity_but_resize_invalidates_old_geometry_work() {
+    let (mut runtime, source, worker) = partial_rig();
+    start(&mut runtime);
+    let first = worker.0.borrow().ticket.clone().unwrap();
+    source.0.borrow_mut().snapshot.windows[0].title = Some("Synthetic table renamed".into());
+    let events = runtime.tick(&Time(1000));
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        LiveEvent::ObservationInvalidated {
+            reason: "window-changed",
+            ..
+        }
+    )));
+    assert_eq!(
+        worker.0.borrow().ticket.as_ref().unwrap().epoch,
+        first.epoch
+    );
+    finish_partial(&worker, partial(10, None));
+    runtime.tick(&Time(1100));
+    runtime.tick(&Time(1200));
+    let before_resize = worker.0.borrow().ticket.clone().unwrap();
+    {
+        let mut state = source.0.borrow_mut();
+        state.snapshot.windows[0].width = 879;
+        state.snapshot.windows[0].height = 670;
+        let mut pixels = vec![64; 879 * 670 * 4];
+        pixels[0] = 255;
+        state.frame = Frame::new(879, 670, pixels).unwrap();
+    }
+    finish_partial(&worker, partial(10, None));
+    let events = runtime.tick(&Time(2000));
+    assert!(events.iter().any(|e| matches!(e, LiveEvent::ObservationInvalidated { reason: "geometry-changed", identity: Some(id), .. }
+        if *id == before_resize.identity)));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        LiveEvent::Discarded {
+            reason: "obsolete-observation",
+            ..
+        }
+    )));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, LiveEvent::PartialObservation { .. })));
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        LiveEvent::ObservationInvalidated {
+            reason: "window-changed",
+            ..
+        }
+    )));
 }
 
 #[test]

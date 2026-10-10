@@ -1,7 +1,7 @@
 //! Deterministic envelope assembly from Laya answers (question set 0.4.0,
 //! `assembly_rules` R1-R19). Pure: every model call goes through `run`.
 //!
-//! Confidence: with pass threshold `t = max(pass.threshold, override)`, a
+//! Confidence: with `t = max(pass.threshold, acceptance_floor, override)`, a
 //! choice is accepted iff its probability is `>= t` and it is not truncated; a
 //! noul is true iff `P(true) >= t`, false iff `P(true) <= 1 - t`, otherwise (or
 //! when truncated or missing) it is low confidence and `on_low_confidence`
@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use super::client::{Answer, PassAnswers};
 use super::questions::{Calibration, Pass, QuestionSet, QuestionType};
 use crate::screen::parse_screen_output;
-use crate::vlm::{VlmError, VlmOutput};
+use crate::vlm::{VlmError, VlmOutput, VlmResponseError};
 
 const RANKS: [&str; 13] = [
     "2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A",
@@ -50,7 +50,7 @@ impl Evidence {
 struct Reading<'a> {
     pass: &'a Pass,
     answers: PassAnswers,
-    threshold: f32,
+    threshold: f64,
 }
 
 impl Reading<'_> {
@@ -71,7 +71,7 @@ impl Reading<'_> {
     /// A confident noul value, if any.
     fn noul(&self, id: &str) -> Option<bool> {
         let answer = self.answer(id)?;
-        if answer.truncated {
+        if answer.truncated || !answer.p.is_finite() {
             None
         } else if answer.p >= self.threshold {
             Some(true)
@@ -103,10 +103,10 @@ impl Reading<'_> {
     }
 }
 
-fn threshold(pass: &Pass, threshold_override: Option<f32>) -> f32 {
-    let base = pass.threshold as f32;
+fn threshold(pass: &Pass, acceptance_floor: f64, threshold_override: Option<f32>) -> f64 {
+    let base = pass.threshold.max(acceptance_floor);
     match threshold_override {
-        Some(value) if value > base => value,
+        Some(value) if f64::from(value) > base => f64::from(value),
         _ => base,
     }
 }
@@ -121,14 +121,19 @@ fn run_pass<'a>(
         .pass(id)
         .ok_or_else(|| VlmError::Unavailable("vendored question set lacks a pass".into()))?;
     // Untrained passes are never asked; all their answers are low confidence.
-    let answers = if pass.calibration == Calibration::UntrainedProvisional {
-        PassAnswers::default()
+    let (answers, acceptance_floor) = if pass.calibration == Calibration::UntrainedProvisional {
+        (PassAnswers::default(), pass.threshold)
     } else {
-        run(pass)?
+        let answers = run(pass)?;
+        let acceptance_floor = answers
+            .acceptance_floor
+            .filter(|floor| floor.is_finite() && (0.0..=1.0).contains(floor))
+            .ok_or(VlmError::Parse(VlmResponseError::Schema))?;
+        (answers, acceptance_floor)
     };
     Ok(Reading {
         pass,
-        threshold: threshold(pass, threshold_override),
+        threshold: threshold(pass, acceptance_floor, threshold_override),
         answers,
     })
 }
@@ -337,7 +342,7 @@ mod tests {
     use crate::screen::ScreenKind;
     use std::collections::HashMap;
 
-    fn choice(label: &str, p: f32) -> Answer {
+    fn choice(label: &str, p: f64) -> Answer {
         Answer {
             choice: Some(label.to_string()),
             p,
@@ -345,7 +350,7 @@ mod tests {
         }
     }
 
-    fn noul(p: f32) -> Answer {
+    fn noul(p: f64) -> Answer {
         Answer {
             choice: None,
             p,
@@ -353,7 +358,7 @@ mod tests {
         }
     }
 
-    /// An unseated, readable flop observation.
+    /// An unseated, readable flop with synthetic .8 floors, not fitted floors.
     fn p0(overrides: &[(&str, Answer)]) -> PassAnswers {
         let mut answers: HashMap<String, Answer> = [
             ("screen_kind", choice("poker_table", 0.99)),
@@ -382,6 +387,7 @@ mod tests {
         PassAnswers {
             answers,
             segments: None,
+            acceptance_floor: Some(0.8),
         }
     }
 
@@ -395,6 +401,7 @@ mod tests {
         PassAnswers {
             answers,
             segments: None,
+            acceptance_floor: Some(0.8),
         }
     }
 
@@ -406,6 +413,7 @@ mod tests {
             .collect();
         PassAnswers {
             answers,
+            acceptance_floor: Some(0.8),
             segments: Some(Segments {
                 n: glyphs.len() as u32,
                 overflow: false,
@@ -443,7 +451,10 @@ mod tests {
             threshold_override,
             &mut |pass: &Pass| {
                 calls.push(pass.id.clone());
-                Ok(passes.get(&pass.id).cloned().unwrap_or_default())
+                Ok(passes
+                    .get(&pass.id)
+                    .expect("explicit scripted pass")
+                    .clone())
             },
         )
         .expect("scripted passes never fail");
@@ -470,6 +481,151 @@ mod tests {
             ("p2_board", board(&FLOP)),
             ("p3_pot", pot("1,234.5")),
         ]
+    }
+
+    fn fitted_floor_passes() -> Vec<(&'static str, PassAnswers)> {
+        let mut passes = flop_passes(&[]);
+        // Synthetic answers isolate the immutable it1 per-pass acceptance boundaries.
+        for (id, answers) in &mut passes {
+            let floor = match *id {
+                "p0_full" => 0.995,
+                "p2_board" => 1.0,
+                "p3_pot" => 0.8,
+                _ => unreachable!(),
+            };
+            answers.acceptance_floor = Some(floor);
+            for answer in answers.answers.values_mut() {
+                answer.p = if *id != "p0_full" {
+                    1.0
+                } else if answer.choice.is_none() && answer.p < 0.5 {
+                    1.0 - floor
+                } else {
+                    floor
+                };
+            }
+        }
+        passes
+    }
+
+    #[test]
+    fn acceptance_floor_is_required_and_validated_for_every_trained_pass() {
+        for pass in &question_set().passes {
+            if pass.calibration == Calibration::UntrainedProvisional {
+                continue;
+            }
+            for acceptance_floor in [
+                None,
+                Some(-0.00000001),
+                Some(1.00000001),
+                Some(f64::NAN),
+                Some(f64::INFINITY),
+                Some(f64::NEG_INFINITY),
+            ] {
+                let result = run_pass(question_set(), &pass.id, None, &mut |_| {
+                    Ok(PassAnswers {
+                        acceptance_floor,
+                        ..PassAnswers::default()
+                    })
+                });
+                assert!(matches!(
+                    result,
+                    Err(VlmError::Parse(VlmResponseError::Schema))
+                ));
+            }
+        }
+        let p0 = question_set().pass("p0_full").unwrap();
+        assert_eq!(threshold(p0, 0.995, Some(0.8)), 0.995);
+        assert_eq!(threshold(p0, 0.995, Some(0.99)), 0.995);
+        assert_eq!(threshold(p0, 0.2, None), p0.threshold);
+        assert_eq!(threshold(p0, 0.8, Some(0.9)), f64::from(0.9_f32));
+    }
+
+    #[test]
+    fn acceptance_floor_p0_boundary_and_low_overrides_enforce_both_polarities() {
+        for threshold_override in [None, Some(0.8), Some(0.99)] {
+            for (id, p, accepted) in [
+                ("screen_kind", 0.995, true),
+                ("screen_kind", 0.99499999, false),
+                ("ev_table_layout", 0.995, true),
+                ("ev_table_layout", 0.99499999, false),
+                ("action_on_hero", 1.0 - 0.995, true),
+                ("action_on_hero", 0.00500001, false),
+            ] {
+                let mut passes = fitted_floor_passes();
+                passes[0].1.answers.get_mut(id).unwrap().p = p;
+                let outcome = assemble_script(passes, (800, 613), None, threshold_override);
+                assert_eq!(!outcome.envelope["state"].is_null(), accepted, "{id}: {p}");
+                if !accepted {
+                    assert_eq!(outcome.calls, ["p0_full"]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn acceptance_floor_board_one_checks_every_card_and_no_card_slot() {
+        for cards in [&FLOP[..], &[][..]] {
+            let mut passes = fitted_floor_passes();
+            if cards.is_empty() {
+                passes[0].1.answers.get_mut("game_phase").unwrap().choice = Some("preflop".into());
+            }
+            passes[1].1 = board(cards);
+            passes[1].1.acceptance_floor = Some(1.0);
+            for answer in passes[1].1.answers.values_mut() {
+                answer.p = 1.0;
+            }
+            for threshold_override in [None, Some(0.8), Some(0.99)] {
+                let outcome = assemble_script(passes.clone(), (800, 613), None, threshold_override);
+                assert!(!outcome.envelope["state"].is_null());
+                for id in passes[1].1.answers.keys() {
+                    for invalid in ["below_floor", "truncated", "missing"] {
+                        let mut bad = passes.clone();
+                        let answers = &mut bad[1].1.answers;
+                        match invalid {
+                            "below_floor" => answers.get_mut(id).unwrap().p = 0.99999999,
+                            "truncated" => answers.get_mut(id).unwrap().truncated = true,
+                            _ => {
+                                answers.remove(id);
+                            }
+                        }
+                        let outcome = assemble_script(bad, (800, 613), None, threshold_override);
+                        assert_table_null(&outcome);
+                        assert_eq!(outcome.calls, ["p0_full", "p2_board"]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn acceptance_floor_keeps_noul_fallbacks_and_truncation_at_exact_boundaries() {
+        let pass = question_set().pass("p0_full").unwrap();
+        for floor in [0.995, 1.0] {
+            for id in ["ev_pot", "action_on_hero"] {
+                for (p, expected) in [
+                    (floor, Some(true)),
+                    (1.0 - floor, Some(false)),
+                    (floor - 0.00000001, None),
+                    (1.0 - floor + 0.00000001, None),
+                ] {
+                    let mut answers = p0(&[(id, noul(p))]);
+                    answers.acceptance_floor = Some(floor);
+                    let mut reading = run_pass(question_set(), &pass.id, Some(0.8), &mut |_| {
+                        Ok(answers.clone())
+                    })
+                    .unwrap();
+                    let fallback = pass.question(id).unwrap().on_low_confidence == "true";
+                    assert_eq!(reading.noul(id), expected);
+                    assert_eq!(reading.flag(id), expected.unwrap_or(fallback));
+                    reading.answers.answers.get_mut(id).unwrap().truncated = true;
+                    assert_eq!(reading.noul(id), None);
+                    assert_eq!(reading.flag(id), fallback);
+                    reading.answers.answers.remove(id);
+                    assert_eq!(reading.noul(id), None);
+                    assert_eq!(reading.flag(id), fallback);
+                }
+            }
+        }
     }
 
     #[test]
@@ -759,7 +915,7 @@ mod tests {
 
     #[test]
     fn threshold_override_only_raises_pass_thresholds() {
-        let at = |p: f32| {
+        let at = |p: f64| {
             let mut passes = flop_passes(&[]);
             for (_, answers) in &mut passes {
                 for answer in answers.answers.values_mut() {
@@ -842,6 +998,7 @@ mod tests {
                 })
                 .unwrap();
                 assert!(reading.answers.answers.is_empty());
+                assert_eq!(reading.answers.acceptance_floor, None);
             }
         }
     }
@@ -857,19 +1014,19 @@ mod tests {
             self.0 = x;
             x
         }
-        fn unit(&mut self) -> f32 {
-            (self.next() >> 40) as f32 / (1u64 << 24) as f32
+        fn unit(&mut self) -> f64 {
+            (self.next() >> 40) as f64 / (1u64 << 24) as f64
         }
         fn below(&mut self, n: usize) -> usize {
             (self.next() % n as u64) as usize
         }
-        fn chance(&mut self, p: f32) -> bool {
+        fn chance(&mut self, p: f64) -> bool {
             self.unit() < p
         }
         fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
             items[self.below(items.len())]
         }
-        fn probability(&mut self) -> f32 {
+        fn probability(&mut self) -> f64 {
             match self.below(4) {
                 0 => self.unit(),
                 1 => 0.8 + 0.2 * self.unit(),
@@ -886,7 +1043,7 @@ mod tests {
         board_count: usize,
         street: &str,
     ) -> PassAnswers {
-        let preferred: HashMap<&str, (Option<&str>, f32)> = [
+        let preferred: HashMap<&str, (Option<&str>, f64)> = [
             ("screen_kind", (Some("poker_table"), 0.99)),
             ("ev_table_layout", (None, 0.99)),
             ("ev_hero_cards", (None, 0.01)),
@@ -962,7 +1119,11 @@ mod tests {
         } else {
             None
         };
-        PassAnswers { answers, segments }
+        PassAnswers {
+            answers,
+            segments,
+            acceptance_floor: Some(0.8),
+        }
     }
 
     #[test]
@@ -985,7 +1146,7 @@ mod tests {
             } else {
                 (800 + rng.below(500) as u32, 600 + rng.below(400) as u32)
             };
-            let threshold = rng.chance(0.2).then(|| 0.8 + 0.19 * rng.unit());
+            let threshold = rng.chance(0.2).then(|| (0.8 + 0.19 * rng.unit()) as f32);
             let mut rng_inner = XorShift(rng.next() | 1);
             let text = assemble(
                 question_set(),

@@ -1,6 +1,266 @@
 # Practice-Sandbox Dashboard, Observed History, and Seated Data
 
+## Active Gate: Perception Repair Stage 1 (2026-10-10)
+
+### Stage 2 Superseding Outcome (2026-10-10)
+
+User stage2 approval was explicit. Work began18:10:20Z; final strict workspace
+verifier ended20:24:53.044757Z. Typed partial observations now run beside unchanged
+GameState/R17: independent pot and all six trained stacks, nullable card slots and
+board-corroborated phase. Exact private SHA256 input-region witnesses are compared
+with latest captured pixels before fieldwise consensus; changed regions reject only
+dependent fields. Missing proof/late/obsolete/out-of-order sources fail closed;
+hashing/polls never renew original <=5000ms expiry. Negative proof also vetoes full
+state/advice siblings, and the browser cannot refill their rejected values.
+
+Distinct p6 per-seat wager and p7 scene paths are implemented, disabled by default.
+Scene covers occupied/open, participation, badges, dealer/SB/BB and acting evidence.
+Explicit private CLI registries require per-seat crop/own fitted floor/candidate/
+model/evidence identities and matching pinned human-held-out QA. Request flags or
+another pass's floor cannot approve them. No actual registry was activated here.
+Anonymous temporal modules support frozen hand positions/order, uncertain occupant
+epochs, separate stacks/wagers/commitments/live credit, gaps and call/pot/full/short/
+cumulative-all-in rules. Missing actual hand/roster/order/convention evidence still
+blocks derived events/positions/math; adapters never invent it. Public history keeps
+its existing prefix. Compatible stack batching keeps original contexts and one lock;
+no actual batched-model/p95 evaluation was run. Monitor/Reference only, suggestions OFF.
+
+Private receipts `.local/laya/train/perception-stage2-20261010T1810Z/` retain UTC,
+exit codes, stdout/stderr and corrected failures. Workspace506 pass/1 real-HWND smoke
+ignored,20:04:51.413426Z–20:05:21.849401Z exit0; Python/Node207 pass,
+19:54:44.199857Z–19:54:51.521075Z exit0; clippy -Dwarnings20:24:50.949364Z–
+20:24:53.044757Z exit0. Binaries isolated in private target, running helper untouched.
+Exact saved answers through new Rust assembly/Python projection retain pot+3/5/5stack
+candidates, lobby none, strict state null and cards withheld. This is offline regression,
+not current Monitor readings or perception quality/human acceptance.
+
+NEW `.local/laya/datasets/observing-20261010-v2-staging/manifest.json` references72
+hash-checked existing frames, created20:22:38.353220Z commandexit0. All labels/handIDs/
+splits pending; no image/weight copy, training/calibration/activation. Human UNVERIFIED,
+whole-hand/session/time grouping and separate calibration/held-out/late required.
+Slot1 wagers/exceptional sequences remain coverage gaps; lobby negative only;
+root educational images/PDF excluded as UI positives. Old it1/floors/B preserved.
+
+**Stop after stage2.** No new observing/capture/real-resize session, model reload,
+GPU training/game input/upload/commit/push/release/PS1 edit. GateF historicalFAIL,
+humanUNVERIFIED and suggestionsOFF unchanged. Real scene/wager/card quality,
+hand-boundary/order/convention evidence, browser/mobile and warm TOTALp95<5000ms
+remain unproved and separately gated. This is NOT full measured-live acceptance.
+The remainder of this stage1 section is historical, superseded by this outcome.
+
+The latest user instruction supersedes the prior dashboard-only phase: repair
+source-current observing extraction, including **both seat stacks and wagers**.
+Stage 1 diagnosis is complete; stage 2 production implementation requires explicit
+approval. No live acceptance, human verification, dataset/training approval or
+permission to seat/play follows from diagnosis. Existing checkpoint B changes and
+it1 artifacts are preserved. Suggestions remain OFF, Gate F FAIL, human verification
+UNVERIFIED; exactly Monitor and Reference remain the views.
+
+### Reproduced Failures And Evidence
+
+Private receipts: `.local/laya/train/perception-diagnosis-20261010T1751Z/`.
+Work began with the user message at `2026-10-10T17:51:07Z`. Recorded CPU inventory
+ran `17:55:10.630053Z` to `17:55:12.079204Z`; stored-capture replay ran
+`17:56:12.120597Z` to `17:56:28.224808Z`; both exit 0, empty stderr. It1 audit
+ran `17:59:35.555566Z` to `17:59:37.288509Z`, exit 0, reproducing historical scores
+and unchanged protected dataset/question hashes. An initial nested-PowerShell
+quoting preflight failed (exit 1); stderr is retained. Corrected listener/process
+preflights exited 0. Sole listener: existing PID 87008, loopback 18090, pinned it1.
+No server/model start/stop/restart, training or parallel GPU instance occurred.
+
+Final diagnostic verification ran `18:06:30.866399Z` to `18:06:32.399907Z`, exit 0,
+empty stderr: all 72 proposed checklist hashes, 36 private request records,
+agent-visible amount comparisons, unchanged failed-quality metadata and zero
+live observations/advice checked. Read-only pinned-file/package verification ran
+`18:06:31.107268Z` to `18:06:33.410952Z`, exit 0, empty stderr, without loading a
+model. `git diff --check` passed. No production test suite was rerun for these
+private diagnostics/documentation; stage 2 deterministic tests are not claimed.
+
+Inventory froze 322 original, 9 lobby/transition and 1,547 replacement manifest
+rows. Eight selected PNG hashes and genuine 900x686, 800x613, 879x670 plus negative
+1280x778 geometries were checked. Audit-time capture was unavailable, not a
+functioning fresh Monitor. Historical ledgers contain no accepted observations.
+Replacement-ledger prefix: 219 screen-not-accepted, 378 obsolete-observation;
+190 analyzing intervals first invalidated on frame-changed. These counts do not
+identify original failing questions or measure inference/display latency.
+
+Four saved frames were replayed through the existing single inference lock:
+36 sequential HTTP 200 requests, no busy retry/bypass. Independent passes were
+deliberately evaluated even when normal assembly would stop; results are historical,
+never Monitor observations. Private receipts retain source/hash/age, exact crop
+bounds/dimensions, answer/score/effective floor/reason, preprocess/encode/HTTP and
+server decode/prep/inference timing. Capture/queue/assembly/publish/render timing
+is unavailable and explicitly null, not fabricated zero.
+
+| Genuine Frame | Exact Failure | Independently Score-Eligible Amounts |
+| --- | --- | --- |
+| 900x686 preflop | ev_seat_controls 0.9808 <0.995 | Pot and 3/4 visibly occupied stacks; seat 5 g3 predicts a decimal point at 0.5499 <0.8 |
+| 800x613 turn | game_phase 'turn' 0.8725 <0.995 | Pot and all 5 visibly occupied stacks |
+| 879x670 five-card board | hero_seat_index 'not_seated' 0.9925 <0.995; wrong phase 'turn' at 0.9976 | Pot and all 5 visibly occupied stacks |
+| 1280x778 lobby | Correct lobby classification 0.9989; never positive table evidence | No admitted readings |
+
+All 30 table board rank/suit/no-card answers are below unchanged floor 1.0:
+zero card admission is failure. Score-eligible amounts are not human-approved
+precision/coverage. Empty segmentation is unknown, not zero or an open-seat
+classification. Three table serial batteries took 4696.0/4624.9/4735.2 ms including
+encoding; these diagnostic samples are NOT warm capture-to-Monitor p95. Adding
+unbatched wager/badge passes has inadequate headroom; total latency remains unrun.
+
+Structural diagnosis:
+
+- `laya/assembly.rs` only runs p0/p2/pot and emits `players: []`; six trained p5
+  stack passes are never called. R15/R16 explicitly restrict observing data.
+  Wager/badge/acting/dealer/occupancy passes do not exist.
+- Board failure prevents even trying pot. Full-state consensus and the dashboard
+  ignoring weak `table` events still precede downstream field flags.
+- Live history receives `quality_approved:false` snapshots without seat/hand/street
+  fields: intentional gaps, not betting events.
+- Hero-empty observing preflop matches the actionable inter-hand-marker shape;
+  its normal flop transition is rejected. This is source-code diagnosis, not an
+  exercised live failure or permission to weaken the strict validator.
+- Whole-frame epoch changes obsolete work; animation suppression already exists.
+  Full WindowInfo comparison also treats resize metadata as selection change.
+
+### Proposed Stage 2 Boundary (Not Implemented)
+
+1. Return typed `PartialObservation` alongside strict `ScreenObservation` and
+   actionable `GameState`, not a fabricated player list. Table/layout/readability
+   and each field's calibrated dependencies/floor determine read-only eligibility.
+   Unknown hero role/cards must not erase independent pot/stack evidence; role
+   remains unknown. Semantic contradiction still rejects dependent fields.
+2. Keep a per-capability registry for training/calibration/held-out/human status
+   and provenance. Preserve it1 floors, especially board 1.0: no lowering/clamping,
+   rounding into acceptance or global boolean quality promotion. Trained stack/
+   pot glyphs do not authorize new wager crops; unsupported passes are shadow-only.
+3. Map measured regions explicitly to physical slots: top, upper right, lower right,
+   bottom, lower left, upper left, clockwise. Never use player-vector order. Wire
+   all six stack paths plus distinct wager, occupancy/participation/badge, dealer/
+   blind and acting-seat paths after their calibration. Proposed wager rectangles
+   are privately measured for five slots; slot 1 positive wager remains a data
+   blocker. Central chips below the board can be pot/animation, not a seat wager.
+4. Maintain a separate observation-hand timeline and frozen dealt-in roster.
+   Mid-hand attachment gives unknown/partial hand context until a validated boundary;
+   folds do not relabel positions and joiners wait for the next roster. Occupant
+   epochs prevent statistics transfer after uncertain changes; no name OCR or
+   hidden-card inference. Rotation/uncertain geometry reassociation breaks identity.
+5. Bind each field to capture ticket/geometry/context/hand, original source age,
+   ordered sequence and expiry <=5000 ms including display. Confirm current pixels
+   before publication; withhold late/out-of-order/cross-hand results. Region-local
+   invalidation can spare independent fields only with fresh matching context/
+   region proof. Unchanged-region cache never renews original capture age or a
+   lease through polling; re-infer at expiry. Batch compatible passes on one engine.
+6. Feed betting history only sufficient capability-approved hand/order/occurrence
+   and seat evidence, not a flipped global quality flag. Separate displayed stack,
+   transient visible wager, live street credit, total street contribution, ante/
+   dead money and pot. Reconcile confirmed returns/awards/rebuys/side pots and street
+   boundaries. Stack decreases alone are not actions. Deduplicate badges; preserve
+   gaps, observed-versus-inferred provenance and complete-prefix raise ordinals.
+   Short/cumulative all-ins preserve full increments and per-seat reopening rights.
+7. Acting-seat additional call cost needs legal bring-in/current target, live credit
+   and remaining chips. Antes/dead blinds are not call credit; short BB may leave
+   nominal bring-in above visible chips. Odds require validated eligible pot and
+   client inclusion convention. Never 'your call' while observing. R17, legal/action
+   validation and suggestions OFF remain; math/rankings use accepted cards only.
+
+### Position And Pot Evidence
+
+Six-max names: UTG/LJ, HJ, CO, BTN, SB, BB. Nine-handed **reference only**:
+UTG, UTG+1, UTG+2, LJ, HJ, CO, BTN, SB, BB. Chosen groups: six-max UTG/LJ early,
+HJ middle, CO/BTN late; nine-handed reference UTG/+1/+2 early, LJ/HJ middle,
+CO/BTN late. Blinds are distinct, not universally late. Educators differ on HJ
+grouping; retain exact names and actual preflop/postflop order separately.
+
+Clockwise is table-relative, not screen vector order. Dealt-heads-up BTN=SB acts
+first preflop/last postflop; two survivors of a multiway hand keep original
+positions. Empty seats are not participants, but can carry a dead button. A real
+two-occupied-slot example shows a D marker at an empty slot: do not infer heads-up,
+moving button or original roster. Missing/ambiguous button/blind/roster/policy
+leaves positions unknown. Sources establish general rules, not client policy:
+
+- [PokerStars Learn](https://www.pokerstars.com/poker/learn/lesson/position/)
+- [888poker position terms](https://www.888poker.com/magazine/poker-terms/position)
+- [888poker position names](https://www.888poker.com/magazine/strategy/poker-position-names)
+- [PokerNews positions](https://www.pokernews.com/strategy/wpt-global-how-to-learn-poker-from-scratch-43778.htm)
+- [Poker TDA 2026 v1.0](https://www.pokertda.com/view-poker-tda-rules/), rules 34,
+  36-C, 49 and 59: tournament rules, not CoinPoker cash/practice implementation
+- [Robert's Rules v11 reproduction](https://homepokertourney.org/roberts-rules-of-poker.htm)
+
+Three inspected preflop examples show displayed pot equal to summed outstanding
+wagers, supporting an inclusion hypothesis. Sweeps/returns/side pots/rake are
+not validated; never add those wagers to aggregate pot or compute odds yet.
+Root education images/PDF stay references; lobby stays negative material.
+
+### Targets, Tests And Separate Data Gates
+
+Retain screen >=98% precision/95% coverage, phase/path >=98%, cards/critical amounts
+>=99% precision/85% coverage, action controls >=98% precision/95% recall with
+>=20 distinct positive opportunities. Zero confident items always fails.
+Proposed new targets reflect identity/call-cost sensitivity, not weakened gates:
+
+| New Capability | Precision | Coverage/Recall |
+| --- | --- | --- |
+| Occupied/open; dealer/SB/BB | >=99% | >=95% visible opportunity coverage |
+| Participation/fold/all-in; badges | >=99% | >=85% visible opportunity coverage |
+| Wagers; established street contribution | >=99% exact amount | >=85% coverage |
+| Acting-seat; hand boundary | >=99% | >=95% recall, >=20 distinct positives each |
+| Observed betting events with known ordering | >=99% | >=85% annotated segment coverage |
+
+Report per-slot and pooled denominators/precision/coverage/gaps/grouped uncertainty.
+Human-readable unanswered opportunities stay in coverage denominators; no empty-
+seat inflation, confident-only accuracy or dropped-result latency substitution.
+Current examples do not certify any new gate. A proposed finite private 72-frame
+human checklist spans 16 original, 8 small replacement, 40 large replacement and
+8 negatives; all pending, no hand IDs/splits. It is not a labelled dataset or
+human approval; slot 1 wagers and exceptional action sequences need more evidence.
+
+Approved stage 2 tests must cover mappings/handedness/headsup/dead-button ambiguity,
+folds/joins/occupant epochs, stacks AND wagers for every slot, call costs/antes/
+short BB/full and short/cumulative all-in reopening/returns/side pots, badge
+deduplication/gaps, independent field admission without advice, resize/replacement
+and history preservation, wrong/lobby/transition/stale/out-of-order inputs,
+privacy and lease expiry. Stage 3 live observing needs separate approval and warm
+TOTAL capture-to-Monitor p95 <5000 ms, with late results withheld. Stage 4 seated
+data, human labels and one sequential GPU candidate from it1 each need separate
+approval. At that gate create a NEW versioned private dataset; split by labelled
+hand/session/time, separate calibration/held-out/late, preserve old it1 unchanged.
+
+[CoinPoker's tools policy](https://coinpoker.com/third-party-tools), updated
+2026-06-25, prohibits gameplay-connected HUD/tracking/opponent analysis and RTA
+while the client is open. No practice/observing/anonymity exemption is established.
+Provider clarification is a separate live-use risk/gate, not supplied by agent
+review or implementation approval. Stop here for explicit stage 2 approval.
+
 ## Plan Adjustment: Role-Aware Monitor + Reference (2026-10-10)
+
+**Actual-window calibration and B checks after the user's `16:52:31Z` report:**
+the visible logo/NLH/number caption is drawn internally; Win32 reports exact OS
+title `CoinPoker`. The user explicitly confirmed that actual game window via
+question tool. Private `.local/practice-table.json` selects its exact OS title
+and executable. The default NLH rule is unchanged; no unconfirmed generic-title
+fallback exists. Actual capture, hashed recording, replacement-window following
+and adaptive resolution now pass. At `17:04:52Z`, 322 first-table, 9 transition
+and 118 replacement-prefix PNGs passed hash/size/dimension audits. Loading/
+transition captures are unlabelled, never implicit positives. Old evidence is
+preserved; resizing retained the replacement stream/history.
+
+Zero observations were accepted in the checked sessions. Monitor correctly
+shows `Reading uncertain`; automated Observing/card/pot/wager readings and full
+capture-to-Monitor p95 remain unaccepted. Health-only p95 was 150.86 ms first
+table and 152.27 ms replacement, excluding inference/display. Suggestions and
+metrics stay off/unknown, fitted floors unchanged. C still requires explicit
+approval. Python tests now161; Rust unchanged425 plusoneignored. B is uncommitted.
+
+**B selector adjustment `2026-10-10T15:03:16Z`:** the user explicitly selected
+the running CoinPoker game window whose title starts with `NLH` followed by a
+number string. Do not require different practice/lobby/cash titles. Use an
+anchored `^NLH\s*[0-9]+` selector on the measured CoinPoker executable, one
+visible usable match, and its current PID/HWND. Actual capture dimensions and
+normalized six-max regions adapt to resizing; size and role changes must not
+restart the feed, recorder or history. Ambiguous/absent matches fail closed.
+Practice/six-max remains user-declared session scope, not something a title
+proves. The lobby image is negative/reference material only, not seated data;
+do not delete or upload it. This supersedes the initial B implementation's
+over-strict measured practice/lobby/cash title-attestation design.
 
 **Checkpoint A completed (software/UI only):** 402 Rust passes (one ignored),
 79 Python passes and 47 desktop/400px browser passes. Reference is bundled and
@@ -8,6 +268,17 @@ works on the retained canonical server; Python DTO/route refresh is deferred to
 the controlled B restart. No live source/recorder or physical role/latency
 acceptance yet. Actual receipts and limitations are in readiness Addendum 12 and
 `.local/laya/train/role-aware-20261010/`. B remains an explicit question-tool gate.
+
+**B implementation/service verification (2026-10-10):** private bounded native
+recorder, NLH-number auto-attachment, current-capture history and immutable fitted
+floor enforcement are implemented. 425 Rust passes (one ignored), 159 Python
+passes, artifact verification and real desktop/400px UI checks pass. Existing
+launcher replaced only verified PID24372; sole replacement PID67552 serves18090
+with it1/floors loaded, quality FAILED, advice OFF. B edits remain uncommitted.
+Current blocker is no eligible visible NLH-number game window: supervisor waits,
+real frame/recording counts zero, no physical collector/readings/latency acceptance.
+No C/D/E/F, training or new commits/pushes. During active Goal the question tool
+is unavailable; report blocked instead of treating absence/silence as approval.
 
 **Authorization update `2026-10-10T06:27:30Z`:** the user explicitly requested a
 thoughtful commit and push of all updates before checkpoint B. This supersedes

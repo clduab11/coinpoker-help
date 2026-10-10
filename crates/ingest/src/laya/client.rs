@@ -2,7 +2,7 @@
 //!
 //! Request: `{model, pass, note, layout, glyph_style?, images_png_b64, questions:
 //! {qid: {type, instructions, criteria?}}}`. Response: `{model, pass, answers:
-//! {qid: {type, choice?, probabilities?, noul?, confidence, truncated}},
+//! {qid: {type, choice?, probabilities?, noul?, confidence, truncated}}, acceptance_floor,
 //! segments?: {n, overflow}, timing_ms}`. Neither request nor response content
 //! ever enters an error value.
 
@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use super::questions::{Pass, QuestionType};
+use super::questions::{Calibration, Layout, Pass, QuestionType};
 use crate::vlm::{
     base64_png, http_agent, read_bounded, remaining_budget, validate_endpoint, VlmConfig, VlmError,
     VlmResponseError,
@@ -25,7 +25,7 @@ const MAX_RESPONSE: u64 = 1_048_576;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
     pub choice: Option<String>,
-    pub p: f32,
+    pub p: f64,
     pub truncated: bool,
 }
 
@@ -41,6 +41,8 @@ pub struct Segments {
 pub struct PassAnswers {
     pub answers: HashMap<String, Answer>,
     pub segments: Option<Segments>,
+    /// Required on server responses; absent only for an unattempted pass.
+    pub acceptance_floor: Option<f64>,
 }
 
 pub struct LayaClient {
@@ -55,6 +57,7 @@ struct WireResponse {
     model: String,
     #[serde(rename = "pass")]
     pass_id: String,
+    acceptance_floor: f64,
     answers: HashMap<String, WireAnswer>,
     #[serde(default)]
     segments: Option<Segments>,
@@ -77,9 +80,9 @@ fn schema() -> VlmError {
     VlmError::Parse(VlmResponseError::Schema)
 }
 
-fn probability(value: f64) -> Result<f32, VlmError> {
+fn probability(value: f64) -> Result<f64, VlmError> {
     if value.is_finite() && (0.0..=1.0).contains(&value) {
-        Ok(value as f32)
+        Ok(value)
     } else {
         Err(schema())
     }
@@ -99,6 +102,9 @@ impl LayaClient {
 
     pub fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+    pub fn model(&self) -> &str {
+        &self.model
     }
 
     fn request_body(&self, pass: &Pass, images: &[Vec<u8>]) -> Value {
@@ -130,7 +136,7 @@ impl LayaClient {
 
     /// Ask every question of `pass` about the PNG `images` (in region order).
     pub fn predict(&self, pass: &Pass, images: Vec<Vec<u8>>) -> Result<PassAnswers, VlmError> {
-        self.predict_until(pass, images, None)
+        self.predict_until(pass, images, None, None)
     }
 
     pub fn predict_with_deadline(
@@ -139,7 +145,149 @@ impl LayaClient {
         images: Vec<Vec<u8>>,
         deadline: Instant,
     ) -> Result<PassAnswers, VlmError> {
-        self.predict_until(pass, images, Some(deadline))
+        self.predict_until(pass, images, Some(deadline), None)
+    }
+
+    pub fn predict_wager_with_deadline(
+        &self,
+        pass: &Pass,
+        images: Vec<Vec<u8>>,
+        registry: &super::wager::WagerPassRegistry,
+        entry: &super::wager::WagerPassConfig,
+        deadline: Instant,
+    ) -> Result<PassAnswers, VlmError> {
+        registry.validate_for_model(&self.model)?;
+        if entry.qualification().is_err()
+            || pass.id != entry.pass
+            || registry.seat(entry.seat) != Some(entry)
+        {
+            return Err(schema());
+        }
+        self.predict_until(
+            pass,
+            images,
+            Some(deadline),
+            Some(("wager_capability", registry.wire_capability(entry))),
+        )
+    }
+
+    pub fn predict_scene_with_deadline(
+        &self,
+        pass: &Pass,
+        images: Vec<Vec<u8>>,
+        registry: &super::scene::ScenePassRegistry,
+        entry: &super::scene::ScenePassConfig,
+        deadline: Instant,
+    ) -> Result<PassAnswers, VlmError> {
+        registry.validate_for_model(&self.model)?;
+        if entry.qualification().is_err()
+            || pass.id != entry.pass
+            || registry.seat(entry.seat) != Some(entry)
+            || images.len() != 1
+        {
+            return Err(schema());
+        }
+        let descriptor = entry.pass_descriptor().ok_or_else(schema)?;
+        if pass.layout != descriptor.layout
+            || pass.regions != descriptor.regions
+            || pass.note != descriptor.note
+            || pass.calibration != descriptor.calibration
+            || pass.threshold != descriptor.threshold
+            || pass.glyph_style.is_some()
+            || pass.amount.is_some()
+            || pass.questions.len() != descriptor.questions.len()
+            || pass
+                .questions
+                .iter()
+                .zip(&descriptor.questions)
+                .any(|(a, b)| {
+                    a.id != b.id
+                        || a.kind != b.kind
+                        || a.instructions != b.instructions
+                        || a.wire_criteria() != b.wire_criteria()
+                        || a.image != b.image
+                })
+        {
+            return Err(schema());
+        }
+        self.predict_until(
+            pass,
+            images,
+            Some(deadline),
+            Some(("scene_capability", registry.wire_capability(entry))),
+        )
+    }
+
+    /// Each trained stack pass retains its own prompts, images, segmentation and floor.
+    /// Unsupported old helpers return 404; the caller alone may choose serial fallback.
+    pub fn predict_batch_with_deadline(
+        &self,
+        passes: &[(&Pass, Vec<Vec<u8>>)],
+        deadline: Instant,
+    ) -> Result<Vec<Result<PassAnswers, VlmError>>, VlmError> {
+        self.request_timeout(Some(deadline), Instant::now())?;
+        if passes.is_empty() || passes.len() > 6 {
+            return Err(schema());
+        }
+        for (i, (pass, images)) in passes.iter().enumerate() {
+            if pass.layout != Layout::Glyphs
+                || pass.calibration == Calibration::UntrainedProvisional
+                || !(1..=6).any(|seat| pass.id == format!("p5_seat_{seat}_stack"))
+                || pass.glyph_style != passes[0].0.glyph_style
+                || images.len() != pass.regions.len()
+                || passes[..i].iter().any(|(other, _)| other.id == pass.id)
+            {
+                return Err(schema());
+            }
+        }
+        let endpoint = self.endpoint.strip_suffix("/predict").ok_or_else(schema)?;
+        let body = json!({"model": self.model, "batch": passes.iter()
+            .map(|(pass, images)| self.request_body(pass, images)).collect::<Vec<_>>()});
+        let timeout = self.request_timeout(Some(deadline), Instant::now())?;
+        let response = match self
+            .agent
+            .post(&format!("{endpoint}/predict-batch"))
+            .timeout(timeout)
+            .send_json(body)
+        {
+            Ok(response) => response,
+            Err(ureq::Error::Status(status, _)) => {
+                return Err(VlmError::Server {
+                    status,
+                    body: String::new(),
+                })
+            }
+            Err(_) => {
+                remaining_budget(deadline, Instant::now())?;
+                return Err(VlmError::Request("local Laya batch unavailable".into()));
+            }
+        };
+        if !(200..300).contains(&response.status()) {
+            return Err(VlmError::Server {
+                status: response.status(),
+                body: String::new(),
+            });
+        }
+        let bytes = read_bounded(response, MAX_RESPONSE);
+        remaining_budget(deadline, Instant::now())?;
+        let wire: Value = serde_json::from_slice(&bytes?).map_err(|_| schema())?;
+        if wire.get("model").and_then(Value::as_str) != Some(&self.model) {
+            return Err(schema());
+        }
+        let results = wire
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or_else(schema)?;
+        if results.len() != passes.len() {
+            return Err(schema());
+        }
+        let parsed = passes
+            .iter()
+            .zip(results)
+            .map(|((pass, _), result)| self.parse_response(pass, &result.to_string()))
+            .collect();
+        remaining_budget(deadline, Instant::now())?;
+        Ok(parsed)
     }
 
     fn request_timeout(
@@ -158,9 +306,13 @@ impl LayaClient {
         pass: &Pass,
         images: Vec<Vec<u8>>,
         deadline: Option<Instant>,
+        capability: Option<(&str, Value)>,
     ) -> Result<PassAnswers, VlmError> {
         self.request_timeout(deadline, Instant::now())?;
-        let body = self.request_body(pass, &images);
+        let mut body = self.request_body(pass, &images);
+        if let Some((key, expected)) = &capability {
+            body[*key] = expected.clone();
+        }
         drop(images);
         let timeout = self.request_timeout(deadline, Instant::now())?;
         // Servers can echo requests (including screenshots) in error bodies:
@@ -204,11 +356,95 @@ impl LayaClient {
         let bytes = bytes?;
         let text =
             std::str::from_utf8(&bytes).map_err(|_| VlmError::Parse(VlmResponseError::Encoding))?;
-        let result = self.parse_response(pass, text);
+        if let Some((key, expected)) = &capability {
+            let wire: Value = serde_json::from_str(text).map_err(|_| schema())?;
+            let family = if *key == "scene_capability" {
+                "scene"
+            } else {
+                "wager"
+            };
+            if wire.get(*key) != Some(expected) {
+                return Err(VlmError::Unavailable(format!(
+                    "{family}-capability-identity-mismatch"
+                )));
+            }
+            if !wire
+                .get("acceptance_floor")
+                .and_then(Value::as_f64)
+                .is_some_and(|f| {
+                    f.is_finite() && f <= 1.0 && f >= expected["fitted_floor"].as_f64().unwrap()
+                })
+            {
+                return Err(VlmError::Unavailable(format!(
+                    "{family}-fitted-floor-mismatch"
+                )));
+            }
+        }
+        let result = if capability
+            .as_ref()
+            .is_some_and(|(key, _)| *key == "scene_capability")
+        {
+            self.parse_scene_response(pass, text)
+        } else {
+            self.parse_response(pass, text)
+        };
         if let Some(deadline) = deadline {
             remaining_budget(deadline, Instant::now())?;
         }
         result
+    }
+
+    // A malformed scene answer rejects that question only, never adjacent seat evidence.
+    fn parse_scene_response(&self, pass: &Pass, text: &str) -> Result<PassAnswers, VlmError> {
+        let wire: Value = serde_json::from_str(text).map_err(|_| schema())?;
+        if wire["model"].as_str() != Some(&self.model) || wire["pass"].as_str() != Some(&pass.id) {
+            return Err(schema());
+        }
+        let floor = probability(wire["acceptance_floor"].as_f64().ok_or_else(schema)?)?;
+        let raw = wire["answers"].as_object().ok_or_else(schema)?;
+        let mut answers = HashMap::new();
+        for question in &pass.questions {
+            let Some(value) = raw.get(&question.id) else {
+                continue;
+            };
+            let parsed = (|| {
+                let answer: WireAnswer =
+                    serde_json::from_value(value.clone()).map_err(|_| schema())?;
+                if answer.kind != QuestionType::Choice || answer.noul.is_some() {
+                    return Err(schema());
+                }
+                let probabilities = answer.probabilities.ok_or_else(schema)?;
+                for (label, p) in &probabilities {
+                    probability(*p)?;
+                    if !question.has_option(label) {
+                        return Err(schema());
+                    }
+                }
+                let choice = answer.choice.ok_or_else(schema)?;
+                if !question.has_option(&choice) {
+                    return Err(schema());
+                }
+                let p = probability(*probabilities.get(&choice).ok_or_else(schema)?)?;
+                Ok(Answer {
+                    choice: Some(choice),
+                    p,
+                    truncated: answer.truncated,
+                })
+            })();
+            answers.insert(
+                question.id.clone(),
+                parsed.unwrap_or(Answer {
+                    choice: None,
+                    p: f64::NAN,
+                    truncated: value["truncated"].as_bool().unwrap_or(false),
+                }),
+            );
+        }
+        Ok(PassAnswers {
+            answers,
+            segments: None,
+            acceptance_floor: Some(floor),
+        })
     }
 
     fn parse_response(&self, pass: &Pass, text: &str) -> Result<PassAnswers, VlmError> {
@@ -216,6 +452,7 @@ impl LayaClient {
         if wire.model != self.model || wire.pass_id != pass.id {
             return Err(schema());
         }
+        let acceptance_floor = probability(wire.acceptance_floor)?;
         let mut answers = HashMap::with_capacity(wire.answers.len());
         for (id, answer) in wire.answers {
             let question = pass.question(&id).ok_or_else(schema)?;
@@ -250,6 +487,7 @@ impl LayaClient {
         Ok(PassAnswers {
             answers,
             segments: wire.segments,
+            acceptance_floor: Some(acceptance_floor),
         })
     }
 }
@@ -263,6 +501,142 @@ pub(crate) mod tests {
     use std::sync::mpsc::{self, Receiver};
     use std::thread;
     use std::time::{Duration, Instant};
+
+    fn stack_batch() -> Vec<(&'static Pass, Vec<Vec<u8>>)> {
+        (1..=6)
+            .map(|seat| {
+                (
+                    pass(&format!("p5_seat_{seat}_stack")).unwrap(),
+                    vec![vec![1, 2, 3]],
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wager_transport_requires_exact_registered_identity_and_own_response_floor() {
+        let registry = crate::laya::wager::tests::registry();
+        let entry = &registry.passes[0];
+        let pass = entry.pass_descriptor(crate::laya::question_set()).unwrap();
+        for cause in [
+            "qualified",
+            "missing-identity",
+            "wrong-identity",
+            "floor",
+            "missing-floor",
+        ] {
+            let mut response = json!({"model":"coinpoker-laya-vision","pass":pass.id,
+                "acceptance_floor":0.99,"wager_capability":registry.wire_capability(entry),
+                "answers":{"g1":{"type":"choice","choice":"7","probabilities":{"7":1.0},"truncated":false}},
+                "segments":{"n":1,"overflow":false}});
+            match cause {
+                "missing-identity" => {
+                    response.as_object_mut().unwrap().remove("wager_capability");
+                }
+                "wrong-identity" => {
+                    response["wager_capability"]["candidate_sha256"] = json!("4".repeat(64))
+                }
+                "floor" => response["acceptance_floor"] = json!(0.8),
+                "missing-floor" => {
+                    response.as_object_mut().unwrap().remove("acceptance_floor");
+                }
+                _ => {}
+            }
+            let (port, sent) = mock_server("200 OK", response.to_string());
+            let result = client(port, 5).predict_wager_with_deadline(
+                &pass,
+                vec![vec![1, 2, 3]],
+                &registry,
+                entry,
+                Instant::now() + Duration::from_secs(5),
+            );
+            assert_eq!(result.is_ok(), cause == "qualified", "{cause}");
+            let request: Value =
+                serde_json::from_slice(&sent.recv_timeout(Duration::from_secs(5)).unwrap())
+                    .unwrap();
+            assert_eq!(request["wager_capability"], registry.wire_capability(entry));
+            assert_eq!(request["glyph_style"], "white");
+            assert_eq!(request["questions"].as_object().unwrap().len(), 8);
+        }
+        let mut wrong_model = registry.clone();
+        wrong_model.model_alias = "wrong-model".into();
+        assert!(client(0, 5)
+            .predict_wager_with_deadline(
+                &pass,
+                vec![vec![1]],
+                &wrong_model,
+                entry,
+                Instant::now() + Duration::from_secs(5)
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn batch_keeps_per_pass_validation_and_independent_malformed_result_unknown() {
+        let requests = stack_batch();
+        let results: Vec<Value> = requests.iter().enumerate().map(|(i, (pass, _))| json!({
+            "model":"coinpoker-laya-vision","pass":pass.id,"acceptance_floor":0.8,
+            "answers":if i == 2 { json!({"PRIVATE-NAME":{"type":"noul","noul":1.0,"truncated":false}}) }
+                else { json!({"g1":{"type":"choice","choice":"1","probabilities":{"1":0.9},"truncated":false}}) },
+            "segments":{"n":1,"overflow":false}
+        })).collect();
+        let (port, sent) = mock_server(
+            "200 OK",
+            json!({"model":"coinpoker-laya-vision","results":results}).to_string(),
+        );
+        let result = client(port, 5)
+            .predict_batch_with_deadline(&requests, Instant::now() + Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(result.len(), 6);
+        assert!(result[0].is_ok() && result[1].is_ok() && result[3].is_ok() && result[5].is_ok());
+        assert_eq!(result[2].as_ref().unwrap_err().code(), "invalid-vlm-schema");
+        assert!(!result[2]
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("PRIVATE-NAME"));
+        let request: Value =
+            serde_json::from_slice(&sent.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap();
+        assert_eq!(request["batch"].as_array().unwrap().len(), 6);
+        assert_eq!(request["batch"][0]["pass"], "p5_seat_1_stack");
+        assert_eq!(request["batch"][5]["pass"], "p5_seat_6_stack");
+    }
+
+    #[test]
+    fn batch_404_and_busy_do_not_retry_or_expose_error_bodies() {
+        for (status, expected) in [("404 Not Found", 404), ("409 Conflict", 409)] {
+            let (port, sent) = mock_server(status, "PRIVATE raw image response".into());
+            let error = client(port, 5)
+                .predict_batch_with_deadline(
+                    &stack_batch(),
+                    Instant::now() + Duration::from_secs(5),
+                )
+                .unwrap_err();
+            assert!(
+                matches!(error, VlmError::Server { status, ref body } if status == expected && body.is_empty())
+            );
+            assert!(sent.recv_timeout(Duration::from_secs(5)).is_ok());
+            assert!(sent.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn batch_rejects_untrained_duplicate_or_expired_work_without_transport() {
+        let client = client(0, 5);
+        let mut requests = stack_batch();
+        requests[1].0 = requests[0].0;
+        assert!(client
+            .predict_batch_with_deadline(&requests, Instant::now() + Duration::from_secs(5))
+            .is_err());
+        requests[1].0 = pass("p3_hero_chips").unwrap();
+        assert!(client
+            .predict_batch_with_deadline(&requests, Instant::now() + Duration::from_secs(5))
+            .is_err());
+        assert!(matches!(
+            client.predict_batch_with_deadline(&stack_batch(), Instant::now()),
+            Err(VlmError::Deadline)
+        ));
+    }
 
     pub(crate) fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
         let mut buf = [0u8; 8192];
@@ -332,8 +706,10 @@ pub(crate) mod tests {
     }
 
     fn p0_response(model: &str, pass_id: &str) -> String {
+        // Explicit synthetic floor for wire-format tests, not the fitted model floor.
         json!({
             "model": model, "pass": pass_id,
+            "acceptance_floor": 0.8,
             "answers": {
                 "screen_kind": {"type": "choice", "choice": "lobby",
                     "probabilities": {"lobby": 0.97, "poker_table": 0.01,
@@ -360,6 +736,7 @@ pub(crate) mod tests {
         assert_eq!(pot.choice, None);
         assert!((pot.p - 0.12).abs() < 1e-6);
         assert_eq!(answers.segments, None);
+        assert_eq!(answers.acceptance_floor, Some(0.8));
 
         let request: Value = serde_json::from_slice(&request_rx.recv().unwrap()).unwrap();
         assert_eq!(request["model"], "coinpoker-laya-vision");
@@ -390,9 +767,79 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn acceptance_floor_requires_a_finite_number_in_the_unit_interval() {
+        let client = client(0, 1);
+        let pass = pass("p0_full").unwrap();
+        let valid: Value =
+            serde_json::from_str(&p0_response("coinpoker-laya-vision", "p0_full")).unwrap();
+        for floor in [0.0, 0.8, 0.995, 0.99999999, 1.0] {
+            let mut body = valid.clone();
+            body["acceptance_floor"] = json!(floor);
+            let answers = client.parse_response(pass, &body.to_string()).unwrap();
+            assert_eq!(answers.acceptance_floor, Some(floor));
+        }
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove("acceptance_floor");
+        let mut invalid = vec![missing.to_string()];
+        for floor in [
+            Value::Null,
+            json!("unknown"),
+            json!("0.995"),
+            json!(true),
+            json!([]),
+            json!({}),
+            json!(-0.00000001),
+            json!(1.00000001),
+        ] {
+            let mut body = valid.clone();
+            body["acceptance_floor"] = floor;
+            invalid.push(body.to_string());
+        }
+        for floor in ["NaN", "Infinity", "-Infinity", "1e9999"] {
+            invalid.push(format!(
+                "{{\"model\":\"coinpoker-laya-vision\",\"pass\":\"p0_full\",\"acceptance_floor\":{floor},\"answers\":{{}}}}"
+            ));
+        }
+        for body in invalid {
+            assert!(matches!(
+                client.parse_response(pass, &body),
+                Err(VlmError::Parse(VlmResponseError::Schema))
+            ));
+        }
+    }
+
+    #[test]
+    fn acceptance_floor_and_probabilities_are_retained_without_f32_rounding() {
+        let client = client(0, 1);
+        let body = json!({
+            "model": "coinpoker-laya-vision", "pass": "p2_board", "acceptance_floor": 1.0,
+            "answers": {"board_1_rank": {"type": "choice", "choice": "A",
+                "probabilities": {"A": 0.99999999}, "truncated": false}}
+        });
+        let answers = client
+            .parse_response(pass("p2_board").unwrap(), &body.to_string())
+            .unwrap();
+        assert_eq!(answers.acceptance_floor, Some(1.0));
+        assert_eq!(answers.answers["board_1_rank"].p, 0.99999999);
+        assert!(answers.answers["board_1_rank"].p < answers.acceptance_floor.unwrap());
+
+        let body = json!({
+            "model": "coinpoker-laya-vision", "pass": "p0_full", "acceptance_floor": 0.995,
+            "answers": {"ev_pot": {"type": "noul", "noul": 0.99499999, "truncated": false}}
+        });
+        let answers = client
+            .parse_response(pass("p0_full").unwrap(), &body.to_string())
+            .unwrap();
+        assert_eq!(answers.acceptance_floor, Some(0.995));
+        assert_eq!(answers.answers["ev_pot"].p, 0.99499999);
+        assert!(answers.answers["ev_pot"].p < answers.acceptance_floor.unwrap());
+    }
+
+    #[test]
     fn glyph_pass_sends_style_all_glyph_questions_and_reads_segments() {
         let body = json!({
             "model": "coinpoker-laya-vision", "pass": "p3_pot",
+            "acceptance_floor": 0.8,
             "answers": {"g1": {"type": "choice", "choice": "7",
                 "probabilities": {"7": 0.99}, "confidence": 0.99, "truncated": false}},
             "segments": {"n": 1, "overflow": false}, "timing_ms": {}
@@ -401,6 +848,7 @@ pub(crate) mod tests {
         let answers = client(port, 5)
             .predict(pass("p3_pot").unwrap(), vec![png()])
             .expect("answers");
+        assert_eq!(answers.acceptance_floor, Some(0.8));
         assert_eq!(
             answers.segments,
             Some(Segments {
@@ -598,19 +1046,23 @@ pub(crate) mod tests {
     fn mismatched_or_invalid_responses_are_schema_errors() {
         let bad_probability = json!({
             "model": "coinpoker-laya-vision", "pass": "p0_full",
+            "acceptance_floor": 0.8,
             "answers": {"ev_pot": {"type": "noul", "noul": 1.5, "truncated": false}}
         });
         let unknown_label = json!({
             "model": "coinpoker-laya-vision", "pass": "p0_full",
+            "acceptance_floor": 0.8,
             "answers": {"screen_kind": {"type": "choice", "choice": "casino",
                 "probabilities": {"casino": 0.9}, "truncated": false}}
         });
         let wrong_type = json!({
             "model": "coinpoker-laya-vision", "pass": "p0_full",
+            "acceptance_floor": 0.8,
             "answers": {"screen_kind": {"type": "noul", "noul": 0.9, "truncated": false}}
         });
         let unknown_question = json!({
             "model": "coinpoker-laya-vision", "pass": "p0_full",
+            "acceptance_floor": 0.8,
             "answers": {"g1": {"type": "noul", "noul": 0.9, "truncated": false}}
         });
         for body in [

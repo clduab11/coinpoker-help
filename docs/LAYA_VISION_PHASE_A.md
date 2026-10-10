@@ -212,6 +212,68 @@ amount. Reference correctness does not establish the model's UI recognition.
 
 ## 7. Phase gates
 
+### Approved stage2 implementation, not live acceptance (2026-10-10)
+
+Typed PartialObservation is separate from strictGameState/R17; independent pot,
+sixstacks and card slots no longer disappear for unrelated failures. Versioned p6
+wagers/p7seat scenes exist but defaultuntrained: each requires its own crop/fitted
+floor/model/candidate/evidence and matching pinned human-held-out proof. No real
+registry was activated. Exact regionSHA256 witnesses plus originalsource expiry
+reject stale/changedfields and prevent strictsiblings refillingthem. Private
+diagnostics keep eligibility/admission reasons and timings; unmeasuredstages null.
+
+Anonymous frozenpositions, occupantuncertainty and betting/call/pot edge rules
+are implemented/tested. Missing actualhand/roster/order/convention staysunknown;
+no stack-change bets, guessedactions, metrics or suggestions. B/it1/floors remain.
+Private stage2receipts record506Rustpass/1realcaptureignored,207Python/Nodepass,
+clippy-Dwarningspass; lastverifier ended20:24:53.044757Z. Savedrealanswer assembly/
+projection retains pot+3/5/5stackcandidates while strictnull/lobby/cardveto remains.
+This is regression, not live precision/coverage or humanapproval. NEWprivatev2
+index references72existing hash-checkedframes, labels/splits pending, no training/
+calibration/activation. No helper/modelreload, GPU/newsession/capture/gameinput.
+Stopatstage2: realwager/scene/cardquality, hand/convention evidence, browser/mobile
+and warmTOTALp95<5000ms remain gated. GateF FAIL/humanUNVERIFIED/suggestionsOFF.
+
+### Perception repair stage 1: diagnosed, implementation approval pending (2026-10-10)
+
+Existing private captures were replayed through the sole retained it1 helper on
+18090: 36 sequential requests, `17:56:12.120597Z` to `17:56:28.224808Z`, exit 0,
+empty stderr. No model restart/load, training or new live session. Private receipts:
+`.local/laya/train/perception-diagnosis-20261010T1751Z/`.
+
+Unseated controls fail 0.9808 <0.995 at 900x686; phase fails 0.8725 <0.995 at
+800x613; not-seated fails 0.9925 <0.995 at 879x670. A five-card board is also
+confidently called turn (0.9976). All 30 table board answers fail unchanged floor
+1.0. Pot and 13/14 occupied-stack examples meet old glyph floors/syntax but are
+historical diagnostic candidates, not human-approved reads. Empty segmentation
+is unknown, never zero/occupancy proof. Crop geometry was audited at all three
+genuine table sizes plus a negative lobby size.
+
+Native observing assembly never runs trained p5 stacks and discards players;
+wager/dealer/badge/acting paths are absent. Board failure prevents pot extraction;
+the later field allowlist cannot fix whole-state admission. Hero-empty observing
+preflop matches the strict actionable inter-hand marker, blocking its normal flop
+transition. Keep that validator unchanged; observing needs its own temporal
+contract. Current live history intentionally records unvalidated-source gaps.
+
+Proposed repair separates calibrated, source-leased typed `PartialObservation`
+from fully validated actionable `GameState`: six physical slots, distinct stacks/
+wagers/street contributions, frozen hand positions, occupant epochs and event gaps.
+Unknown role/cards must not erase independent amount evidence; semantic
+contradictions still reject dependent phase/math. No partial result enables advice
+or relaxes R17. Unsupported/untrained new passes stay shadow-only until validated.
+
+Full design, researched position aliases/groups, new output targets and test/data
+gates are at the top of the active practice/history plan. Proposed 72-frame human
+checklist is pending, not a dataset/approval. Three serial batteries near 4.6-4.8 s
+do not prove warm TOTAL capture-to-Monitor p95 <5000 ms; capture/queue/assembly/
+publish/render remain unmeasured. Audit-time capture was unavailable. It1 protected
+data/historical scores rechecked unchanged, exit 0. Gate F FAIL, human UNVERIFIED
+and suggestions OFF remain. Stage 2 needs explicit approval; observing session,
+seated data, human labels and GPU training remain separately gated.
+[CoinPoker's tools policy](https://coinpoker.com/third-party-tools) creates a separate
+live-use risk: practice/observing/anonymity is not a documented exemption.
+
 ### Practice dashboard infrastructure: verified 2026-10-10
 
 The separate follow-on implementation is complete through software/dashboard/feed/
@@ -403,6 +465,81 @@ compositing, local-only weights and untested currency glyphs remain limitations.
 Template matching remains an option for the user's decision, not an implemented
 fallback. The user, not the agent, deletes root `lobby-screengrab.png`.
 
+### Checkpoint B implementation and current blocker (2026-10-10)
+
+The explicit user correction at `15:03:16Z` removes practice/lobby/cash title
+distinctions: default attachment selects one visible CoinPoker window beginning
+`NLH` plus digits. No confirmation file or fixed resolution is required. Identity
+uses executable/PID/HWND, not dimensions/title suffix/role, so seating/resizing
+does not restart history or recording. Actual capture bounds and normalized
+six-max geometry adapt; lobby imagery is reference, not positive seated data.
+
+The native recorder is bounded and private: new UTC-practice directory, PNGs,
+append-only durable manifest/SHA-256, 7,200-frame/1-GiB/500-ms defaults, hard caps
+20,000/2-GiB/250..60,000 ms. Caps/failure preserve evidence and latch incomplete
+status without deleting/resetting; capture can continue. No paths/images are
+published. Source-current health snapshots feed unvalidated observer gaps even
+when inference cannot admit a state; no guessed seats/badges/action statistics.
+
+Audit exposed a historical live-floor gap: vendor thresholds could admit below
+it1 fitted floors. The unchanged acceptance report is now separately SHA pinned
+and validated before model loading. Native f64 comparisons enforce
+`max(vendor, fitted, override)`, including P0 0.995/board 1.0. Near-one rounding,
+missing floors and untrained passes fail closed. No fit was clamped, retrained or
+promoted; metrics/advice and human verification stay unchanged/off/unverified.
+
+Full B suites passed **425 Rust tests (one ignored) and 159 Python tests**.
+Native build, formatting, scoped recorder/selector/floor tests and pin verification
+passed. Clippy still reports the existing large `LiveEvent` variant; it is not
+reported as a clean lint pass. Equivalent observer-if/recorder-test cleanup fixes
+the other warnings without altering their behavior.
+
+Old PID24372 was stopped at `15:44:47Z`..`15:44:50Z`, with port-free confirmation.
+Existing `scripts/start-vlm.ps1` launched one replacement at `15:45:14Z`; PID67552
+was verified at `15:49:06Z`..`15:49:10Z`. The same it1 is ready, temperatures and
+acceptance floors loaded, quality failed. Early `/v1/models` 503 during async
+loading was retained, not a passed attempt. Desktop1366 and exact400px Reference/
+empty-state checks pass with no JS errors. A lazy-Reference test setup mismatch
+and Chrome's500px window minimum are recorded; final400px uses viewport emulation.
+
+**Current blocker:** metadata has no eligible visible NLH-number game window.
+The automatic supervisor waits with `practice-target-absent`; zero real frames/
+recordings, no live-session C or capture-to-Monitor p50/p95 were obtained. B code/
+service readiness is not physical collector/readings acceptance. Private receipts
+are `.local/laya/train/checkpoint-b-20261010/` and readiness Addendum12 continuation.
+No B commit/push, new .ps1, release/workflow edits, model download or training.
+
+### Later B capture verification (2026-10-10)
+
+User reported an observing table at `16:52:31Z`. Inspection found logo/NLH/number
+drawn inside a window with Win32 title `CoinPoker`. The user explicitly confirmed
+using that actual window for passive B checks. A private exact-title profile
+allows it without an unconfirmed fallback, fixed resolution or title-derived
+practice/cash/perception approval. Default NLH rule and ambiguity rejection stay.
+
+The sole owned service was stopped/port checked at `16:58:43.721650Z`..
+`16:58:48.473539Z`. Persistent tracking failed on the first start; OS inspection
+confirmed no listener/model before session-tracked retry. One it1 model and one
+passive native feed then ran. No redownload/training. Python suite now161 passes.
+First real capture: `16:59:55.804Z`,900x686. All199 prefix hashes passed the
+`17:02:00Z` audit. The user replaced the table (`17:03:46Z` report); attachment
+followed changed identity without model reload and preserved prior evidence.
+
+Final audits at `17:04:52Z` verified322 original PNGs(223457967bytes),9 transition
+PNGs(2984581bytes) and118 replacement-prefix PNGs(76558576bytes), all hashes,
+sizes, dimensions and sampling bounds correct. Replacement changed800x613 to
+879x670 in the same session/recorder, confirming adaptive resolution. Its first
+frame was a loading window; such captures are not positive labels or human review.
+
+Zero observations were accepted. Monitor correctly shows `Reading uncertain`,
+not a fabricated Observing role or cards/pot/odds. History contains unvalidated
+gaps and preserved source ledgers, not invented betting statistics. Health-only
+capture-to-server p50/p95=109.68/150.86ms(first141samples) and108.66/152.27ms
+(replacement48); no accepted-reading capture-to-Monitor p50/p95 exists. Floors,
+GateF/humanUNVERIFIED and off advice/metrics remain unchanged. Actual400px UI
+checks passed with no console errors. No timed C, seated D, labels/training E,
+advice F, raw uploads or B commit/push. See Addendum12 and private B receipts.
+
 ### Historical A-D proposals and B-lite results
 
 These dated proposals/results are superseded where they call Gemma current or
@@ -461,8 +598,10 @@ Laya evaluation-only. They are retained as history, not tasks to restart.
   Required per-capability calibration/held-out targets may still not be met.
 - Base/derivative weights remain CC-BY-NC-SA-4.0 and local-only in this workflow;
   code MIT/upstream backbone Apache-2.0 do not remove their constraints.
-- Region boxes depend on the 800x613 layout; window-size drift invalidates them
-  (same calibration-drift caveat as window discovery).
+- Existing six-max boxes use the measured content transform, not a fixed 800x613
+  capture requirement. Stage 1 inspected real 800x613, 879x670 and 900x686 geometry.
+  Different layout, preferred-seat rotation, UI scale or ambiguous slot association
+  still requires revalidation; resize integrity is not new-pass quality approval.
 - The batch-of-questions-per-pass API is confirmed by the model card.
   Per-pass latency on this GPU was measured in Phase B-lite: 120-320 ms per pass
   warm.

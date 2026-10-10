@@ -83,7 +83,8 @@ class PokerReferenceTests(unittest.TestCase):
         by_id = {source["id"]: source for source in sources}
         self.assertEqual(len(by_id), len(sources))
         self.assertGreaterEqual(len({source["publisher"] for source in sources}), 4)
-        allowed_hosts = {"www.pokernews.com", "upswingpoker.com", "www.pokerology.com", "blog.gtowizard.com"}
+        allowed_hosts = {"www.pokernews.com", "upswingpoker.com", "www.pokerology.com", "blog.gtowizard.com",
+                         "www.pokerstars.com", "www.888poker.com", "www.pokertda.com", "homepokertourney.org"}
         for source in sources:
             self.assertEqual(set(source), {"id", "title", "url", "publisher"})
             for value in source.values():
@@ -174,11 +175,16 @@ class PokerReferenceTests(unittest.TestCase):
 
     def test_six_max_rfi_positions_and_applicability_are_separate(self):
         positions = self.sections["six-max-positions"]
-        self.assertEqual([row[0] for row in positions["tables"][0]["rows"]], ["UTG", "HJ", "CO", "BTN", "SB", "BB"])
-        self.assertEqual([row[1] for row in positions["tables"][0]["rows"]], list(range(1, 7)))
+        self.assertEqual([row[0] for row in positions["tables"][0]["rows"]], ["UTG / LJ", "HJ", "CO", "BTN", "SB", "BB"])
+        self.assertEqual([row[1] for row in positions["tables"][0]["rows"]], ["Early", "Middle", "Late", "Late", "Blind", "Blind"])
+        self.assertEqual([row[2] for row in positions["tables"][0]["rows"]], list(range(1, 7)))
+        self.assertEqual([row[3] for row in positions["tables"][0]["rows"]], [3, 4, 5, 6, 1, 2])
+        self.assertEqual([row[0] for row in positions["tables"][1]["rows"]],
+                         ["UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN", "SB", "BB"])
+        self.assertIn("reference only", positions["tables"][1]["caption"].lower())
         context = " ".join(positions["paragraphs"] + positions["bullets"]).lower()
         self.assertIn("lj (lojack)", context)
-        self.assertIn("hj is the next seat", context)
+        self.assertIn("hj (hijack) is the next seat", context)
         self.assertIn("bb has no raise-first-in opportunity", context)
         examples = self.sections["opening-examples"]
         rows = examples["tables"][0]["rows"]
