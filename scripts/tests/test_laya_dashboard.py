@@ -141,8 +141,29 @@ class StateTests(unittest.TestCase):
             self.assertEqual(reading["hero_cards"], [])
             self.assertIsNone(reading["available_actions"])
             self.assertIsNone(reading["amounts"]["to_call"])
-            self.assertEqual(reading["amounts"]["hero_chips"], 1000 if required is False else None)
+            self.assertEqual(reading["amounts"]["hero_chips"], 1000)
+            self.assertIsNone(reading["hero_seat"], "explicit Hero identity is not physical seat 4")
+            self.assertEqual(reading["field_statuses"]["hero_chips"]["status"], "accepted")
             self.assertEqual(reading["action_required"], False if required is False else None)
+
+    def test_explicit_hero_seat_and_amount_text_are_verified_not_inferred(self):
+        for seat in (1, 2, 3, 4, 5, 6, 0, 7, True, "4", None):
+            self.state.begin_stream()
+            self.health()
+            self.observation(**self.reading("uncertain", hero_seat=seat, hero_chips=1000,
+                                           amount_texts={"hero_chips": "10", "pot_size": "$1.50"},
+                                           verified_fields=["hero_seated", "hero_chips", "hero_seat", "pot_size"]))
+            view = self.state.snapshot()["observation"]
+            self.assertEqual(view["amounts"]["hero_chips"], 1000)
+            self.assertEqual(view["hero_seat"], seat if type(seat) is int and 1 <= seat <= 6 else None)
+            self.assertEqual(view["amount_texts"]["hero_chips"], "10")
+            self.assertIsNone(view["amount_texts"]["pot_size"])
+        self.state.begin_stream()
+        self.health()
+        self.observation(**self.reading("uncertain", hero_seat=4, hero_chips=1000, verified_fields=["hero_chips"]))
+        view = self.state.snapshot()["observation"]
+        self.assertIsNone(view["hero_seat"])
+        self.assertIsNone(view["amounts"]["hero_chips"])
 
     def test_contradictory_seating_cards_controls_or_amounts_remain_uncertain(self):
         call = {"action": "call", "presence": "present", "enabled": "enabled"}
@@ -173,6 +194,9 @@ class StateTests(unittest.TestCase):
                 self.assertIsNone(value["available_actions"])
                 self.assertIsNone(value["amounts"]["to_call"])
                 self.assertTrue(all(item["presence"] == item["enabled"] == "unknown" for item in value["controls"]))
+                if source["hero_seated"] is True:
+                    self.assertTrue(value["hero_seated"])
+                    self.assertEqual(value["amounts"]["hero_chips"], source["hero_chips"])
 
     def test_current_verified_turn_has_independent_offered_controls_not_advice(self):
         self.health()

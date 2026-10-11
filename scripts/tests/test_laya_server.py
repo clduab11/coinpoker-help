@@ -662,40 +662,78 @@ class AcceptanceTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.TestCase):
-    def test_cli_routes_explicit_auto_and_strict_profile_without_loading_or_serving(self):
-        for args, expected in ((["serve"], (False, None, False, srv.dashboard.DEFAULT_PROFILE)),
-                               (["serve", "--dashboard-only"], (True, None, False, srv.dashboard.DEFAULT_PROFILE)),
-                               (["serve", "--dashboard-only", "--auto-attach", "--practice-config", ".local/test.json"],
-                                (True, None, True, ".local/test.json")),
-                               (["serve", "--live-config", ".local/test.json"], (False, ".local/test.json", False, srv.dashboard.DEFAULT_PROFILE))):
+    def test_status_refresh_reads_capture_metadata_without_arming_or_inference(self):
+        service = srv.Service(ALIAS)
+        handler = srv.make_handler(None, ALIAS, {}, None, service)
+        request = handler.__new__(handler)
+        request.path = "/api/state"
+        request._local_request = Mock(return_value=True)
+        request._send = Mock()
+        metadata = srv.manual_capture.default_snapshot()
+        with patch.object(srv.manual_capture, "public_snapshot", return_value=metadata), \
+                patch.object(srv.manual_capture, "supervise") as start, \
+                patch.object(srv.manual_capture.attach, "list_windows") as discover, \
+                patch.object(srv, "Engine") as engine:
+            handler.do_GET(request)
+            handler.do_GET(request)
+        start.assert_not_called()
+        discover.assert_not_called()
+        engine.assert_not_called()
+        self.assertEqual(request._send.call_args.args[0], 200)
+        snapshot = request._send.call_args.args[1]
+        self.assertEqual(snapshot["capture_session"], metadata)
+        self.assertFalse(snapshot["server"]["inference_enabled"])
+        self.assertIsNone(snapshot["advice"])
+
+    def test_explicit_inference_mode_is_reported_during_loading_without_engine(self):
+        service = srv.Service(ALIAS)
+        service.inference_enabled = True
+        service.state.set_model("loading")
+        handler = srv.make_handler(None, ALIAS, {}, None, service)
+        request = handler.__new__(handler)
+        request.path = "/api/state"
+        request._local_request = Mock(return_value=True)
+        request._send = Mock()
+        with patch.object(srv.manual_capture, "public_snapshot", return_value=srv.manual_capture.default_snapshot()):
+            handler.do_GET(request)
+        state = request._send.call_args.args[1]
+        self.assertTrue(state["server"]["inference_enabled"])
+        self.assertEqual(state["server"]["model_state"], "loading")
+        self.assertFalse(state["capture_session"]["inference_enabled"])
+        self.assertIsNone(service.engine)
+
+    def test_cli_requires_inference_opt_in_and_rejects_automatic_capture(self):
+        for args, expected in ((["serve"], (True, None, False, srv.dashboard.DEFAULT_PROFILE, False)),
+                               (["serve", "--dashboard-only"], (True, None, False, srv.dashboard.DEFAULT_PROFILE, False)),
+                               (["serve", "--enable-inference"], (False, None, False, srv.dashboard.DEFAULT_PROFILE, True))):
             with self.subTest(args=args), patch.object(srv, "load_pins", return_value={}), \
                     patch.object(srv, "cmd_serve", return_value=0) as serve:
                 self.assertEqual(srv.main(args), 0)
                 self.assertEqual(serve.call_args.args[3:], expected)
-        for args in (["--auto-attach", "--live-config", ".local/test.json"],
-                     ["--live-config", ".local/test.json", "--practice-config", ".local/other.json"]):
+        for args in (["--auto-attach"], ["--live-config", ".local/test.json"],
+                     ["--practice-config", ".local/other.json"], ["--dashboard-only", "--enable-inference"]):
             with patch.object(srv, "load_pins") as pins, patch.object(srv, "cmd_serve") as serve, \
                     patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
                 srv.main(args)
             pins.assert_not_called()
             serve.assert_not_called()
 
-    def test_dashboard_only_default_never_creates_a_supervisor_but_explicit_auto_does(self):
+    def test_dashboard_default_never_creates_supervisor_or_model(self):
         pins = {"server": {"port": 18090, "alias": ALIAS}, "model": {"revision": "synthetic", "finetuned": {}}}
         for auto, profile in ((False, None), (True, None), (False, ".local/strict-selector.json")):
             with self.subTest(auto=auto, profile=profile), patch.object(srv, "BoundedHTTPServer") as http, \
                     patch.object(srv.dashboard, "AutoAttachFeed") as attach, patch.object(srv, "Engine") as engine, \
                     patch.object(srv.threading, "Thread") as thread, patch("sys.stdout", io.StringIO()):
-                self.assertEqual(srv.cmd_serve(pins, None, None, dashboard_only=True, live_config=profile, auto_attach=auto), 0)
+                if auto or profile:
+                    with self.assertRaises(ValueError):
+                        srv.cmd_serve(pins, None, None, live_config=profile, auto_attach=auto)
+                    http.assert_not_called()
+                else:
+                    self.assertEqual(srv.cmd_serve(pins, None, None), 0)
+                    http.return_value.server_close.assert_called_once()
                 engine.assert_not_called()
                 thread.assert_not_called()
-                if auto or profile:
-                    self.assertEqual(attach.call_args.args[0], profile or srv.dashboard.DEFAULT_PROFILE)
-                    attach.return_value.start.assert_called_once()
-                    attach.return_value.stop.assert_called_once()
-                else:
-                    attach.assert_not_called()
-                http.return_value.server_close.assert_called_once()
+                attach.assert_not_called()
         with patch.object(srv, "BoundedHTTPServer") as http, self.assertRaises(ValueError):
             srv.cmd_serve(pins, None, None, live_config=".local/x.json", auto_attach=True)
         http.assert_not_called()
@@ -717,7 +755,7 @@ class IntegrationTests(unittest.TestCase):
         with patch.object(srv, "BoundedHTTPServer"), patch.object(srv, "Service", side_effect=service), \
                 patch.object(srv.threading, "Thread", side_effect=worker), patch.object(srv, "verify", return_value=[]), \
                 patch.object(srv, "Engine", side_effect=ValueError("PRIVATE-REPORT-PATH")), patch("sys.stdout", io.StringIO()):
-            srv.cmd_serve(pins, None, None)
+            srv.cmd_serve(pins, None, None, dashboard_only=False, enable_inference=True)
             captured["initialize"]()
         self.assertIsNone(captured["service"].engine)
         value = captured["service"].state.snapshot()["server"]
@@ -747,7 +785,7 @@ class IntegrationTests(unittest.TestCase):
                 patch.object(srv.threading, "Thread", side_effect=worker), patch.object(srv, "verify", return_value=[]), \
                 patch.object(srv, "Engine", return_value=engine), patch.dict("sys.modules", {"PIL": SimpleNamespace(Image=image)}), \
                 patch("sys.stdout", io.StringIO()):
-            srv.cmd_serve(pins, None, None)
+            srv.cmd_serve(pins, None, None, dashboard_only=False, enable_inference=True)
             captured["initialize"]()
         meta = captured["service"].meta
         self.assertFalse(meta["calibrated"])
@@ -763,7 +801,7 @@ class IntegrationTests(unittest.TestCase):
     def test_public_mutation_routes_are_denied_without_socket_or_model(self):
         service = srv.Service(ALIAS)
         handler = srv.make_handler(None, ALIAS, {}, None, service)
-        for route in ("/api/start", "/api/connect", "/api/stop", "/api/attach", "/api/state", "/api/replay"):
+        for route in ("/api/start", "/api/connect", "/api/stop", "/api/attach", "/api/state", "/api/replay", "/api/capture/start", "/api/capture/stop", "/api/capture/mark"):
             request = handler.__new__(handler)
             request.path = route
             request._local_request = Mock(return_value=True)

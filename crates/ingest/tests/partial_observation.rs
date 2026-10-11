@@ -774,7 +774,7 @@ fn source_region_witnesses_bind_original_zero_frame_once_and_never_enter_public_
 }
 
 #[test]
-fn board_source_region_change_clears_board_and_phase_without_erasing_independent_amounts() {
+fn board_source_region_change_clears_only_changed_slot_and_dependent_count_phase() {
     use ingest::capture::Frame;
     let zero = Frame::new(800, 613, vec![0; 800 * 613 * 4]).unwrap();
     let mut candidate = assemble(&scripts(), None).0.unwrap();
@@ -783,7 +783,8 @@ fn board_source_region_change_clears_board_and_phase_without_erasing_independent
     let (a, b, _, _) = ingest::laya::geometry::region_px("board_slot_1", 800, 613).unwrap();
     latest.rgba[(b * 800 + a) as usize * 4] = 1;
     assert!(candidate.retain_source_current_fields(&latest));
-    assert!(candidate.view.board_slots.iter().all(Option::is_none));
+    assert!(candidate.view.board_slots[0].is_none());
+    assert!(candidate.view.board_slots[1].is_some() && candidate.view.board_slots[2].is_some());
     assert!(candidate.view.board_count.is_none() && candidate.view.game_phase.is_none());
     assert_eq!(candidate.view.pot_size, Some(1050));
     assert!(candidate
@@ -800,8 +801,63 @@ fn board_source_region_change_clears_board_and_phase_without_erasing_independent
             && f.admission_reason == DiagnosticReason::SourceRegionChanged));
     // A later pixel reversal cannot re-author an already withheld original field.
     assert!(candidate.retain_source_current_fields(&zero));
-    assert!(
-        candidate.view.board_count.is_none()
-            && candidate.view.board_slots.iter().all(Option::is_none)
+    assert!(candidate.view.board_count.is_none() && candidate.view.board_slots[0].is_none());
+    assert!(candidate.view.board_slots[1].is_some() && candidate.view.board_slots[2].is_some());
+}
+
+#[test]
+fn literal_amount_glyphs_survive_without_currency_or_decimal_normalization() {
+    let mut passes = scripts();
+    passes.insert("p3_pot".into(), amount("1,234.5"));
+    passes.insert("p5_seat_1_stack".into(), amount("0007"));
+    passes.insert("p5_seat_2_stack".into(), amount("0"));
+    passes.insert("p5_seat_3_stack".into(), amount("1..2"));
+    let mut candidate = assemble(&passes, None).0.unwrap();
+    assert_eq!(candidate.view.pot_size, Some(123450));
+    assert_eq!(candidate.view.pot_size_text.as_deref(), Some("1,234.5"));
+    assert_eq!(candidate.view.seats[0].displayed_stack, Some(700));
+    assert_eq!(
+        candidate.view.seats[0].displayed_stack_text.as_deref(),
+        Some("0007")
     );
+    assert_eq!(
+        candidate.view.seats[1].displayed_stack_text.as_deref(),
+        Some("0")
+    );
+    assert!(candidate.view.seats[2].displayed_stack_text.is_none());
+    let original = ingest::capture::Frame::new(800, 613, vec![0; 800 * 613 * 4]).unwrap();
+    candidate.bind_source_frame(&original).unwrap();
+    let mut changed = original.clone();
+    let (a, b, _, _) = ingest::laya::geometry::region_px("pot", 800, 613).unwrap();
+    changed.rgba[(b * 800 + a) as usize * 4] = 1;
+    assert!(candidate.retain_source_current_fields(&changed));
+    assert!(candidate.view.pot_size.is_none() && candidate.view.pot_size_text.is_none());
+    assert_eq!(
+        candidate.view.seats[0].displayed_stack_text.as_deref(),
+        Some("0007")
+    );
+}
+
+#[test]
+fn confident_unreadable_card_is_occluded_not_an_accepted_identity_or_presence() {
+    let mut passes = scripts();
+    passes
+        .get_mut("p2_board")
+        .unwrap()
+        .answers
+        .insert("board_1_suit".into(), choice("unreadable", 1.0));
+    let (candidate, diagnostic, _) = assemble(&passes, None);
+    let view = candidate.unwrap().view;
+    assert!(
+        view.board_slots[0].is_none() && view.board_count.is_none() && view.game_phase.is_none()
+    );
+    assert!(view.board_slots[1].is_some());
+    assert_eq!(view.pot_size_text.as_deref(), Some("10.5"));
+    assert!(diagnostic
+        .fields
+        .iter()
+        .any(|field| field.field == FieldName::BoardSlot
+            && field.board_slot == Some(1)
+            && field.status == EvidenceStatus::Rejected
+            && field.reason == DiagnosticReason::Occluded));
 }

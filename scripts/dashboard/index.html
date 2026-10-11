@@ -17,17 +17,9 @@
       <div class="identity">
         <span class="brand-mark" aria-hidden="true">CP<span>01</span></span>
         <div>
-          <p class="eyebrow">CoinPoker / Practice Games</p>
-          <h1>Table monitor</h1>
-          <p class="subtitle">The table first. Unknowns stay unknown.</p>
+          <h1>CoinPoker <span class="muted">/ Companion</span></h1>
         </div>
       </div>
-      <div class="mode-label">
-        <span class="badge" data-tone="neutral">Read-only</span>
-        <span class="small muted">No automated actions</span>
-      </div>
-    </header>
-
     <div class="view-bar">
       <div class="tabs" role="tablist" aria-label="Dashboard view">
         <button type="button" id="tab-monitor" role="tab" aria-selected="true" aria-controls="panel-monitor" tabindex="0">Monitor</button>
@@ -35,9 +27,15 @@
       </div>
       <span id="view-label" class="view-label">Experimental readings / suggestions off</span>
     </div>
+      <div class="mode-label"><span class="badge" data-tone="warning">Suggestions OFF</span></div>
+    </header>
 
     <main id="main" tabindex="-1">
       <section id="panel-monitor" role="tabpanel" aria-labelledby="tab-monitor" tabindex="0">
+        <div class="source-strip" aria-label="Source and observation status">
+          <span id="source-status">Connecting</span><span id="source-role">Role unknown</span><span id="source-freshness">No current reading</span>
+        </div>
+        <div class="recorder-strip" aria-label="Recorder status"><span id="recorder-status">Recorder status unavailable</span><span id="inference-status">Inference status unknown</span></div>
         <p id="monitor-empty" class="monitor-empty" role="status">Waiting for a table reading.</p>
         <div id="monitor-grid" class="monitor-grid no-reading no-history">
           <section id="suggested-action" class="panel action-panel" aria-labelledby="action-title" data-role="uncertain" hidden>
@@ -47,17 +45,18 @@
           </section>
 
           <section id="monitor-readings" class="panel readings-panel" aria-labelledby="observation-title" hidden>
-            <header class="panel-heading"><div><p class="eyebrow">Supporting readings</p><h2 id="observation-title">At the table</h2></div><span class="badge" data-tone="warning">Experimental</span></header>
-            <dl class="table-meta"><div><dt>Phase</dt><dd id="game-phase">-</dd></div><div id="actor-reading"><dt>Acting seat</dt><dd id="acting-seat">-</dd></div></dl>
-            <div class="card-deck"><div class="card-group board-group"><h3>Board</h3><div id="board-cards" class="cards" aria-label="Experimental board cards"></div></div><div id="hero-card-group" class="card-group"><h3>Hero</h3><div id="hero-cards" class="cards" aria-label="Experimental hero cards"></div></div></div>
+            <header class="panel-heading"><h2 id="observation-title">Current readings</h2><dl class="table-meta"><div><dt class="sr-only">Phase</dt><dd id="game-phase">-</dd></div><div id="actor-reading"><dt class="sr-only">Acting seat</dt><dd id="acting-seat">-</dd></div></dl><span class="badge" data-tone="warning">Experimental</span></header>
+            <div class="table-summary">
+            <div class="card-deck"><div class="card-group board-group"><h3>Board</h3><div id="board-cards" class="cards" aria-label="Experimental board cards"></div><p id="board-reason" class="field-reason"></p></div><div id="hero-card-group" class="card-group"><h3 id="hero-label">Hero</h3><div id="hero-cards" class="cards" aria-label="Experimental hero cards"></div><p id="hero-reason" class="field-reason"></p></div></div>
             <dl class="amount-grid">
-              <div><dt>Pot</dt><dd id="amount-pot">-</dd></div>
+              <div><dt>Upper Pot</dt><dd id="amount-pot">-</dd><dd id="pot-reason" class="field-reason"></dd></div>
               <div id="call-reading"><dt id="call-label">Call</dt><dd id="amount-call">-</dd></div>
-              <div id="hero-stack-reading"><dt>Hero stack</dt><dd id="amount-stack">-</dd></div>
+              <div id="hero-stack-reading"><dt>Hero stack</dt><dd id="amount-stack">-</dd><dd id="stack-reason" class="field-reason"></dd></div>
             </dl>
+            </div>
             <section id="seats-reading" class="reading-row" aria-labelledby="seats-title"><h3 id="seats-title">Six physical seats / top clockwise</h3><ol id="seat-readings" class="seat-grid" aria-label="Seat-by-seat displayed stacks, wagers and street contributions"></ol></section>
             <section id="wagers-reading" class="reading-row" aria-labelledby="wagers-title"><h3 id="wagers-title">Visible wagers</h3><ul id="visible-wagers" class="wager-list"></ul></section>
-            <section id="controls-reading" class="reading-row" aria-labelledby="controls-title"><h3 id="controls-title">Offered actions</h3><ul id="control-states" class="control-list" aria-label="Observed labels, not action buttons"></ul><p class="footnote">Presence and enabled state are separate. These labels are not legal-action approval.</p></section>
+            <section id="controls-reading" class="reading-row" aria-labelledby="controls-title"><h3 id="controls-title">Observed control labels / not recommendations</h3><ul id="control-states" class="control-list" aria-label="Observed labels, not action buttons"></ul></section>
             <dl id="raise-bounds" class="raise-bounds"><div><dt>Min raise to</dt><dd id="amount-min">-</dd></div><div><dt>Max raise to</dt><dd id="amount-max">-</dd></div></dl>
             <dl id="metrics-readings" class="metric-grid" hidden>
               <div><dt>Hand rank</dt><dd id="metric-rank">-</dd></div>
@@ -68,28 +67,44 @@
             <p id="reading-limit" class="footnote">A dash is unknown. Metrics and suggestions off.</p>
           </section>
 
-          <aside id="history-panel" class="panel history-panel" aria-labelledby="history-title" hidden>
-            <header class="panel-heading"><div><p class="eyebrow">Across every seat change</p><h2 id="history-title">Recent table activity</h2></div><span id="history-status" class="badge" data-tone="warning">Partial</span></header>
+        </div>
+        <div class="secondary-grid">
+          <details id="history-panel" class="panel history-panel" hidden>
+            <summary><span id="history-title">Recent table activity</span><span id="history-status" class="badge" data-tone="warning">Partial</span></summary>
             <dl class="history-metrics"><div><dt>Folds</dt><dd id="history-folds">-</dd></div><div><dt>Bets</dt><dd id="history-bets">-</dd></div><div><dt>Raises</dt><dd id="history-raises">-</dd></div><div><dt>3-bets</dt><dd id="history-three-bets">-</dd></div><div><dt>4-bets</dt><dd id="history-four-bets">-</dd></div><div><dt>Gaps</dt><dd id="history-gaps">-</dd></div></dl>
             <div class="history-toolbar"><p id="history-coverage" class="small muted">Partial history; gaps may hide actions.</p><label class="filter-label" for="history-filter">Show <select id="history-filter"><option value="all">All activity</option><option value="action">Actions</option><option value="gap">Gaps</option><option value="boundary">Hand / table changes</option></select></label></div>
-            <ol id="history-events" class="event-list" aria-label="Recent observed activity, newest first" tabindex="0"></ol>
+            <ol id="history-events" class="event-list" aria-label="Recent observed activity, newest first"></ol>
             <p id="history-empty" class="empty-state">No actions recorded in this partial history.</p>
             <p class="footnote">Counts are observed lower bounds, not rates. A 3-bet or 4-bet needs known prior action order.</p>
-          </aside>
+          </details>
+        <details id="diagnostics-panel" class="panel diagnostics-panel">
+          <summary>Diagnostics and manual test</summary>
+          <p class="footnote">Gate F historical FAIL / human review PENDING / suggestions OFF.</p>
+          <dl class="diagnostic-meta"><div><dt>Model</dt><dd id="model-status">Unknown</dd></div><div><dt>Recorder budget</dt><dd id="recorder-budget">Not started</dd></div><div><dt>Loss / gaps</dt><dd id="recorder-loss">Unknown</dd></div><div><dt>Distinct control opportunities</dt><dd id="opportunity-status">Not collected</dd></div></dl>
+          <p id="recorder-stop" class="footnote">Use the manual capture terminal to confirm the source and start. Opening this page never starts capture or inference.</p>
+          <p class="footnote">Stop: Ctrl+C in the capture terminal, or <code>python scripts/laya_capture.py stop --session SESSION_ID</code>. Mark incorrect or missing readings there for later review; markers are DRAFT, not corrections.</p>
+          <dl id="field-diagnostics" class="field-diagnostics" aria-label="Unavailable field reasons"></dl>
+          <p class="footnote">Visible wagers are not street contributions. Lower center-chip text, hand boundaries, action order and pot conventions require separate evidence. Physical seat 4 is not automatically hero. No strategy is calculated from partial readings.</p>
+        </details>
         </div>
       </section>
 
       <section id="panel-reference" role="tabpanel" aria-labelledby="tab-reference" tabindex="0" hidden>
-        <header class="section-intro"><p class="eyebrow">Knowledge / not live guidance</p><h2 id="reference-title">Poker reference</h2><p id="reference-scope">Locally bundled rules, odds and context. Not proof of card recognition or live advice.</p></header>
-        <div class="reference-toolbar"><label class="reference-search" for="reference-search"><span class="eyebrow">Find a topic</span><input id="reference-search" type="search" placeholder="Rankings, pot odds, 3-bets..." maxlength="160" autocomplete="off" spellcheck="false" aria-controls="reference-sections" aria-describedby="reference-count" disabled></label><div class="reference-meta"><p id="reference-count" class="small" role="status"></p><p id="reference-reviewed" class="small muted"></p></div></div>
+        <header class="section-intro"><h2 id="reference-title">Poker reference</h2><p id="reference-scope">Offline study / not current-hand guidance</p></header>
+        <div class="reference-layout">
+        <aside class="reference-sidebar" aria-label="Reference topics">
+        <div class="reference-toolbar"><label class="reference-search" for="reference-search"><span class="sr-only">Find a topic</span><input id="reference-search" type="search" placeholder="Find a topic..." maxlength="160" autocomplete="off" spellcheck="false" aria-controls="reference-sections" aria-describedby="reference-count" disabled></label><div class="reference-meta"><p id="reference-count" class="small" role="status"></p><p id="reference-reviewed" class="small muted"></p></div></div>
+        <nav id="reference-topics" aria-label="Select a study topic"></nav>
+        </aside>
+        <div class="reference-reader">
         <p id="reference-load-status" class="notice" data-tone="neutral">Reference has not been loaded.</p>
         <div id="reference-sections" class="reference-sections"></div>
         <p id="reference-empty" class="empty-state" hidden>No matching topics.</p>
-        <p class="footnote">Source links open only when you choose them. Reference material never activates suggestions.</p>
+        </div></div>
       </section>
     </main>
 
-    <footer class="console-footer"><span>Practice Games / local only</span><span>Experimental readings. Suggestions off.</span></footer>
+    <footer class="console-footer"><span>Local diagnostic companion</span><span>No automated poker actions</span></footer>
     <p id="announce" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
     <noscript><p class="notice">JavaScript is disabled. Monitoring is paused and suggestions remain off.</p></noscript>
   </div>

@@ -206,6 +206,27 @@ class WindowListing:
     windows: tuple = field(default=(), repr=False)
 
 
+def select_exact(listing, pid, hwnd):
+    """Manual selection only; a saved broad rule is not session approval."""
+    if (not isinstance(listing, WindowListing) or type(pid) is not int or pid <= 0
+            or not isinstance(hwnd, str) or not re.fullmatch(r"0x[0-9a-fA-F]{1,16}", hwnd)):
+        raise AttachError("practice-profile-mismatch")
+    matches = [window for window in listing.windows
+               if window.process_id == pid and int(window.hwnd, 16) == int(hwnd, 16)
+               and window.exe_name.translate(_EXE_CASE) == SELECTOR_EXE.translate(_EXE_CASE)
+               and window.on_screen and window.width > 0 and window.height > 0
+               and isinstance(window.title, str) and window.title]
+    if len(matches) != 1:
+        raise AttachError("practice-profile-mismatch")
+    return matches[0]
+
+
+def same_exact_source(before, after):
+    return (before.process_id == after.process_id and before.hwnd == after.hwnd
+            and before.exe_name.translate(_EXE_CASE) == after.exe_name.translate(_EXE_CASE)
+            and before.title == after.title)
+
+
 def parse_window_listing(raw):
     """Parse complete schema 1/2 JSONL; unknown fields/events never become selectors."""
     if isinstance(raw, str):

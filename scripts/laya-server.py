@@ -2,7 +2,7 @@
 """Loopback Laya Vision server for coinpoker-help (the sole live perception backend).
 
 Subcommands:
-  serve  (default)  serve the dashboard, then verify/load the pinned model asynchronously
+  serve  (default)  read-only dashboard; model loading needs explicit --enable-inference
   fetch             download the pinned base checkpoint (HF revision) into HF_HOME, then verify
   verify            check runtime package versions, laya commit and every pinned file's SHA-256
 
@@ -43,6 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import laya_dashboard as dashboard
+import laya_capture as manual_capture
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(SCRIPTS)
@@ -696,6 +697,7 @@ def handle_predict_batch(engine, alias, body_bytes, log_fn=None):
 class Service:
     def __init__(self, alias, meta=None, engine=None, log_fn=None):
         self.alias, self.meta, self.engine, self.log_fn = alias, meta or {}, engine, log_fn
+        self.inference_enabled = engine is not None
         self.inference = threading.Lock()
         self.state = dashboard.DashboardState(alias, self.meta.get("checkpoint"))
         if engine is not None:
@@ -814,7 +816,10 @@ def make_handler(engine, alias, meta, log_fn, service=None):
                 else:
                     self._send(200, {"object": "list", "data": [{"id": alias, "object": "model", "meta": service.meta}]})
             elif self.path == "/api/state":
-                self._send(200, service.state.snapshot())
+                snapshot = service.state.snapshot()
+                snapshot["capture_session"] = manual_capture.public_snapshot()
+                snapshot["server"]["inference_enabled"] = service.inference_enabled
+                self._send(200, snapshot)
             elif self.path == "/api/reference":
                 try:
                     reference = dashboard.references()
@@ -942,10 +947,12 @@ def cmd_verify(pins):
     return 0 if not problems else 2
 
 
-def cmd_serve(pins, answers_log, batch_size, dashboard_only=False, live_config=None,
-              auto_attach=False, practice_config=dashboard.DEFAULT_PROFILE):
-    if live_config and (auto_attach or practice_config != dashboard.DEFAULT_PROFILE):
-        raise ValueError("choose one attachment selector")
+def cmd_serve(pins, answers_log, batch_size, dashboard_only=True, live_config=None,
+              auto_attach=False, practice_config=dashboard.DEFAULT_PROFILE, enable_inference=False):
+    if live_config or auto_attach or practice_config != dashboard.DEFAULT_PROFILE:
+        raise ValueError("automatic attachment disabled; use the separately confirmed manual capture-only CLI")
+    if enable_inference and dashboard_only:
+        raise ValueError("choose read-only dashboard or explicitly approved inference")
     srv = pins["server"]
     if int(srv["port"]) != PORT:
         raise ValueError("Laya dashboard/model service requires port 18090; no alternate-port fallback")
@@ -967,8 +974,8 @@ def cmd_serve(pins, answers_log, batch_size, dashboard_only=False, live_config=N
             "acceptance_floors_loaded": False,
             "quality_gate": "failed", "seated_advice_supported": False}
     service = Service(srv["alias"], meta, log_fn=log_fn)
+    service.inference_enabled = enable_inference
     httpd = BoundedHTTPServer((HOST, PORT), make_handler(None, srv["alias"], meta, log_fn, service))
-    feed = None
 
     def initialize():
         service.state.set_model("loading")
@@ -1000,21 +1007,13 @@ def cmd_serve(pins, answers_log, batch_size, dashboard_only=False, live_config=N
 
     print(json.dumps({"event": "ready", "host": HOST, "port": PORT, "alias": srv["alias"],
                       "dashboard": True, "advice_ready": False}), flush=True)
-    if not dashboard_only:
+    if enable_inference:
         threading.Thread(target=initialize, daemon=True).start()
-    if auto_attach or live_config:
-        try:
-            feed = dashboard.AutoAttachFeed(live_config or practice_config, service.state)
-            feed.start()
-        except (OSError, ValueError):
-            service.state.attach_blocked("invalid-attachment-config")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        if feed is not None:
-            feed.stop()
         httpd.server_close()
         if fh is not None:
             fh.close()
@@ -1026,21 +1025,23 @@ def main(argv=None):
     ap.add_argument("command", nargs="?", default="serve", choices=["serve", "fetch", "verify"])
     ap.add_argument("--answers-log", default=None, help="JSONL of answers and timings (no image data)")
     ap.add_argument("--batch-size", type=int, default=None)
-    ap.add_argument("--dashboard-only", action="store_true", help="serve read-only Monitor/Reference without loading a model")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--dashboard-only", action="store_true", help="default: read-only Monitor/Reference, no model or capture")
+    mode.add_argument("--enable-inference", action="store_true", help="separately approved model loading; never starts capture")
     attachment = ap.add_mutually_exclusive_group()
-    attachment.add_argument("--live-config", help="internal strict selector profile under .local, never raw capture argv")
-    attachment.add_argument("--auto-attach", action="store_true", help="automatically retain one uniquely selected passive feed")
-    ap.add_argument("--practice-config", default=dashboard.DEFAULT_PROFILE, help="optional private selector profile under .local")
+    attachment.add_argument("--live-config", help="removed: automatic feeds are refused")
+    attachment.add_argument("--auto-attach", action="store_true", help="removed: refused without starting a feed")
+    ap.add_argument("--practice-config", default=dashboard.DEFAULT_PROFILE, help="removed: saved rules do not approve capture")
     a = ap.parse_args(argv)
-    if a.live_config and a.practice_config != dashboard.DEFAULT_PROFILE:
-        ap.error("choose --live-config or --practice-config, not both")
+    if a.live_config or a.auto_attach or a.practice_config != dashboard.DEFAULT_PROFILE:
+        ap.error("automatic attachment disabled; use scripts/laya_capture.py start for manual capture-only approval")
     pins = load_pins()
     if a.command == "verify":
         return cmd_verify(pins)
     if a.command == "fetch":
         return cmd_fetch(pins)
-    return cmd_serve(pins, a.answers_log, a.batch_size, a.dashboard_only, a.live_config,
-                     a.auto_attach, a.practice_config)
+    return cmd_serve(pins, a.answers_log, a.batch_size, not a.enable_inference, a.live_config,
+                     a.auto_attach, a.practice_config, a.enable_inference)
 
 
 if __name__ == "__main__":

@@ -371,6 +371,8 @@
   const ROLE_MESSAGES = { observing: "Watching the table", seated_waiting: "Waiting for your turn", your_turn: "Suggestions off", uncertain: "Reading uncertain" };
   const PHASE_NAMES = { preflop: "Preflop", flop: "Flop", turn: "Turn", river: "River", showdown: "Showdown", lobby: "Lobby", unseated: "Unseated", waiting: "Waiting", unknown: "Unknown" };
   const SEAT_LOCATIONS = ["Top", "Upper right", "Lower right", "Bottom", "Lower left", "Upper left"];
+  const FIELD_REASONS = { "missing-capability": "Untrained", "unsupported-layout": "Unsupported layout",
+    "below-floor": "Below floor", stale: "Stale", occluded: "Occluded", "insufficient-context": "Insufficient context" };
   const MODEL_STATES = ["disabled", "loading", "ready", "failed"];
   const CAPTURE_STATES = ["idle", "starting", "active", "unavailable", "disconnected", "blocked"];
   const SUITS = {
@@ -404,6 +406,8 @@
   let historyEvents = [];
   let referenceSections = [];
   let referenceLoaded = false;
+  let selectedTopic = null;
+  let clearReason = "insufficient-context";
 
   const node = (id) => document.getElementById(id);
   const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -412,10 +416,35 @@
   const percentage = (value) => Number.isFinite(value) && value >= 0 && value <= 100;
   const count = (value) => integer(value) ? countFormat.format(value) : "-";
   const chips = (value) => integer(value) ? `${chipFormat.format(value / 100)} chips` : "-";
+  const literalAmount = (value, literal) => {
+    if (!integer(value)) return "-";
+    if (typeof literal === "string" && literal.length <= 32 && /^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(literal)) {
+      const [whole, fraction = ""] = literal.replaceAll(",", "").split(".");
+      if (Number(whole + fraction.padEnd(2, "0")) === value) return literal;
+    }
+    return chips(value);
+  };
   const percent = (value) => percentage(value) ? `${value.toFixed(1)}%` : "-";
   const allowed = (value, choices, fallback = null) => choices.includes(value) ? value : fallback;
   const opaqueId = (value) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,96}$/.test(value);
   const safeLabel = (value, fallback, max = 200) => typeof value === "string" && value.trim() ? value.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, "").slice(0, max) : fallback;
+
+  function fieldStatuses(value) {
+    if (!record(value)) return {};
+    const result = {};
+    for (const [key, entry] of Object.entries(value).slice(0, 128)) {
+      if (!/^(?:game_phase|board|board_count|board_slots\.[1-5]|pot_size|hero_seated|hero_seat|hero_chips|hero_cards|controls|role|to_call|scene|center_chip|pot_convention|street_contribution|position|seats\.[1-6]\.(?:displayed_stack|visible_wager|occupied|status|badge|dealer|small_blind|big_blind|acting|street_contribution|position))$/.test(key) || !record(entry)) continue;
+      if (entry.status === "accepted") result[key] = { status: "accepted", reason: null };
+      else if (entry.status === "unavailable" && Object.hasOwn(FIELD_REASONS, entry.reason)) result[key] = { status: "unavailable", reason: entry.reason };
+    }
+    return result;
+  }
+
+  function reasonFor(observation, field, fallback = "insufficient-context") {
+    const state = observation?.fieldStatuses[field] || snapshot?.fieldStatuses[field];
+    if (!observation && clearReason === "stale" && state?.reason !== "missing-capability") return FIELD_REASONS.stale;
+    return FIELD_REASONS[state?.status === "unavailable" ? state.reason : fallback];
+  }
 
   function text(id, value) {
     const target = node(id);
@@ -524,9 +553,10 @@
       amounts[key] = record(value.amounts) && integer(value.amounts[key]) ? value.amounts[key] : null;
     }
     if (!seatNumber(value.acting_seat)) amounts.acting_to_call = null;
-    if (heroSeated !== true || role === "uncertain" || phase === "unseated" || phase === "lobby") {
+    if (heroSeated !== true || phase === "unseated" || phase === "lobby") {
       for (const key of ["to_call", "hero_chips", "min_raise_to", "max_raise_to"]) amounts[key] = null;
     }
+    if (role === "uncertain") for (const key of ["to_call", "min_raise_to", "max_raise_to"]) amounts[key] = null;
     if (role === "uncertain") labels.clear();
     const wagers = [];
     const wagerSeats = new Set();
@@ -544,7 +574,8 @@
       expires: integer(value.expires_at_unix_ms) ? value.expires_at_unix_ms : null,
       remaining: integer(value.remaining_ms) ? value.remaining_ms : null,
       captured: integer(value.captured_at_unix_ms) && value.captured_at_unix_ms > 0 ? value.captured_at_unix_ms : null,
-      phase, role, heroSeated, actionRequired,
+      phase, role, heroSeated, actionRequired, heroSeat: seatNumber(value.hero_seat) ? value.hero_seat : null,
+      fieldStatuses: fieldStatuses(value.field_statuses), amountTexts: record(value.amount_texts) ? value.amount_texts : {},
       actingSeat: seatNumber(value.acting_seat) ? value.acting_seat : null,
       hero: heroSeated === true ? hero : [], board, amounts, wagers, controls: labels,
       seats: SEAT_LOCATIONS.map((_, index) => ({ seat: index + 1, displayed_stack: null,
@@ -574,6 +605,7 @@
       if (verifiedScene.has("badge") && ["none", "fold", "check", "call", "bet", "raise", "all_in", "small_blind", "big_blind"].includes(entry.badge)) scene.badge = entry.badge;
       seats.set(entry.seat, { seat: entry.seat, displayed_stack: integer(entry.displayed_stack) ? entry.displayed_stack : null,
         visible_wager: entry.visible_wager_status === "accepted" && integer(entry.visible_wager) ? entry.visible_wager : null,
+        displayed_stack_text: entry.displayed_stack_text, visible_wager_text: entry.visible_wager_text,
         street_contribution: null, ...scene });
     }
     const board = value.board_slots.map(normalizeCard);
@@ -592,7 +624,6 @@
         boardCount !== null && board.slice(boardCount).some(Boolean)) {
       phase = "unknown";
       boardCount = null;
-      board.fill(null);
     }
     const seated = typeof value.hero_seated === "boolean" ? value.hero_seated : null;
     const role = value.role === "observing" && seated === false ? "observing" : "uncertain";
@@ -602,7 +633,8 @@
       expires: integer(value.expires_at_unix_ms) ? value.expires_at_unix_ms : null,
       remaining: integer(value.remaining_ms) ? value.remaining_ms : null,
       captured: integer(value.captured_at_unix_ms) && value.captured_at_unix_ms > 0 ? value.captured_at_unix_ms : null,
-      phase, role, heroSeated: seated, actionRequired: null,
+      phase, role, heroSeated: seated, actionRequired: null, heroSeat: null,
+      fieldStatuses: fieldStatuses(value.field_statuses), amountTexts: { pot_size: value.pot_size_text },
       actingSeat: [...seats.values()].filter((entry) => entry.acting === true).length === 1 ?
         [...seats.values()].find((entry) => entry.acting === true).seat : null,
       hero: [], board, boardCount, amounts: { pot_size: integer(value.pot_size) ? value.pot_size : null,
@@ -653,8 +685,13 @@
       session: value.session_id, sequence: value.event_seq, source: value.source,
       capture: {
         state: capture.state, fresh: capture.fresh_capture,
+        frames: capture.frames,
         heartbeat: integer(capture.last_heartbeat_unix_ms) && capture.last_heartbeat_unix_ms > 0 ? capture.last_heartbeat_unix_ms : null
       },
+      modelState: server.model_state, inferenceBusy: server.inference_busy,
+      inferenceEnabled: typeof server.inference_enabled === "boolean" ? server.inference_enabled : null,
+      fieldStatuses: fieldStatuses(value.field_statuses),
+      recording: normalizeRecording(value.capture_session),
       observation: value.partial_observation != null ? normalizePartialObservation(value.partial_observation) : normalizeObservation(value.observation),
       history: normalizeHistory(value.history)
     };
@@ -696,8 +733,8 @@
     node(id).replaceChildren(fragment);
   }
 
-  function amount(id, value) {
-    text(id, chips(value));
+  function amount(id, value, literal) {
+    text(id, literalAmount(value, literal));
     node(id).classList.toggle("unknown-value", !integer(value));
   }
 
@@ -724,7 +761,7 @@
     node("monitor-readings").hidden = !readable;
     node("monitor-empty").hidden = readable;
     node("monitor-grid").classList.toggle("no-reading", !observation);
-    node("history-panel").hidden = !observation || node("monitor-grid").classList.contains("no-history");
+    node("history-panel").hidden = node("monitor-grid").classList.contains("no-history");
     if (!readable) text("monitor-empty", observation ? "Reading uncertain" : connected && snapshot && snapshot.capture.state === "blocked" ?
       "Waiting for a unique CoinPoker game window." : connected && snapshot && snapshot.source === "live" ?
         "Reading uncertain" : "Waiting for a table reading.");
@@ -733,7 +770,10 @@
       observation.board.reduce((last, card, index) => card ? index + 1 : last, 0)) : observation.board : [];
     renderCards("board-cards", board, 5, "Board");
     if (observation?.partial && observation.boardCount === 0) text("board-cards", "No community cards");
-    node("hero-card-group").hidden = !observation || observation.heroSeated !== true;
+    node("hero-card-group").hidden = observation?.role === "observing";
+    text("hero-label", observation?.heroSeat ? `Hero / seat ${observation.heroSeat}` : "Hero");
+    text("board-reason", board.some(Boolean) || observation?.boardCount === 0 ? "" : reasonFor(observation, "board_slots.1"));
+    text("hero-reason", observation?.hero.length ? "" : reasonFor(observation, "hero_cards", "missing-capability"));
     renderControls("control-states", observation ? observation.controls : null);
     text("game-phase", observation && observation.phase !== "unknown" ? PHASE_NAMES[observation.phase] : "-");
     text("acting-seat", observation && observation.actingSeat !== null ? `Seat ${observation.actingSeat}` : "-");
@@ -741,8 +781,10 @@
     const seated = observation && ["seated_waiting", "your_turn"].includes(observation.role);
     text("call-label", observing ? observation.actingSeat === null ? "Acting-seat call" : `Acting seat ${observation.actingSeat} to call` : seated ? "Your call" : "Call");
     amount("amount-call", observation ? observing ? observation.amounts.acting_to_call : seated ? observation.amounts.to_call : null : null);
-    for (const [id, key] of [["amount-pot", "pot_size"], ["amount-stack", "hero_chips"], ["amount-min", "min_raise_to"], ["amount-max", "max_raise_to"]]) amount(id, observation ? observation.amounts[key] : null);
-    node("hero-stack-reading").hidden = !seated;
+    for (const [id, key] of [["amount-pot", "pot_size"], ["amount-stack", "hero_chips"], ["amount-min", "min_raise_to"], ["amount-max", "max_raise_to"]]) amount(id, observation ? observation.amounts[key] : null, observation?.amountTexts[key]);
+    text("pot-reason", observation?.amounts.pot_size != null ? "" : reasonFor(observation, "pot_size"));
+    text("stack-reason", observation?.amounts.hero_chips != null ? "" : reasonFor(observation, "hero_chips", "missing-capability"));
+    node("hero-stack-reading").hidden = observing;
     node("call-reading").hidden = !observation || observation.partial;
     node("actor-reading").hidden = !observation || observation.actingSeat === null;
     node("controls-reading").hidden = !observation || observation.partial;
@@ -766,11 +808,12 @@
         entry.status?.replaceAll("_", " "), entry.dealer === true ? "BTN" : null,
         entry.small_blind === true ? "SB" : null, entry.big_blind === true ? "BB" : null,
         entry.acting === true ? "Acting" : null, entry.badge && entry.badge !== "none" ? `Badge: ${entry.badge.replaceAll("_", " ")}` : null];
-      if (markers.some(Boolean)) heading.append(make("span", "seat-location", markers.filter(Boolean).join(" / ")));
+      if (markers.some(Boolean)) heading.append(make("span", "seat-markers", markers.filter(Boolean).join(" / ")));
       const amounts = make("dl", "seat-amounts");
-      for (const [label, key] of [["Displayed stack", "displayed_stack"], ["Visible wager", "visible_wager"], ["Street contribution", "street_contribution"]]) {
+      for (const [label, key] of [["Stack", "displayed_stack"], ["Wager", "visible_wager"]]) {
         const field = make("div");
-        field.append(make("dt", "", label), make("dd", integer(entry[key]) ? "" : "unknown-value", chips(entry[key])));
+        field.append(make("dt", "", label), make("dd", integer(entry[key]) ? "" : "field-reason",
+          integer(entry[key]) ? literalAmount(entry[key], entry[`${key}_text`]) : reasonFor(observation, `seats.${entry.seat}.${key}`, key === "visible_wager" ? "missing-capability" : "insufficient-context")));
         amounts.append(field);
       }
       item.append(heading, amounts);
@@ -788,11 +831,60 @@
     text("metric-draw-river", percent(metrics.draw ? metrics.draw.river : null));
     text("metric-equity", percent(metrics.equity));
     node("metrics-readings").hidden = true;
-    text("reading-limit", observation?.partial ? (observation.seats.some((entry) => entry.visible_wager !== null ||
-      entry.occupied != null || entry.status != null || entry.badge != null) ?
-      "Seat fields have separate evidence. Hand positions, street contributions and math require validated context. Suggestions off." :
-      "Wagers, street contributions and seat markers are untrained; unknown. Metrics and suggestions off.") :
-      "A dash is unknown. Metrics and suggestions off.");
+    text("reading-limit", "Physical seats, not hand positions. Untrained fields stay unknown; amounts are never recommendations.");
+    renderDiagnostics(observation);
+    renderSource(observation);
+  }
+
+  function normalizeRecording(value) {
+    if (!record(value) || !["capture-only", "inference-enabled"].includes(value.mode) ||
+        !["idle", "capturing", "stopped", "failed", "interrupted"].includes(value.status)) return null;
+    const result = { mode: value.mode, status: value.status, inferenceEnabled: value.inference_enabled === true };
+    for (const key of ["elapsed_ms", "max_duration_ms", "max_frames", "recorded_frames", "recorded_bytes", "remaining_ms", "distinct_opportunities", "target_opportunities", "opportunity_deficit", "capture_failures", "estimated_missed_samples", "gap_count", "max_gap_ms", "updated_at_unix_ms"]) result[key] = integer(value[key]) ? value[key] : null;
+    result.stopReason = allowed(value.stop_reason, ["operator-stop", "duration-limit", "frame-limit", "disk-limit", "recorder-failure",
+      "source-unavailable", "source-changed", "capture-failed", "child-exited", "child-failed", "native-stalled", "receipt-invalid",
+      "log-limit", "supervisor-error", "status-stale", "child-stop-unconfirmed"], null);
+    return result;
+  }
+
+  const duration = (ms) => integer(ms) ? `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}` : "unknown";
+
+  function renderSource(observation) {
+    const capture = snapshot?.capture;
+    text("source-status", !connected ? "Disconnected" : captureHealthy() ? "Source connected" :
+      snapshot?.recording?.status === "capturing" ? "Capture-only source" : capture?.state === "blocked" ? "Source not confirmed" : "No current source");
+    text("source-role", observation ? ROLE_NAMES[observation.role] : "Role unknown");
+    text("source-freshness", observation ? `${Math.max(0, Date.now() - observation.captured)} ms old` : clearReason === "stale" ? "Reading expired" : "No current reading");
+    const recorder = snapshot?.recording;
+    const receiptFresh = connected && recorder?.updated_at_unix_ms != null && recorder.updated_at_unix_ms <= Date.now() + 500 &&
+      Date.now() - recorder.updated_at_unix_ms < 5000;
+    const recorderStatus = recorder?.status === "capturing" && !receiptFresh ? "status stale" : recorder?.status;
+    text("recorder-status", recorder ? `${recorder.mode === "capture-only" ? "Capture only" : "Diagnostic inference"} / ${recorderStatus} / ${duration(recorder.elapsed_ms)} / ${count(recorder.recorded_frames)} frames` : "Recorder status unavailable");
+    const inference = snapshot?.inferenceEnabled;
+    text("inference-status", inference === false ? "Inference OFF" : inference === true ? "Inference enabled separately" : "Inference status unknown");
+    text("model-status", snapshot ? `${snapshot.modelState}${snapshot.inferenceBusy ? " / busy" : ""}; quality failed` : "Disconnected");
+    text("recorder-budget", recorder ? `${duration(recorder.elapsed_ms)} / ${duration(recorder.max_duration_ms)}; ${count(recorder.recorded_frames)} / ${count(recorder.max_frames)} frames` : "Default: 10 min or 1,200 frames");
+    text("recorder-loss", recorder ? `${count(recorder.capture_failures)} capture failures / ${count(recorder.gap_count)} gaps; ${count(recorder.estimated_missed_samples)} estimated missed samples; max ${count(recorder.max_gap_ms)} ms` : "No session receipt");
+    text("opportunity-status", recorder ? `${count(recorder.distinct_opportunities)} / ${count(recorder.target_opportunities)} draft markers; deficit ${count(recorder.opportunity_deficit)}` : "Target 20 distinct opportunities, not repeated frames");
+    text("recorder-stop", recorder ? `Recorder ${recorder.status}${recorder.stopReason ? `: ${recorder.stopReason}` : ""}. Stops at the first budget limit; no automatic restart. Markers remain DRAFT / review PENDING.` :
+      "Use the manual capture terminal to confirm the source and start. Opening this page never starts capture or inference.");
+  }
+
+  function renderDiagnostics(observation) {
+    const fields = [["Role / hero identity", "hero_seat"], ["Hero cards", "hero_cards"], ["Hero stack", "hero_chips"],
+      ["Board", "board_slots.1"], ["Upper Pot", "pot_size"], ["Action controls", "controls"],
+      ["Lower center chips", "center_chip"], ["Street contributions", "street_contribution"], ["Hand positions", "position"], ["Pot convention", "pot_convention"]];
+    const fragment = document.createDocumentFragment();
+    const admitted = { hero_seat: observation?.heroSeat != null, hero_cards: !!observation?.hero.length,
+      hero_chips: observation?.amounts.hero_chips != null, "board_slots.1": !!observation?.board.some(Boolean),
+      pot_size: observation?.amounts.pot_size != null, controls: !!observation && [...observation.controls.values()].some((v) => v.presence === "present") };
+    for (const [label, key] of fields) {
+      const item = make("div");
+      item.append(make("dt", "", label), make("dd", "", admitted[key] ? "Admitted / experimental" : reasonFor(observation, key,
+        ["hero_seat", "hero_cards", "hero_chips", "controls", "center_chip"].includes(key) ? "missing-capability" : "insufficient-context")));
+      fragment.append(item);
+    }
+    node("field-diagnostics").replaceChildren(fragment);
   }
 
   function captureHealthy() {
@@ -802,7 +894,7 @@
   function renderHistory(value) {
     historyEvents = value ? value.events : [];
     const visible = !!value && (historyEvents.length > 0 || value.actions !== null || value.gaps > 0 || Object.values(value.counts).some((entry) => entry !== null));
-    node("history-panel").hidden = !activeLease || !visible;
+    node("history-panel").hidden = !visible;
     node("monitor-grid").classList.toggle("no-history", !visible);
     status("history-status", connected ? "Partial" : "Partial / offline", "warning");
     for (const [id, key] of [["history-folds", "folds"], ["history-bets", "bets"], ["history-raises", "raises"], ["history-three-bets", "three_bets"], ["history-four-bets", "four_bets"]]) text(id, count(value ? value.counts[key] : null));
@@ -842,7 +934,8 @@
     }
   }
 
-  function clearObservation() {
+  function clearObservation(reason = clearReason) {
+    clearReason = reason;
     const wasActive = activeLease !== null;
     closeObservation(activeLease ? activeLease.observation : snapshot ? snapshot.observation : null);
     activeLease = null;
@@ -855,7 +948,7 @@
   function disconnected() {
     connected = false;
     recoveryAfterSequence = Math.max(recoveryAfterSequence, highestSequence);
-    clearObservation();
+    clearObservation("stale");
     renderHistory(snapshot ? snapshot.history : null);
     text("monitor-empty", "Table disconnected. Waiting for a fresh reading.");
     announce("Table disconnected. Suggestions remain off.");
@@ -915,7 +1008,7 @@
     const remaining = Math.min(MAX_LEASE_MS, observation.remaining - roundTripMs, observation.expires - wall);
     if (remaining <= 0 || observation.captured > wall || observation.expires <= observation.captured || observation.expires > observation.captured + MAX_LEASE_MS) {
       closeObservation(observation);
-      clearObservation();
+      clearObservation("stale");
       return;
     }
     // Repeated polls can only shorten a lease. A new event sequence alone cannot renew it.
@@ -923,6 +1016,7 @@
     const expires = sameLease ? Math.min(activeLease.expires, observation.expires) : observation.expires;
     const previousRole = activeLease ? activeLease.observation.role : null;
     activeLease = { key, deadline, expires, observation };
+    clearReason = "insufficient-context";
     observationFloor = { epoch: observation.epoch, generation: observation.generation };
     closedLeaseKey = null;
     window.clearTimeout(leaseTimer);
@@ -977,12 +1071,13 @@
     const wall = Date.now();
     const monotonic = performance.now();
     if (snapshot.capture.state === "active" && !captureHealthy()) {
-      if (activeLease) clearObservation();
+      if (activeLease) clearObservation("stale");
     }
-    if (!activeLease) return;
+    if (!activeLease) { renderSource(null); return; }
     if (wall >= activeLease.expires || monotonic >= activeLease.deadline) {
-      clearObservation();
+      clearObservation("stale");
     }
+    renderSource(activeLease?.observation || null);
   }
 
   function schedulePoll(delay) {
@@ -1090,12 +1185,19 @@
       const fragment = document.createDocumentFragment();
       const rendered = [];
       for (const [index, section] of value.sections.entries()) {
-        const detail = make("details", "reference-section");
+        const detail = make("article", "reference-section");
         detail.dataset.sectionId = section.id;
-        const summary = make("summary");
+        detail.id = `reference-${section.id}`;
+        const summary = make("h3", "", section.title);
+        summary.tabIndex = -1;
+        const topic = make("button", "topic-button");
+        topic.type = "button";
+        topic.setAttribute("aria-controls", detail.id);
         const number = make("span", "reference-number", String(index + 1).padStart(2, "0"));
         number.setAttribute("aria-hidden", "true");
-        summary.append(number, make("h3", "", section.title));
+        topic.append(number, make("span", "", section.title));
+        topic.addEventListener("click", () => { selectedTopic = section.id; filterReference(); });
+        node("reference-topics").append(topic);
         const content = make("div", "reference-content");
         if (section.scope) content.append(make("p", "reference-scope", section.scope));
         for (const paragraph of section.paragraphs) content.append(make("p", "", paragraph));
@@ -1106,9 +1208,6 @@
         }
         for (const entry of section.tables) {
           const scroll = make("div", "table-scroll");
-          scroll.tabIndex = 0;
-          scroll.setAttribute("role", "region");
-          scroll.setAttribute("aria-label", entry.caption || section.title);
           const table = make("table");
           table.append(make("caption", "", entry.caption));
           const heading = make("thead");
@@ -1149,12 +1248,13 @@
         detail.append(summary, content);
         fragment.append(detail);
         const searchText = [section.title, section.scope, ...section.paragraphs, ...section.bullets, ...section.tables.flatMap((table) => [table.caption, ...table.columns, ...table.rows.flat()]), ...section.sources.flatMap((source) => [source.title, source.publisher])].join(" ").normalize("NFKC").toLowerCase();
-        rendered.push({ detail, searchText });
+        rendered.push({ detail, topic, id: section.id, searchText });
       }
       node("reference-sections").replaceChildren(fragment);
       referenceSections = rendered;
       text("reference-title", value.title);
-      text("reference-scope", value.scope);
+      text("reference-scope", "Offline study / not current-hand guidance");
+      node("reference-scope").title = value.scope;
       text("reference-reviewed", `Reviewed ${new Date(value.reviewed).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}`);
       node("reference-search").disabled = false;
       node("reference-load-status").hidden = true;
@@ -1162,6 +1262,7 @@
       filterReference();
     } catch {
       referenceSections = [];
+      node("reference-topics").replaceChildren();
       node("reference-sections").replaceChildren();
       node("reference-search").disabled = true;
       node("reference-load-status").hidden = false;
@@ -1171,15 +1272,14 @@
 
   function filterReference() {
     const words = node("reference-search").value.slice(0, 160).normalize("NFKC").toLowerCase().trim().split(/\s+/).filter(Boolean);
-    let matches = 0;
+    const matching = referenceSections.filter((entry) => words.every((word) => entry.searchText.includes(word)));
+    if (!matching.some((entry) => entry.id === selectedTopic)) selectedTopic = matching[0]?.id || null;
     for (const entry of referenceSections) {
-      const match = words.every((word) => entry.searchText.includes(word));
-      entry.detail.hidden = !match;
-      if (match) {
-        matches += 1;
-        if (words.length) entry.detail.open = true;
-      }
+      entry.topic.hidden = !matching.includes(entry);
+      entry.topic.setAttribute("aria-current", String(entry.id === selectedTopic));
+      entry.detail.hidden = entry.id !== selectedTopic;
     }
+    const matches = matching.length;
     node("reference-empty").hidden = matches > 0;
     text("reference-count", words.length ? `${matches} of ${referenceSections.length} topics` : `${referenceSections.length} topics`);
   }

@@ -32,7 +32,7 @@ ACTIONS = ("fold", "check", "call", "bet", "raise", "all_in")
 ROLES = ("observing", "seated_waiting", "your_turn", "uncertain")
 VERIFIED_FIELDS = ("hero_seated", "action_required", "controls", "pot_size", "to_call",
                    "hero_chips", "min_raise_to", "max_raise_to", "acting_seat",
-                   "acting_to_call", "wagers")
+                   "acting_to_call", "wagers", "hero_seat")
 PARTIAL_FIELDS = ("role", "hero_seated", "game_phase", "board_count", "pot_size",
                    *("board_slots." + str(n) for n in range(1, 6)),
                    *("seats." + str(n) + ".displayed_stack" for n in range(1, 7)),
@@ -57,7 +57,16 @@ DIAGNOSTIC_REASONS = ("accepted", "missing-answer", "below-floor", "truncated", 
                       "board-presence-unknown", "board-noncontiguous", "board-count-invalid",
                       "phase-board-mismatch", "duplicate-card", "role-contradiction",
                        "pass-unavailable", "awaiting-consensus", "invalid-capability", "unapproved-capability",
-                       "identity-mismatch", "decision-deadline", "source-region-changed", "missing-source-witness")
+                       "identity-mismatch", "decision-deadline", "source-region-changed", "missing-source-witness",
+                       "unknown-region", "explicit-unknown", "scene-contradiction", "occluded")
+UNAVAILABLE_REASONS = ("missing-capability", "unsupported-layout", "below-floor", "stale",
+                       "occluded", "insufficient-context")
+FIELD_PATHS = tuple(dict.fromkeys((*PARTIAL_FIELDS, *VERIFIED_FIELDS, "hero_cards", "board", "scene",
+                                  "center_chip", "pot_convention",
+                                  *("seats." + str(n) + "." + field for n in range(1, 7) for field in SEAT_FIELDS))))
+TRAINED_PATHS = ("role", "hero_seated", "game_phase", "board_count", "board", "pot_size",
+                 *("board_slots." + str(n) for n in range(1, 6)),
+                 *("seats." + str(n) + ".displayed_stack" for n in range(1, 7)), "pot_convention")
 CODE = re.compile(r"^[a-z0-9_-]{1,80}$")
 RANKS = dict(zip(("two", "three", "four", "five", "six", "seven", "eight", "nine",
                   "ten", "jack", "queen", "king", "ace"),
@@ -120,6 +129,38 @@ def unknown_controls():
     return [{"action": action, "presence": "unknown", "enabled": "unknown"} for action in ACTIONS]
 
 
+def amount_text(value, amount):
+    """Keep only literal numeric glyphs that agree exactly with the hundredths value."""
+    if (amount is None or not isinstance(value, str) or not 1 <= len(value) <= 32
+            or re.fullmatch(r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,2})?", value) is None):
+        return None
+    whole, _, fraction = value.replace(",", "").partition(".")
+    return value if int(whole) * 100 + int(fraction.ljust(2, "0")) == amount else None
+
+
+def field_statuses(values=None, supported=TRAINED_PATHS, reason="insufficient-context"):
+    values = values or {}
+    return {path: {"status": "accepted", "reason": None} if values.get(path) is not None
+            else {"status": "unavailable", "reason": reason if path in supported else "missing-capability"}
+            for path in FIELD_PATHS}
+
+
+def unavailable_reason(reason, field=None):
+    if reason in UNAVAILABLE_REASONS:
+        return reason
+    if reason in ("non-table", "lobby-geometry", "crop-too-small", "unknown-region"):
+        return "unsupported-layout"
+    if reason in ("unsupported", "unapproved-capability", "invalid-capability", "invalid-floor"):
+        return "unsupported-layout" if field == "table_layout" else "missing-capability"
+    if reason in ("decision-deadline", "source-region-changed", "missing-source-witness",
+                  "identity-mismatch", "frame-changed", "feed-eof", "feed-read-failed",
+                  "invalid-feed-record", "capture-identity-or-epoch-changed", "capture-not-fresh",
+                  "obsolete-health-record", "obsolete-or-expired-partial", "obsolete-or-expired-observation",
+                  "partial-observation-expired", "observation-expired", "capture-heartbeat-expired"):
+        return "stale"
+    return "insufficient-context"
+
+
 def partial_view(record):
     """Admit only the native Stage 2 allowlist; unsupported crops are never grants."""
     raw_verified = record.get("verified_fields")
@@ -180,10 +221,11 @@ def partial_view(record):
             board = [None if item == duplicate else item for item in board]
     expected = {"preflop": 0, "flop": 3, "turn": 4, "river": 5, "showdown": 5}
     if (phase is not None and board_count is not None and board_count != expected[phase]
-            or phase is not None and any(board[expected[phase]:])
-            or board_count is not None and any(board[board_count:])):
-        phase, board_count, board = None, None, [None] * 5
-    seats = [{"seat": n, **dict.fromkeys(SEAT_FIELDS), "visible_wager_status": "unknown",
+            or phase is not None and any(board[expected[phase]:])):
+        phase = None
+    if board_count is not None and any(board[board_count:]):
+        phase, board_count = None, None
+    seats = [{"seat": n, **dict.fromkeys((*SEAT_FIELDS, "displayed_stack_text", "visible_wager_text")), "visible_wager_status": "unknown",
               "scene_fields": []} for n in range(1, 7)]
     raw_seats = record.get("seats")
     if (isinstance(raw_seats, list) and len(raw_seats) == 6
@@ -194,10 +236,12 @@ def partial_view(record):
             path = "seats." + str(seat) + ".displayed_stack"
             if admitted(path, "displayed_stack", seat):
                 seats[seat - 1]["displayed_stack"] = integer(item.get("displayed_stack"), 0xffffffff)
+                seats[seat - 1]["displayed_stack_text"] = amount_text(item.get("displayed_stack_text"), seats[seat - 1]["displayed_stack"])
             if admitted("seats." + str(seat) + ".visible_wager", "visible_wager", seat):
                 seats[seat - 1]["visible_wager"] = integer(item.get("visible_wager"), 0xffffffff)
                 if seats[seat - 1]["visible_wager"] is not None:
                     seats[seat - 1]["visible_wager_status"] = "accepted"
+                    seats[seat - 1]["visible_wager_text"] = amount_text(item.get("visible_wager_text"), seats[seat - 1]["visible_wager"])
             for field in SCENE_LABELS:
                 if not admitted("seats." + str(seat) + "." + field, field, seat):
                     continue
@@ -219,9 +263,26 @@ def partial_view(record):
     pot = integer(record.get("pot_size"), 0xffffffff) if admitted("pot_size", "pot_size") else None
     for seat in seats:
         seat["scene_fields"] = [field for field in SCENE_LABELS if seat[field] is not None]
-    return {"role": role, "hero_seated": seated, "game_phase": phase, "board_count": board_count,
-            "board_slots": board, "pot_size": pot, "seats": seats, "experimental": True,
-            "quality_approved": False}
+    values = {"role": role if role != "uncertain" else None, "hero_seated": seated,
+              "game_phase": phase, "board_count": board_count, "pot_size": pot,
+              "board": True if board_count is not None and all(board[:board_count]) else None,
+              "scene": True if any(seat["scene_fields"] for seat in seats) else None,
+              "wagers": True if any(seat["visible_wager"] is not None for seat in seats) else None}
+    values.update({"board_slots." + str(i + 1): card for i, card in enumerate(board)})
+    values.update({"seats." + str(seat["seat"]) + "." + field: seat[field] for seat in seats for field in SEAT_FIELDS})
+    supported = {field if seat is None else "seats." + str(seat) + "." + field
+                 for (field, seat), valid in capabilities.items() if valid}
+    if capabilities.get(("board_slot", None)):
+        supported.update("board_slots." + str(i) for i in range(1, 6))
+        supported.add("board")
+    if any(valid and field in SCENE_LABELS for (field, _), valid in capabilities.items()):
+        supported.add("scene")
+    if any(valid and field == "visible_wager" for (field, _), valid in capabilities.items()):
+        supported.add("wagers")
+    statuses = field_statuses(values, supported | {"pot_convention"})
+    return {"role": role, "hero_seated": seated, "hero_seat": None, "game_phase": phase, "board_count": board_count,
+            "board_slots": board, "pot_size": pot, "pot_size_text": amount_text(record.get("pot_size_text"), pot),
+            "seats": seats, "experimental": True, "quality_approved": False, "field_statuses": statuses}
 
 
 @lru_cache(maxsize=1)
@@ -235,7 +296,7 @@ def diagnostic_vocabulary(path):
     for seat in range(1, 7):
         result["p6_seat_%d_wager" % seat] = result["p3_pot"]
         result["p7_seat_%d_scene" % seat] = {
-            qid: {"type": "choice", "criteria": labels} for qid, labels in SCENE_LABELS.items()}
+            qid: {"id": qid, "type": "choice", "option_order": labels} for qid, labels in SCENE_LABELS.items()}
     return result
 
 
@@ -366,6 +427,8 @@ class DashboardState:
         self.observation = None
         self.partial_observation = self.partial_deadline = None
         self.partial_source = self.partial_source_deadline = None
+        self.field_statuses = field_statuses()
+        self.status_source = self.status_deadline = self.status_expires = None
         self.deadline = self.last_heartbeat = None
         self.version = (0, 0)
         self.invalidated_version = None
@@ -401,6 +464,8 @@ class DashboardState:
             self.invalidated_version = None
             self.last_heartbeat = None
             self.partial_source = self.partial_source_deadline = None
+            self.field_statuses = field_statuses()
+            self.status_source = self.status_deadline = self.status_expires = None
             self.identity_configured = False
             self.recording_incomplete = False
             self.capture.update(state="starting", fresh_capture=False, frames=0, recorded_frames=0,
@@ -437,6 +502,12 @@ class DashboardState:
         self.invalidated_version = self.version
         self.observation = self.deadline = None
         self.partial_observation = self.partial_deadline = None
+        unavailable = unavailable_reason(reason)
+        for value in self.field_statuses.values():
+            if value["status"] == "accepted" or unavailable == "stale" and value["reason"] != "missing-capability":
+                value.update(status="unavailable", reason=unavailable)
+        if unavailable == "stale":
+            self.status_deadline = self.status_expires = None
         self.message = reason
         self.history["state"] = "partial" if self.source == "live" else "unavailable"
 
@@ -509,6 +580,70 @@ class DashboardState:
                 or expires > captured + 5000):
             return None
         return gen, epoch, captured_mono, captured, expires, min(valid, expires - now)
+
+    def _diagnostic_statuses(self, record, diagnostics):
+        """Same-source reasons only: diagnostics can never grant a value or a lease."""
+        if diagnostics["source_current"] is not True or diagnostics["admission"] != "source_current":
+            return
+        lease = self._partial_lease(record)
+        if lease is None:
+            return
+        gen, epoch, captured_mono, captured, expires, remaining = lease
+        source = (gen, epoch, captured_mono, captured)
+        reading = self.partial_observation or self.observation
+        if reading is not None and (gen, epoch, captured) != (reading["generation"], reading["epoch"], reading["captured_at_unix_ms"]):
+            return
+        if reading is not None and self.status_source != source:
+            return
+        if (self.status_source is not None and (gen < self.status_source[0] or epoch < self.status_source[1]
+                or captured_mono < self.status_source[2] or captured < self.status_source[3]
+                or captured_mono == self.status_source[2] and captured != self.status_source[3])):
+            return
+        if self.invalidated_version is not None and (gen, epoch) <= self.invalidated_version:
+            return
+        deadline = self.monotonic() + remaining / 1000
+        if self.status_source is not None and self.status_source[2:] == source[2:]:
+            if self.status_deadline is None or self.status_deadline <= self.monotonic():
+                return
+            deadline = min(deadline, self.status_deadline)
+        statuses = copy.deepcopy(reading["field_statuses"]) if reading else field_statuses()
+        seen = set()
+        for field in diagnostics["fields"]:
+            name, seat, slot = field["field"], field["seat"], field["board_slot"]
+            if name in ("screen_kind", "table_layout", "readable"):
+                if field["status"] != "accepted":
+                    reason = unavailable_reason(field["reason"], name)
+                    for path, status in statuses.items():
+                        if status["status"] != "accepted" and path in TRAINED_PATHS:
+                            status["reason"] = reason
+                continue
+            if name == "board_slot" and slot is not None and seat is None:
+                path = "board_slots." + str(slot)
+            elif name in SEAT_FIELDS and seat is not None and slot is None:
+                path = "seats." + str(seat) + "." + name
+            elif seat is None and slot is None:
+                path = name
+            else:
+                continue
+            if path not in statuses or statuses[path]["status"] == "accepted":
+                continue
+            reason = (field["admission_reason"] if field["admission_status"] == "rejected"
+                      else field["reason"] if field["status"] != "accepted" else "awaiting-consensus")
+            statuses[path]["reason"] = ("insufficient-context" if path in seen
+                                        else unavailable_reason(reason, name))
+            seen.add(path)
+        for aggregate, paths in (("board", ["board_slots." + str(n) for n in range(1, 6)]),
+                                 ("scene", ["seats." + str(n) + "." + field for n in range(1, 7) for field in SCENE_LABELS]),
+                                 ("wagers", ["seats." + str(n) + ".visible_wager" for n in range(1, 7)])):
+            if statuses[aggregate]["status"] != "accepted":
+                reasons = [statuses[path]["reason"] for path in paths]
+                statuses[aggregate]["reason"] = next((r for r in ("stale", "occluded", "below-floor", "unsupported-layout",
+                                                                   "insufficient-context", "missing-capability") if r in reasons),
+                                                        "insufficient-context")
+        self.field_statuses = statuses
+        self.status_source, self.status_deadline, self.status_expires = source, deadline, expires
+        if reading is not None:
+            reading["field_statuses"] = copy.deepcopy(statuses)
 
     def ingest(self, record, *, session_id=None):
         with self.lock:
@@ -592,7 +727,8 @@ class DashboardState:
                                          "target_id": target, "captured_at_ms": captured_mono,
                                          "captured_at_unix_ms": captured, "emitted_at_unix_ms": emitted,
                                          "expires_at_unix_ms": expires, "valid_for_ms": valid,
-                                         "diagnostics": diagnostics})
+                                          "diagnostics": diagnostics})
+                self._diagnostic_statuses(record, diagnostics)
                 return
             elif event == "partial_observation":
                 lease = self._partial_lease(record)
@@ -625,6 +761,9 @@ class DashboardState:
                 self.partial_observation = {**view, "generation": gen, "epoch": epoch,
                                             "captured_at_unix_ms": captured, "expires_at_unix_ms": expires,
                                             "remaining_ms": remaining}
+                self.field_statuses = copy.deepcopy(view["field_statuses"])
+                self.status_source = (gen, epoch, captured_mono, captured)
+                self.status_deadline, self.status_expires = deadline, expires
                 self.message = "Partial reading; suggestions off."
                 saved["partial_observation"] = self.partial_observation
             elif event == "observation":
@@ -707,8 +846,9 @@ class DashboardState:
                         controls_valid = True
                 enabled = [item["action"] for item in controls if item["enabled"] == "enabled"]
                 present = any(item["presence"] == "present" for item in controls)
+                seating_contradiction = seated is False and (bool(hero) or required is True or present)
                 contradiction = ("controls" in verified and not controls_valid
-                                 or seated is False and (bool(hero) or required is True or present)
+                                 or seating_contradiction
                                  or required is False and bool(enabled)
                                  or "check" in enabled and ("call" in enabled or "fold" in enabled)
                                  or amounts["to_call"] == 0 and ("call" in enabled or "fold" in enabled)
@@ -729,10 +869,12 @@ class DashboardState:
                 if role == "uncertain":
                     required = None
                     controls = unknown_controls()
-                    if contradiction:
+                    if seating_contradiction:
                         seated = None
-                if role not in ("seated_waiting", "your_turn"):
+                if seated is not True:
                     amounts["hero_chips"] = None
+                hero_seat = integer(record.get("hero_seat"), 6) if "hero_seat" in verified and seated is True else None
+                hero_seat = hero_seat or None
                 if role != "your_turn":
                     for field in ("to_call", "min_raise_to", "max_raise_to"):
                         amounts[field] = None
@@ -762,12 +904,25 @@ class DashboardState:
                 self.observation = {"generation": gen, "epoch": epoch, "game_phase": phase,
                                     "captured_at_unix_ms": captured,
                                     "hero_cards": hero, "board": board,
-                                    "role": role, "hero_seated": seated, "acting_seat": acting,
+                                    "role": role, "hero_seated": seated, "hero_seat": hero_seat, "acting_seat": acting,
                                     "amounts": amounts, "wagers": wagers, "metrics": metrics,
                                     "available_actions": enabled if role == "your_turn" else None,
                                     "controls": controls, "action_required": required,
                                     "experimental": True, "quality_approved": False,
                                     "expires_at_unix_ms": expires, "remaining_ms": remaining}
+                raw_texts = record.get("amount_texts")
+                raw_texts = raw_texts if isinstance(raw_texts, dict) else {}
+                self.observation["amount_texts"] = {field: amount_text(raw_texts.get(field), amount)
+                                                    for field, amount in amounts.items()}
+                values = {**amounts, "role": role if role != "uncertain" else None, "hero_seated": seated,
+                          "hero_seat": hero_seat, "acting_seat": acting, "action_required": required,
+                          "hero_cards": True if hero else None, "board": True, "game_phase": phase,
+                          "board_count": len(board), "controls": True if controls_valid and role != "uncertain" else None}
+                values.update({"board_slots." + str(i + 1): card for i, card in enumerate(board)})
+                self.field_statuses = field_statuses(values, set(TRAINED_PATHS) | verified)
+                self.observation["field_statuses"] = copy.deepcopy(self.field_statuses)
+                self.status_source = (gen, epoch, integer(ticket.get("captured_at_ms")) or 0, captured)
+                self.status_deadline, self.status_expires = deadline, expires
                 self.message = "Experimental observation only; positive seated data and quality gates are pending."
                 saved["observation"] = self.observation
             elif event == "clear" and self.partial_observation is not None:
@@ -869,12 +1024,19 @@ class DashboardState:
                     self._invalidate("partial-observation-expired")
                 else:
                     self.partial_observation["remaining_ms"] = remaining
+            if self.status_deadline is not None and (now >= self.status_deadline
+                    or self.status_expires <= int(self.wall() * 1000)):
+                for value in self.field_statuses.values():
+                    if value["reason"] != "missing-capability":
+                        value.update(status="unavailable", reason="stale")
+                self.status_deadline = self.status_expires = None
             self.history["ledger"]["complete"] = self.ledger.complete
             return copy.deepcopy({"schema_version": 1, "session_id": self.session_id,
                                   "event_seq": self.event_seq, "source": self.source,
                                   "server": self.model, "capture": self.capture,
                                    "observation": self.observation, "advice": None,
-                                   "partial_observation": self.partial_observation,
+                                    "partial_observation": self.partial_observation,
+                                   "field_statuses": self.field_statuses,
                                   "history": self.history,
                                   "readiness": "UI_READY",
                                   "message": self.message})

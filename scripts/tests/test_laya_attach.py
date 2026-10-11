@@ -455,18 +455,30 @@ class AttachTests(unittest.TestCase):
         source = (SCRIPTS / "start-vlm.ps1").read_text(encoding="utf-8")
         self.assertIn("[switch]$NoAutoAttach", source)
         self.assertIn("[string]$PracticeConfig = '.local/practice-table.json'", source)
-        self.assertIn("if (-not $DashboardOnly -and -not $NoAutoAttach)", source)
-        self.assertIn("@('--auto-attach', '--practice-config', $PracticeConfig)", source)
-        self.assertIn("if ($LiveConfig -and -not $NoAutoAttach)", source)
+        self.assertIn("[switch]$EnableInference", source)
+        self.assertNotIn("'--auto-attach'", source)
+        self.assertNotIn("'--live-config'", source)
+        self.assertIn("if ($LiveConfig -or $PSBoundParameters.ContainsKey('PracticeConfig'))", source)
         self.assertLess(source.index("GetActiveTcpListeners()"), source.index("& $python"))
         self.assertLess(source.index("Port 18090 is already occupied"), source.index("$python ="))
-        self.assertIn("-DashboardOnly loads no model and disables automatic attachment", source)
-        self.assertIn("a missing private profile does not", source)
-        self.assertIn("not title proof or perception calibration", source)
+        self.assertIn("Normal launch and -DashboardOnly load no model and never attach or record", source)
+        self.assertIn("if ($EnableInference)", source)
+        self.assertIn("$serverArgs += '--dashboard-only'", source)
         for flag in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_HUB_DISABLE_TELEMETRY", "DO_NOT_TRACK"):
             self.assertIn(f"$env:{flag} = '1'", source)
         for unsafe in ("Stop-Process", "--fetch", "--vlm-endpoint", "Start-Process"):
             self.assertNotIn(unsafe, source)
+
+    def test_manual_selection_pins_exact_identity_without_a_broad_profile(self):
+        metadata = listing(window("CoinPoker"), window("CoinPoker", hwnd="0x22"))
+        selected = attach.select_exact(metadata, 11, "0x11")
+        self.assertEqual(selected.hwnd, "0x11")
+        resized = attach.select_exact(listing(window("CoinPoker", width=1200)), 11, "0x11")
+        self.assertTrue(attach.same_exact_source(selected, resized))
+        changed = attach.select_exact(listing(window("replacement")), 11, "0x11")
+        self.assertFalse(attach.same_exact_source(selected, changed))
+        for pid, hwnd in ((12, "0x11"), (11, "0x33"), (True, "0x11"), (11, "bad")):
+            self.assert_error("practice-profile-mismatch", attach.select_exact, metadata, pid, hwnd)
 
 
 if __name__ == "__main__":

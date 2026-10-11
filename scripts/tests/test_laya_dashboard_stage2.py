@@ -162,6 +162,7 @@ class PartialTests(unittest.TestCase):
         source = self.record()
         for seat in source["seats"]:
             seat["visible_wager"] = seat["seat"] * 7
+            seat["visible_wager_text"] = "0.%02d" % (seat["seat"] * 7)
             seat["street_contribution"] = 999
         for item in source["capabilities"]:
             if item["field"] == "visible_wager":
@@ -171,6 +172,8 @@ class PartialTests(unittest.TestCase):
         self.state.ingest(source)
         view = self.state.snapshot()["partial_observation"]
         self.assertEqual([s["visible_wager"] for s in view["seats"]], [7, 14, 21, 28, 35, 42])
+        self.assertEqual([s["visible_wager_text"] for s in view["seats"]], ["0.07", "0.14", "0.21", "0.28", "0.35", "0.42"])
+        self.assertEqual(view["field_statuses"]["wagers"]["status"], "accepted")
         self.assertEqual([s["displayed_stack"] for s in view["seats"]], [100, 200, None, 0, 500, 600])
         self.assertTrue(all(s["street_contribution"] is None for s in view["seats"]))
         self.assertFalse(view["quality_approved"])
@@ -237,14 +240,15 @@ class PartialTests(unittest.TestCase):
         self.health()
         value = self.reading(game_phase="preflop")
         self.assertIsNone(value["game_phase"])
-        self.assertIsNone(value["board_count"])
-        self.assertEqual(value["board_slots"], [None] * 5)
+        self.assertEqual(value["board_count"], 3)
+        self.assertIsNotNone(value["board_slots"][0])
+        self.assertIsNotNone(value["board_slots"][2])
         self.assertEqual(value["pot_size"], 12345)
         self.state.begin_stream()
         self.health()
         value = self.reading(game_phase="preflop", board_count=None)
         self.assertIsNone(value["game_phase"])
-        self.assertEqual(value["board_slots"], [None] * 5)
+        self.assertIsNotNone(value["board_slots"][0])
         self.assertEqual(value["pot_size"], 12345)
 
     def test_new_capture_replaces_unknowns_without_cross_hand_or_occupant_transfer(self):
@@ -438,6 +442,118 @@ class PartialTests(unittest.TestCase):
         self.assertIn("reference only", positions["tables"][1]["caption"])
         self.assertIn("dead-button", " ".join(positions["bullets"]))
 
+    def diagnostics(self, fields, **extra):
+        self.state.ingest(self.record(event="perception_diagnostics", frame_width=800, frame_height=613,
+                                     passes=[], fields=fields, source_current=True, admission="source_current", **extra))
+
+    def test_literal_text_is_preserved_only_for_verified_matching_numeric_amounts(self):
+        source = self.record(pot_size=123450, pot_size_text="1,234.5")
+        source["seats"][0].update(displayed_stack=700, displayed_stack_text="0007")
+        source["seats"][3]["displayed_stack_text"] = "0"
+        view = dashboard.partial_view(source)
+        self.assertEqual(view["pot_size_text"], "1,234.5")
+        self.assertEqual(view["seats"][0]["displayed_stack_text"], "0007")
+        self.assertEqual(view["seats"][3]["displayed_stack_text"], "0")
+        for text in ("$1,234.5", "1234.50 chips", "1,234.6", "1e3", "1,23.45", "PRIVATE", "1" * 1000, "\uff11\uff12\uff13\uff14.\uff15", [], None):
+            source["pot_size_text"] = text
+            with self.subTest(text=text):
+                value = dashboard.partial_view(source)
+                self.assertIsNone(value["pot_size_text"])
+                self.assertEqual(value["pot_size"], 123450)
+        source["verified_fields"] = []
+        self.assertIsNone(dashboard.partial_view(source)["seats"][0]["displayed_stack_text"])
+
+    def test_field_reasons_are_closed_source_bound_and_never_admit_a_value(self):
+        self.reading(pot_size=None, board_count=None, game_phase=None, board_slots=[None] * 5)
+        fields = [dict(field="pot_size", status="rejected", reason="below-floor",
+                       admission_status="rejected", admission_reason="below-floor"),
+                  dict(field="board_slot", board_slot=1, status="rejected", reason="occluded",
+                       admission_status="rejected", admission_reason="occluded"),
+                  dict(field="displayed_stack", seat=3, status="accepted", reason="accepted",
+                       admission_status="unknown", admission_reason="awaiting-consensus"),
+                  dict(field="visible_wager", seat=1, status="unknown", reason="unsupported"),
+                  dict(field="displayed_stack", seat=2, status="rejected", reason="source-region-changed",
+                       admission_status="rejected", admission_reason="source-region-changed"),
+                  dict(field="PRIVATE-FIELD", status="accepted", reason="PRIVATE"),
+                  dict(field="hero_seated", status="unknown", reason="PRIVATE")]
+        self.diagnostics(fields)
+        snapshot = self.state.snapshot()
+        statuses = snapshot["partial_observation"]["field_statuses"]
+        self.assertEqual(snapshot["field_statuses"], statuses)
+        self.assertEqual(statuses["pot_size"], {"status": "unavailable", "reason": "below-floor"})
+        self.assertEqual(statuses["board_slots.1"]["reason"], "occluded")
+        self.assertEqual(statuses["board"]["reason"], "occluded")
+        self.assertEqual(statuses["seats.3.displayed_stack"]["reason"], "insufficient-context")
+        self.assertEqual(statuses["seats.1.visible_wager"]["reason"], "missing-capability")
+        self.assertEqual(statuses["scene"]["reason"], "missing-capability")
+        self.assertEqual(statuses["seats.2.displayed_stack"], {"status": "accepted", "reason": None})
+        self.assertEqual(statuses["hero_cards"]["reason"], "missing-capability")
+        self.assertEqual(statuses["center_chip"]["reason"], "missing-capability")
+        self.assertEqual(statuses["pot_convention"]["reason"], "insufficient-context")
+        self.assertTrue(all(v["reason"] in (*dashboard.UNAVAILABLE_REASONS, None) for v in statuses.values()))
+        self.assertIsNone(snapshot["partial_observation"]["pot_size"])
+        self.assertNotIn("PRIVATE", json.dumps(snapshot))
+        self.assertNotIn("admission_reason", json.dumps(snapshot))
+
+    def test_unavailable_diagnostic_reasons_work_without_a_partial_and_expire_original_lease(self):
+        self.diagnostics([dict(field="table_layout", status="rejected", reason="unsupported")])
+        before = self.state.snapshot()
+        self.assertIsNone(before["partial_observation"])
+        self.assertEqual(before["field_statuses"]["pot_size"]["reason"], "unsupported-layout")
+        self.assertTrue(all(v["status"] == "unavailable" for v in before["field_statuses"].values()))
+        original = self.record(event="perception_diagnostics", frame_width=800, frame_height=613,
+                               passes=[], fields=[], source_current=True, admission="source_current")
+        self.clock.value += .8
+        self.state.ingest(original)
+        self.clock.value += .201
+        self.assertEqual(self.state.snapshot()["field_statuses"]["pot_size"]["reason"], "stale")
+
+    def test_old_candidate_unmatched_or_expired_diagnostics_cannot_rewrite_current_statuses(self):
+        self.reading(pot_size=None)
+        before = copy.deepcopy(self.state.snapshot())
+        fields = [dict(field="pot_size", status="rejected", reason="below-floor")]
+        cases = [dict(source_current=False), dict(admission="candidate"), dict(generation=2), dict(captured_mono=1002),
+                 dict(captured_at_unix_ms=int(self.clock.wall() * 1000) - 501), dict(valid_for_ms=0)]
+        for extra in cases:
+            raw = self.record(event="perception_diagnostics", frame_width=800, frame_height=613,
+                              passes=[], fields=fields, source_current=True, admission="source_current")
+            if "generation" in extra:
+                raw["observation"]["generation"] = extra["generation"]
+            elif "captured_mono" in extra:
+                raw["observation"]["captured_at_ms"] = extra["captured_mono"]
+            else:
+                raw.update(extra)
+            self.state.ingest(raw)
+            self.assertEqual(self.state.snapshot()["field_statuses"], before["field_statuses"])
+        self.state.end_stream()
+        self.diagnostics(fields)
+        self.assertEqual(self.state.snapshot()["field_statuses"]["pot_size"]["reason"], "stale")
+
+    def test_new_generation_diagnostics_cannot_renew_same_source_or_revive_after_expiry(self):
+        fields = [dict(field="pot_size", status="rejected", reason="below-floor")]
+        raw = self.record(event="perception_diagnostics", frame_width=800, frame_height=613,
+                          passes=[], fields=fields, source_current=True, admission="source_current")
+        self.state.ingest(raw)
+        self.clock.value += .8
+        later = copy.deepcopy(raw)
+        later["observation"]["generation"] = 2
+        later.update(emitted_at_unix_ms=int(self.clock.wall() * 1000), valid_for_ms=2000,
+                     expires_at_unix_ms=int(self.clock.wall() * 1000) + 2000)
+        self.state.ingest(later)
+        self.clock.value += .201
+        self.assertEqual(self.state.snapshot()["field_statuses"]["pot_size"]["reason"], "stale")
+        self.state.ingest(later)
+        self.assertEqual(self.state.snapshot()["field_statuses"]["pot_size"]["reason"], "stale")
+
+    def test_p7_closed_diagnostic_vocabulary_does_not_discard_valid_scene_trace(self):
+        value = dashboard.private_perception({"frame_width": 800, "frame_height": 613,
+                    "passes": [{"pass": "p7_seat_1_scene", "crop_bounds": [], "crop_dimensions": [],
+                                "questions": [{"question": "occupied", "answer": {"type": "choice", "value": "open"},
+                                               "reason": "explicit-unknown", "status": "unknown"}]}]})
+        question = value["passes"][0]["questions"][0]
+        self.assertEqual(question["answer"], {"type": "choice", "value": "open"})
+        self.assertEqual(question["reason"], "explicit-unknown")
+
 
 NODE_UI = r"""
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
@@ -484,11 +600,11 @@ if (input.scenario === 'render') {
   assert(visible()); assert.equal(nodes.get('amount-pot').textContent, '123.45 chips');
   const seats = nodes.get('seat-readings').childNodes;
   assert.equal(seats.length, 6); assert.deepEqual(seats.map(s => s.dataset.seat), ['1','2','3','4','5','6']);
-  for (const row of seats) for (const label of ['Displayed stack', 'Visible wager', 'Street contribution']) assert(row.textContent.includes(label));
+   for (const row of seats) for (const label of ['Stack', 'Wager']) assert(row.textContent.includes(label));
   assert(seats[3].textContent.includes('0.00 chips')); assert(!seats[2].textContent.includes('0.00 chips'));
   assert.equal(nodes.get('board-cards').childNodes.length, 3);
   assert(nodes.get('metrics-readings').hidden); assert(nodes.get('controls-reading').hidden);
-  assert(nodes.get('call-reading').hidden); assert(nodes.get('reading-limit').textContent.includes('untrained'));
+   assert(nodes.get('call-reading').hidden); assert(nodes.get('reading-limit').textContent.toLowerCase().includes('untrained'));
   assert(![...nodes.values()].some(node => node.textContent.includes('PRIVATE') || node.textContent.includes('999999.99 chips')));
   assert.equal([...nodes.values()].filter(x => x.attrs.role === 'tab').length, 2);
   test.loadReference(); assert.equal(nodes.get('reference-sections').childNodes.length, 8);

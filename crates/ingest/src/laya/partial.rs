@@ -212,7 +212,7 @@ fn run_reading<'a>(
     Ok(reading)
 }
 
-fn amount(reading: &Reading<'_>, max_glyphs: u32) -> (Option<u32>, Status, Reason) {
+fn amount(reading: &Reading<'_>, max_glyphs: u32) -> (Option<(u32, String)>, Status, Reason) {
     if let Some(reason) = reading.failure {
         return (None, Status::Unknown, reason);
     }
@@ -241,7 +241,7 @@ fn amount(reading: &Reading<'_>, max_glyphs: u32) -> (Option<u32>, Status, Reaso
         text.push_str(glyph);
     }
     match parse_amount(&text) {
-        Some(value) => (Some(value), Status::Accepted, Reason::Accepted),
+        Some(value) => (Some((value, text)), Status::Accepted, Reason::Accepted),
         None => (None, Status::Rejected, Reason::InvalidAmount),
     }
 }
@@ -291,7 +291,14 @@ pub fn assemble_partial(
         let (status, reason) = if matches {
             (Status::Accepted, Reason::Accepted)
         } else if d.status == Status::Accepted {
-            (Status::Rejected, Reason::NonTable)
+            (
+                Status::Rejected,
+                match field {
+                    FieldName::Readable => Reason::Occluded,
+                    FieldName::TableLayout => Reason::Unsupported,
+                    _ => Reason::NonTable,
+                },
+            )
         } else {
             (d.status, d.reason)
         };
@@ -346,7 +353,17 @@ pub fn assemble_partial(
             } else if contradictory {
                 Reason::RoleContradiction
             } else {
-                Reason::DependencyUnknown
+                [
+                    "hero_seat_index",
+                    "action_on_hero",
+                    "ev_seat_controls",
+                    "ev_hero_cards",
+                    "ev_action_controls",
+                ]
+                .iter()
+                .map(|id| p0.diagnostic(id))
+                .find(|d| d.status != Status::Accepted)
+                .map_or(Reason::Unsupported, |d| d.reason)
             },
         );
     }
@@ -367,9 +384,10 @@ pub fn assemble_partial(
         let suit_id = format!("board_{}_suit", i + 1);
         let rank = board.choice(&rank_id);
         let suit = board.choice(&suit_id);
+        let occluded = rank == Some("unreadable") || suit == Some("unreadable");
         let contradiction = (rank == Some("no_card") && suit.is_some_and(|s| SUITS.contains(&s)))
             || (suit == Some("no_card") && rank.is_some_and(|r| RANKS.contains(&r)));
-        let card = if board_allowed && !contradiction {
+        let card = if board_allowed && !contradiction && !occluded {
             if rank == Some("no_card") && suit == Some("no_card") {
                 *present = Some(false);
             } else if rank.is_some_and(|r| RANKS.contains(&r))
@@ -390,7 +408,14 @@ pub fn assemble_partial(
             None
         };
         let reason = if !board_allowed {
-            Reason::DependencyUnknown
+            let d = p0.diagnostic("ev_board_area");
+            if d.status == Status::Accepted {
+                Reason::Occluded
+            } else {
+                d.reason
+            }
+        } else if occluded {
+            Reason::Occluded
         } else if contradiction {
             Reason::InvalidAnswer
         } else if card.is_some() || *present == Some(false) {
@@ -504,14 +529,18 @@ pub fn assemble_partial(
         &mut diagnostics,
         &mut cache,
     )?;
-    let (pot_size, mut status, mut reason) = amount(&pot, qs.max_glyphs);
+    let (pot_amount, mut status, mut reason) = amount(&pot, qs.max_glyphs);
     if p0.noul("ev_pot") == Some(true) {
-        view.pot_size = pot_size;
+        if let Some((value, text)) = pot_amount {
+            view.pot_size = Some(value);
+            view.pot_size_text = Some(text);
+        }
     } else {
         (status, reason) = if p0.noul("ev_pot") == Some(false) {
             (Status::Rejected, Reason::DependencyRejected)
         } else {
-            (Status::Unknown, Reason::DependencyUnknown)
+            let d = p0.diagnostic("ev_pot");
+            (d.status, d.reason)
         };
     }
     record(&mut fields, FieldName::PotSize, None, None, status, reason);
@@ -519,7 +548,10 @@ pub fn assemble_partial(
         let id = format!("p5_seat_{seat}_stack");
         let reading = run_reading(qs, &id, frame, threshold, run, &mut diagnostics, &mut cache)?;
         let (stack, status, reason) = amount(&reading, qs.max_glyphs);
-        view.seats[seat as usize - 1].displayed_stack = stack;
+        if let Some((value, text)) = stack {
+            view.seats[seat as usize - 1].displayed_stack = Some(value);
+            view.seats[seat as usize - 1].displayed_stack_text = Some(text);
+        }
         record(
             &mut fields,
             FieldName::DisplayedStack,
@@ -665,7 +697,10 @@ pub fn assemble_partial_with_wagers(
             }),
             total_ms: None,
         });
-        candidate.view.seats[seat as usize - 1].visible_wager = value;
+        if let Some((value, text)) = value {
+            candidate.view.seats[seat as usize - 1].visible_wager = Some(value);
+            candidate.view.seats[seat as usize - 1].visible_wager_text = Some(text);
+        }
         candidate.wager_sources[seat as usize - 1] = Some(entry.clone());
         if let Some(capability) = candidate
             .view

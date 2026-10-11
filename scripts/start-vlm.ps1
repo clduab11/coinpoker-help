@@ -1,25 +1,21 @@
 <#
 .SYNOPSIS
-Starts the pinned, offline Laya dashboard with user-declared NLH attachment.
+Starts the read-only Laya dashboard without capture or model loading by default.
 .DESCRIPTION
-Normal launch automatically selects one visible CoinPoker.exe game window whose
-title matches ^NLH\s*[0-9]+ and whose current bounds are positive. Missing or
-ambiguous matching windows block capture; a missing private profile does not.
-Practice-six-max is user-declared scope, not title proof or perception calibration.
-Capture supplies the current resolution; no lobby image or fixed size is used.
--DashboardOnly loads no model and disables automatic attachment by default,
-making it suitable for safe UI inspection and tests. -NoAutoAttach is an
-explicit internal/diagnostic opt-out, not a browser connection workflow.
+Normal launch and -DashboardOnly load no model and never attach or record.
+-EnableInference requires separate operator approval and only loads the pinned
+model. It does not start capture. Manual capture-only sessions use the separate
+scripts/laya_capture.py CLI with exact source confirmation and seated assertion.
+Suggestions remain OFF; model loading is not quality or advice approval.
 .PARAMETER PracticeConfig
-Optional private rule under .local; defaults to .local/practice-table.json.
-If absent, the built-in user-provided CoinPoker.exe / NLH rule is used.
+Legacy selector parameter. Supplying it is refused, never automatically followed.
 .PARAMETER LiveConfig
-Internal compatibility mode: requires -NoAutoAttach and the same strict selector
-rule contract, not legacy arbitrary capture arguments.
+Legacy automatic attachment parameter; refused.
 #>
 param(
     [string]$AnswersLog = '',
     [switch]$DashboardOnly,
+    [switch]$EnableInference,
     [string]$LiveConfig = '',
     [switch]$NoAutoAttach,
     [string]$PracticeConfig = '.local/practice-table.json'
@@ -36,11 +32,11 @@ $root = Split-Path -Parent $PSScriptRoot
 $pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'laya-pins.json') -Raw | ConvertFrom-Json
 if ($pins.format -ne 1) { throw 'Unsupported Laya pin format.' }
 if ($pins.server.port -ne 18090) { throw 'Laya requires port 18090; no alternate-port fallback.' }
-if ($LiveConfig -and -not $NoAutoAttach) {
-    throw '-LiveConfig is internal compatibility mode and requires explicit -NoAutoAttach.'
+if ($LiveConfig -or $PSBoundParameters.ContainsKey('PracticeConfig')) {
+    throw 'Automatic attachment is disabled. Use scripts/laya_capture.py for a confirmed capture-only session.'
 }
-if ($LiveConfig -and $PSBoundParameters.ContainsKey('PracticeConfig')) {
-    throw 'Choose only one selector rule: -LiveConfig or -PracticeConfig.'
+if ($DashboardOnly -and $EnableInference) {
+    throw 'Choose -DashboardOnly or separately approved -EnableInference, not both.'
 }
 # Check before any Python/model start. Do not kill an unowned listener or restart it.
 try {
@@ -53,7 +49,7 @@ if (@($listeners | Where-Object { $_.Port -eq 18090 }).Count -gt 0) {
 }
 $python = Join-Path (Join-Path $root $pins.runtime.env_prefix) 'python.exe'
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
-    if ($DashboardOnly) {
+    if (-not $EnableInference) {
         $python = (Get-Command python.exe -CommandType Application -ErrorAction Stop).Source
     } else {
         throw 'The Laya environment is missing. Run scripts/setup-windows.ps1, or use -DashboardOnly with Python.'
@@ -68,12 +64,12 @@ $env:DO_NOT_TRACK = '1'
 $env:TRANSFORMERS_VERBOSITY = 'error'
 $serverArgs = @((Join-Path $PSScriptRoot 'laya-server.py'), 'serve')
 if ($AnswersLog) { $serverArgs += @('--answers-log', $AnswersLog) }
-if ($DashboardOnly) { $serverArgs += '--dashboard-only' }
-if (-not $DashboardOnly -and -not $NoAutoAttach) {
-    $serverArgs += @('--auto-attach', '--practice-config', $PracticeConfig)
+if ($EnableInference) {
+    $serverArgs += '--enable-inference'
+} else {
+    $serverArgs += '--dashboard-only'
 }
-if ($LiveConfig) { $serverArgs += @('--live-config', $LiveConfig) }
-Write-Output "Starting the read-only dashboard at http://127.0.0.1:$($pins.server.port)/ as $($pins.server.alias). Model loading is separate from quality/advice approval."
+Write-Output "Starting the read-only dashboard at http://127.0.0.1:$($pins.server.port)/. Inference opt-in: $EnableInference. No automatic capture or recording."
 # Keep diagnostics locally; the server never logs requests or images.
 $errorDir = Join-Path $root '.local/laya/train'
 [void](New-Item -ItemType Directory -Force -Path $errorDir)

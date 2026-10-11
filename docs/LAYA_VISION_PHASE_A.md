@@ -212,6 +212,82 @@ amount. Reference correctness does not establish the model's UI recognition.
 
 ## 7. Phase gates
 
+### Desktop companion / bounded manual diagnostic (2026-10-11)
+
+**READY FOR MANUAL SEATED DIAGNOSTIC/CAPTURE**, not trusted live recognition.
+This checkpoint explicitly authorized UI and supporting code, preserving B/stage2
+and the incoming draft-review handoff. The compact landscape Monitor/Reference and
+manual capture workflow are implemented; no inference or actual collection ran.
+See [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md) for the capability matrix, exact
+operator launch/confirm/stop commands, private receipt locations and short checklist.
+
+Independent source-bound card slots and literal Pot/stack text now survive the
+native partial/feed/Python/browser path; unavailable reasons are closed and safe.
+Phase/control uncertainty no longer discards unrelated admissible fields. The
+board floor remains1.0, p6/p7 disabled, R17 strict. Saved actual-answer replay retains
+Pot+3/5/5stacks, with cards below floor, strictnull and old sourceUTC rejected as
+current. These are existing answers, not new model diagnostics or accuracy claims.
+Positive physical-seat1 wager images exist; actual seated hero/control positives
+remain unestablished. All review labels stay DRAFT / human PENDING; Gate F FAIL.
+
+Capture-only requires fresh exact-source confirmation and `I am seated and ready`.
+It stops at600s or1200savedframes, supports Ctrl+C/session stop, retains private
+source-time/hash/gap receipts and draft incorrect/missing/opportunity markers.
+Twenty repeated frames are not20opportunities; summary reports unmet distinct target.
+Default service startup loads no model and attaches nothing; inference opt-in is
+separate and unexercised. Page refresh cannot start recording or inference.
+
+Workspace514pass/1real-HWNDignored, Python/Node240pass, strict Clippy/formatting and
+independent focused review pass. Browser tests at780x400,640x360,1000x600 and actual
+800x520outer/784x425CSS pass; original portrait failure was residual CDP emulation,
+not fixed-width CSS or DPI. No real seated run, new model execution, client input,
+training, threshold fitting or runtime reload. The retained legacy helper must be
+replaced by an operator-controlled dashboard-only launch before the first session.
+Exact UTC/stdout/stderr/exit receipts stay `.local/laya/train/companion-20261011/`;
+screenshots/browser receipts stay `.local/captures/20261011-companion-ui/`.
+
+### Offline data-readiness pack: STOP for human review (2026-10-10)
+
+Checkpoint B/stage2 was preserved and pushed as `68832c5`, without a co-author
+trailer, before offline data preparation. Private pack:
+`.local/laya/datasets/observing-20261010-v2-staging/human-review-20261010/`.
+Start with `review.html` / `REVIEW_OVERVIEW.md`; source-bound drafts, exact pixel
+crop/hash geometry, coverage, temporal findings, groups and manual quotas are
+adjacent. Every label/bound is DRAFT, human review PENDING. Original staging
+manifest stays unlabeled/ineligible and old it1 data/weights/calibration/results
+unchanged. Full outcome and UTC receipts are in the active practice/history plan.
+
+Hash/size/dimension checks cover72 indexed entries/all1878 archived files. The
+index has67 distinct PNGs,62 table rows/58 unique table PNGs,432 physical-seat
+rows and280 field/seat/size coverage cells. Source sizes are900x686,800x613,
+879x670 and negative1280x778; thumbnails are not new size strata. Seat1 wagers
+actually exist at879x670 (12 indexed positives;330 archive frames/53 exact crops/
+18 sampled display runs), correcting the earlier absence assumption. Runs are not
+certified independent actions. Other-size/seat/class coverage remains deficient.
+Corrected crops are not runtime registry approval. Payout glow is not acting;
+upper Pot, center-chip text and visible wagers remain distinct, with contributions
+and pot convention unknown. Ambiguous card-reveal count/phase remains unknown.
+
+Six stable board-cycle candidates plus one gapped animation candidate are not
+complete betting/return/side-pot histories. Gaps reach20.330s. Hand IDs and split
+assignments remain pending; all adjacent sessions stay in one exposed review/
+development episode. Require new disjoint whole-hand/session/time groups before
+calibration/held-out/late evaluation. Actual seated hero/card/stack/control
+positives remain0; educational PNG/PDF roots and lobby are not seated data.
+The finite manual specification includes>=20 distinct positive controls each in
+held-out and late, with separate train/calibration and field/seat/size/sequence
+quotas, capped at80 segments/2400 selected frames. Quotas are minima, not proof
+of unchanged quality targets or permission to collect.
+
+Current official policy (maxAge0/HTTP200; updated25June2026) establishes no
+practice/observing/anonymity exemption for gameplay-connected tracking/assistance.
+Use offline existing or provider-supplied/explicitly approved genuine data;
+provider clarification and separate user approval gate any later live route.
+Synthetic tests are not recognition evidence. No new session/input/capture,
+restart, inference, GPU work, fitting/lowered floors, activation or application
+UI change was performed. STOP for human review: GateF historicalFAIL,
+humanUNVERIFIED, R17strict, suggestionsOFF, zero-confident-is-failure unchanged.
+
 ### Approved stage2 implementation, not live acceptance (2026-10-10)
 
 Typed PartialObservation is separate from strictGameState/R17; independent pot,

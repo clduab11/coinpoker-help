@@ -1,6 +1,154 @@
 # Practice-Sandbox Dashboard, Observed History, and Seated Data
 
-## Active Gate: Perception Repair Stage 1 (2026-10-10)
+## Latest Outcome: Manual Seated Diagnostic Readiness (2026-10-11)
+
+**READY FOR MANUAL SEATED DIAGNOSTIC/CAPTURE**, not trusted live recognition.
+The explicit desktop-companion implementation request supersedes the prior UI
+prohibition, not inference/training/human-approval gates. Original four uncommitted
+handoffs and checkpoint B/stage2 are preserved below and in the commit lineage.
+
+Compact Monitor/Reference uses the existing static application. Residual CDP
+emulation, not a fixed-width `.console`, caused inner400x844 in outer802x534.
+Clearing it produced inner786x439; both Windows monitors report96DPI/100%, browser
+DPR/visual scale1. Physical outer800x520 measured inner784x425. Primary780x400,
+640x360 and1000x600 CSS checks pass without horizontal or nested scrolling or zoom.
+Source/role/freshness and capture status are compact; independent Pot/stacks/cards
+are visible even when role/other fields fail. Six physical slots, literal numeric
+text, closed unavailable reasons, secondary history/diagnostics, selected Reference
+topic content and keyboard navigation are retained. No recognition claim from CSS.
+
+Supported pipeline fixes preserve original source UTC/expiry: independent card
+slots survive another changed region or phase uncertainty; unreadable cards stay
+occluded; explicit Hero stack is independent of uncertain turn controls. Hero seat
+is never guessed. Amount text and diagnostic statuses traverse the existing native
+typed view/feed and Python projection; R17, thresholds and disabled p6/p7 unchanged.
+
+`scripts/laya_capture.py` adds explicit exact-window challenge + seated-ready
+assertion, one-shot capture-only supervision,600s/1200-frame first-limit stop,
+Ctrl+C/session stop, private hashes/sourceUTC/gaps and append-only DRAFT review
+markers. Source replacement stops, same-identity resize retains original budget.
+Target20 counts distinct operator-marked opportunities, not repeated frames; end
+summary reports the deficit. All default launches now avoid model loading and
+attachment. Separate inference opt-in is not permission to capture or recognition
+acceptance. Opening/refreshing the page does not start anything.
+
+Actual final verification on2026-10-11, private command/exit/stdout/stderr receipts
+under `.local/laya/train/companion-20261011/`:
+
+| Check | UTC start..end | Result |
+| --- | --- | --- |
+| Full workspace offline tests |17:41:22.673703Z..17:42:13.862311Z|514 pass,1 real-HWND ignored, exit0|
+| Full Python/Node offline tests |17:41:23.380599Z..17:41:56.421251Z|240 pass, exit0|
+| Workspace Clippy all targets, warnings denied |17:42:27.850606Z..17:42:33.162648Z|exit0|
+| Rust formatting |17:41:23.404825Z..17:41:26.411457Z|exit0|
+| Independent focused post-fix review |17:39:58.466350Z..17:40:02.629898Z|62 tests pass, exit0; no unresolved actionable findings|
+| Saved-source replay final |17:33:04.988765Z..17:33:05.423727Z|exit0; source hashes/crops/literals and stale refusal, no model call|
+| Browser780x400 /640x360 /1000x600 |17:34:51.873Z..17:37:27.324Z|23 checks each pass; synthetic payloads|
+| Actual desktop800x520 outer |17:43:16.484Z..17:43:24.306Z|23 browser checks pass,784x425 CSS, emulation cleared|
+| Occupied-port launcher safeguard |17:44:03.917484Z..17:44:05.098344Z|expected exit1 before any helper/model start|
+
+Browser tools have no process exit code; their JSON receipts record outcomes and
+UTC, not invented exit0. Screenshots and browser evidence are private under
+`.local/captures/20261011-companion-ui/`; earlier failed/setup attempts remain.
+Initial unclocked read-only discovery is not counted as a verified command run.
+
+Saved actual answers retain upper Pot and3/5/5 stack candidates at the three table
+sizes; strict state null, saved cards below floor, lobby rejected. This is existing
+source replay, not fresh inference or current-live admission. Physical-seat1 wager
+positives exist; labels remain DRAFT/human PENDING. No established actual seated
+hero/control positives or validated action/return/side-pot accounting was added.
+
+**Next operator action:** follow `docs/SEATED_DIAGNOSTIC.md` for the capability
+matrix, exact build/launch/confirmation/stop commands and six-step first-session
+checklist. Old18090 helper was deliberately not stopped/reloaded; use a controlled
+operator dashboard-only launch before collection, not an independently armed
+legacy feed. No live session, model diagnostic, capture, training, download,
+client interaction, floor reduction, draft-label approval or push occurred.
+
+## Active Gate: Offline Data Readiness / Human Review (2026-10-10)
+
+### Private Draft Review Pack (2026-10-10)
+
+User authorized bounded offline data preparation, not another dashboard pass or
+live advice. First, all existing checkpoint B/stage2 work was preserved in commit
+`68832c5` (41 files), pushed by `20:58:19.709308Z`, without a co-author trailer.
+Private captures, datasets, weights and receipts were not pushed. The stage2
+outcome below remains historical; production/runtime/UI files were not changed
+by this subsequent data-readiness task.
+
+Actual pack:
+`.local/laya/datasets/observing-20261010-v2-staging/human-review-20261010/`.
+Entry points: `review.html`, `REVIEW_OVERVIEW.md`, `HUMAN_REVIEW.md`,
+`labels.draft.json`, `COVERAGE.md` / `coverage.json`, `crop-geometry.json`,
+`session-time-groups.json`, `archive-sequence-review.json` and
+`MANUAL_COLLECTION.md`. Every annotation is DRAFT, human review PENDING. Original
+staging manifest remains unchanged, unlabeled and ineligible for training,
+calibration or activation. Old it1 data, weights, calibration and results remain
+unchanged; final artifact-only checks compare the private protected-file snapshot.
+
+All 72 indexed entries and 1,878 archived frames passed hash/size/dimension checks.
+The index contains 67 distinct PNGs: 62 table rows but only 58 distinct table PNGs;
+two black/unknown and eight lobby/loading rows are not table positives. Genuine
+windows: 16 at 900x686, 8 at 800x613, 40 at 879x670, 8 negative at 1280x778.
+There are 432 physical-seat rows and a 280-row field/seat/size matrix. Each field
+is tied to frame/hash and exact original-pixel crop/hash. Thumbnails do not create
+new size strata. Unknowns are not invented zeroes, actions or commitments.
+
+**Correction:** physical-seat1 positive wagers DO exist at 879x670: 12 indexed
+draft-positive frames; wider archive has 330 positive-display frames, 53 exact
+crop variants and 18 sampled display runs. These are not independent actions or
+hands. The first draft crop clipped the left edge; corrected bounds/provenance
+are review-only, not enabled runtime registries. Seat1 positives remain absent
+from the reviewed 800x613/900x686 crops. The small-window index has no wager/blind
+positives; dealer/badge/acting coverage is unbalanced and human-unverified.
+Payout glows do not count as acting. Upper Pot and center-chip text are separate,
+with accounting convention unknown. The mid-reveal settled count/phase is unknown.
+
+Six stable full visible board-cycle candidates and one animation/gap-qualified
+candidate are traceable in the full archive, not complete betting transcripts.
+No separately established return/side-pot accounting sequence is available.
+Recorder gaps reach 20.330s; even 500ms sampling need not capture every action.
+Hand IDs/boundaries/splits remain pending. All three adjacent sessions are kept
+in one exposed development/review episode, not asserted to be one table/hand and
+not randomly split. Fresh disjoint whole-hand/session/time groups are required
+for genuine calibration/held-out/late evaluation.
+
+Actual seated hero-card/hero-stack/action-control positives are zero. Exhaustive
+footer review finds empty/transition or Join Wait List/Find Seat, not poker
+decisions. Educational roots/lobby never count as seated positives. The finite
+manual specification reserves >=20 distinct positive controls each for held-out
+and late validation, separate train/calibration groups, and per-seat/size/field/
+sequence quotas. Proposed next-pack cap: 80 complete segments / 2400 selected
+review frames; unmet quotas stay blocked. Quotas do not prove statistical quality.
+
+Official CoinPoker policy was rechecked with maxAge0/HTTP200, updated 25 June 2026:
+gameplay-connected tracking/assistance is prohibited, with no established practice,
+observing or anonymity exemption. Keep testing offline on existing or provider-
+supplied/explicitly approved genuine UI data. Any later live route needs written
+provider clarification and separate user authorization. Synthetic contract tests
+never establish recognition accuracy.
+
+Actual UTC/commands/exits/stdout/stderr are private under
+`.local/laya/train/data-readiness-20261010T2054Z/`. Integrity/assets ran
+21:00:42.932596Z..21:01:52.776394Z; assembly ran
+21:14:51.942221Z..21:15:11.856718Z, both exit0. Initial field-name mismatch and
+direct-policy HTTP rejection are retained, not passes. Unclocked initial read-only
+preflight limitations are disclosed, not fabricated. Final artifact verification
+is not recognition QA or a fresh score for historical it1 tests.
+
+Final artifact verifier ran21:24:51.172336Z..21:25:08.912858Z, exit0, empty
+stderr:6635 source-bound fields,1739 field crops,1878 rehashed source files and
+71 protected files byte-identical; original staging manifest unchanged. Separate
+temporal validation21:24:51.837697Z..21:24:52.007771Z checked57 source bindings,
+13 finding intervals and328 sheet crops, exit0/empty stderr. Git whitespace check
+passed; remote verification confirms68832c5. This task did not rerun the production
+suite, model inference or recognition benchmarks. Four public handoff documents
+remain uncommitted for review; all new labels/crops/receipts remain private/ignored.
+
+**STOP for human review:** suggestions OFF, R17 strict, Gate F historical FAIL,
+human UNVERIFIED; zero confident items is failure. No new live session, client
+input, helper/model restart, inference, GPU training, fitting/lowered floors,
+untrained-pass activation or application UI change occurred in this task.
 
 ### Stage 2 Superseding Outcome (2026-10-10)
 

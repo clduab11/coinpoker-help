@@ -78,6 +78,7 @@ pub enum DiagnosticReason {
     MissingSourceWitness,
     ExplicitUnknown,
     SceneContradiction,
+    Occluded,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -371,7 +372,10 @@ pub struct SeatView {
     pub occupied: Option<bool>,
     pub status: Option<SeatStatus>,
     pub displayed_stack: Option<u32>,
+    /// Literal recognized glyphs; the numeric value remains exact hundredths.
+    pub displayed_stack_text: Option<String>,
     pub visible_wager: Option<u32>,
+    pub visible_wager_text: Option<String>,
     pub street_contribution: Option<u32>,
     pub dealer: Option<bool>,
     pub small_blind: Option<bool>,
@@ -389,7 +393,9 @@ impl SeatView {
             occupied: None,
             status: None,
             displayed_stack: None,
+            displayed_stack_text: None,
             visible_wager: None,
+            visible_wager_text: None,
             street_contribution: None,
             dealer: None,
             small_blind: None,
@@ -411,6 +417,7 @@ pub struct PartialObservationView {
     pub board_count: Option<u8>,
     pub board_slots: [Option<Card>; 5],
     pub pot_size: Option<u32>,
+    pub pot_size_text: Option<String>,
     pub seats: [SeatView; 6],
     pub verified_fields: Vec<VerifiedField>,
     pub capabilities: Vec<Capability>,
@@ -425,6 +432,7 @@ impl Default for PartialObservationView {
             board_count: None,
             board_slots: std::array::from_fn(|_| None),
             pot_size: None,
+            pot_size_text: None,
             seats: std::array::from_fn(|i| SeatView::unknown(i as u8 + 1)),
             verified_fields: Vec::new(),
             capabilities: capabilities(),
@@ -434,6 +442,17 @@ impl Default for PartialObservationView {
 }
 impl PartialObservationView {
     pub(crate) fn refresh_verified_fields(&mut self) {
+        if self.pot_size.is_none() {
+            self.pot_size_text = None;
+        }
+        for seat in &mut self.seats {
+            if seat.displayed_stack.is_none() {
+                seat.displayed_stack_text = None;
+            }
+            if seat.visible_wager.is_none() {
+                seat.visible_wager_text = None;
+            }
+        }
         self.verified_fields.clear();
         for (known, field) in [
             (self.role.is_some(), VerifiedField::Role),
@@ -681,17 +700,19 @@ impl PartialObservation {
                 failed.push((field, None, reason));
             }
         }
-        if let Some(reason) = proof
-            .board
-            .iter()
-            .find_map(|witness| region_matches(latest, witness.as_ref()).err())
-        {
-            for field in [
-                FieldName::BoardSlot,
-                FieldName::BoardCount,
-                FieldName::GamePhase,
-            ] {
-                failed.push((field, None, reason));
+        for (i, witness) in proof.board.iter().enumerate() {
+            if let Err(reason) = region_matches(latest, witness.as_ref()) {
+                self.view.board_slots[i] = None;
+                for evidence in self.evidence.iter_mut().filter(|e| {
+                    e.field == FieldName::BoardSlot && e.board_slot == Some(i as u8 + 1)
+                }) {
+                    evidence.admission_status = EvidenceStatus::Rejected;
+                    evidence.admission_reason = reason;
+                }
+                // Count/phase depend on every slot, individual card identities do not.
+                for field in [FieldName::BoardCount, FieldName::GamePhase] {
+                    failed.push((field, None, reason));
+                }
             }
         }
         if self.view.pot_size.is_some() {
@@ -777,8 +798,6 @@ impl PartialObservation {
         if value.pot_size != previous.view.pot_size {
             value.pot_size = None;
         }
-        let same_board_context = value.board_count == previous.view.board_count
-            && value.game_phase == previous.view.game_phase;
         if value.board_count != previous.view.board_count {
             value.board_count = None;
         }
@@ -786,17 +805,20 @@ impl PartialObservation {
             value.game_phase = None;
         }
         for i in 0..5 {
-            if !same_board_context || value.board_slots[i] != previous.view.board_slots[i] {
+            if value.board_slots[i] != previous.view.board_slots[i] {
                 value.board_slots[i] = None;
             }
         }
         for i in 0..6 {
             let stack = value.seats[i].displayed_stack;
             let wager = value.seats[i].visible_wager;
+            let stack_text = value.seats[i].displayed_stack_text.clone();
+            let wager_text = value.seats[i].visible_wager_text.clone();
             // Rebuild unsupported fields rather than trusting a manually populated candidate.
             value.seats[i] = SeatView::unknown(i as u8 + 1);
             if stack == previous.view.seats[i].displayed_stack {
                 value.seats[i].displayed_stack = stack;
+                value.seats[i].displayed_stack_text = stack_text;
             }
             if wager == previous.view.seats[i].visible_wager
                 && self.wager_sources[i]
@@ -805,6 +827,7 @@ impl PartialObservation {
                 && self.wager_sources[i] == previous.wager_sources[i]
             {
                 value.seats[i].visible_wager = wager;
+                value.seats[i].visible_wager_text = wager_text;
             }
             if self.scene_sources[i]
                 .as_ref()
@@ -1021,4 +1044,46 @@ pub fn proposed_seat_crops() -> Vec<ProposedCrop> {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consensus_retains_literal_amounts_and_independent_cards_not_unverified_fields() {
+        let mut current = PartialObservation {
+            view: PartialObservationView::default(),
+            evidence: Vec::new(),
+            frame_width: 800,
+            frame_height: 613,
+            core_accepted: true,
+            wager_sources: std::array::from_fn(|_| None),
+            scene_sources: std::array::from_fn(|_| None),
+            source_witness: None,
+        };
+        current.view.pot_size = Some(1050);
+        current.view.pot_size_text = Some("10.5".into());
+        current.view.seats[0].displayed_stack = Some(0);
+        current.view.seats[0].displayed_stack_text = Some("0".into());
+        current.view.board_slots[0] = Some(Card {
+            rank: "A".into(),
+            suit: "spades".into(),
+        });
+        let mut previous = current.clone();
+        previous.view.game_phase = Some(GamePhase::Flop);
+        previous.view.board_count = Some(3);
+        let view = current.consensus(&previous);
+        assert_eq!(view.pot_size_text.as_deref(), Some("10.5"));
+        assert_eq!(view.seats[0].displayed_stack_text.as_deref(), Some("0"));
+        assert!(view.board_slots[0].is_some() && view.game_phase.is_none());
+        previous.view.pot_size = None;
+        previous.view.seats[0].displayed_stack = Some(1);
+        let view = current.consensus(&previous);
+        assert!(view.pot_size.is_none() && view.pot_size_text.is_none());
+        assert!(
+            view.seats[0].displayed_stack.is_none() && view.seats[0].displayed_stack_text.is_none()
+        );
+        assert!(view.board_slots[0].is_some());
+    }
 }

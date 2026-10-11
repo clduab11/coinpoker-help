@@ -236,6 +236,45 @@ restart. The updated bundled Reference/static page already works without one.
 
 ## Per-field observing contract (stage2 implemented)
 
+### Companion diagnostic extension (2026-10-11)
+
+The current launcher defaults to dashboard-only, with no automatic capture/model
+load; earlier `-LiveConfig`/automatic-attachment descriptions are historical.
+`--enable-inference`/`-EnableInference` is a distinct explicit service opt-in and
+does not start capture. `server.inference_enabled` reflects declared opt-in even
+while the model is loading/failed, not merely whether an engine object exists.
+
+Native partial views add optional `pot_size_text`, per-seat `displayed_stack_text`
+and `visible_wager_text`; projection requires these numeric glyphs to equal the
+separate integer-hundredths value. Existing numeric fields are unchanged. Missing
+literal text does not imply a currency symbol. Full observation uses optional
+`amount_texts` and separately verified `hero_seat`; seat4 is never a default hero.
+
+Public snapshot/observation `field_statuses` maps closed field paths to
+`{status: accepted|unavailable, reason: null|<code>}`. The only unavailable codes
+are `missing-capability`, `unsupported-layout`, `below-floor`, `stale`, `occluded`,
+`insufficient-context`. Private diagnostics remain private; scores, crops, prompts,
+source identity and raw text never leak through these reasons. Diagnostics cannot
+admit values, extend source expiry, or turn draft labels into approval. A changed
+board slot clears only that slot plus dependent phase/count, not unchanged cards.
+
+`capture_session` is an allowlisted, read-only projection of the separate manual
+session receipt: opaque session ID, capture-only mode/status, elapsed/remaining
+time,600000ms/1200-frame maxima, acknowledged saved frames/bytes, capture failures,
+gap count/max gap/estimated missed samples, distinct draft opportunity count,
+target20/deficit, stop reason, update time and inference false. Missing/malformed
+receipts remain unknown/failed; stale active status becomes interrupted. Estimates
+are missed samples, never inferred poker actions. No HWND/title/path/PNG/marker
+prose is served; no HTTP start/stop/mark or poker-input endpoint is added.
+
+Manual capture emits separate private `manual_capture` progress JSONL and uses
+the existing recorder manifest, with capture-call-start UTC, PNG SHA256 and
+previous-saved-gap receipts. Markers reference an acknowledged hash/frame index
+without rewriting observations or evidence; labels DRAFT, human PENDING and
+accepted_correction false. The operator must confirm an exact current source and
+seated readiness before any child can capture. Terminal budget/source/error stops
+do not rearm. See [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md).
+
 Implemented2026-10-10: independently leased `partial_observation` bundles use
 nullable phase/board slots/count/pot and six explicit physical seats1..6, separate
 from strictactionable GameState. Closed field/capability allowlists gate each value;
@@ -295,6 +334,23 @@ inference/assembly/publish/render timings are separate. Unmeasured stages are nu
 Historical score eligibility is not live admission or human capability approval.
 Strict advice events/validator/R17 remain unchanged. Stage 2 implementation and
 later live observing acceptance each require their own explicit approval.
+
+### Offline draft labels are not events (2026-10-10)
+
+The private `observing-20261010-v2-staging/human-review-20261010` sidecar binds
+draft labels to original-frame SHA256, original-pixel crop bounds and crop hashes.
+Its six physical-seat IDs are spatial slots, not player-vector order, opponent
+identities or confirmed hand rosters. All labels remain DRAFT, human review
+PENDING; the original staging manifest remains unlabeled/ineligible.
+
+These artifacts are not accepted `PartialObservation`, strict `GameState`,
+history events, fitted floors or registry authorization. Visible wager, upper
+Pot text and lower center-chip text remain separate; street contribution, pot
+convention and ordered actions stay unknown. A badge is not a new action; payout
+glow is not acting; sampled board changes are not confirmed hand boundaries.
+Whole-hand/split IDs remain pending, with adjacent session/duplicate groups kept
+together. Artifact checks do not validate recognition or promote Gate F. R17 and
+suggestions OFF remain unchanged. No event schema or runtime path changed here.
 
 ## Replay, listing, doctor and evaluation
 

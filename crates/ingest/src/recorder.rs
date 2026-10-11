@@ -125,8 +125,8 @@ pub struct CaptureStamp {
     pub source_id: Option<u64>,
 }
 
-#[derive(Serialize)]
-struct ManifestFrame {
+#[derive(Clone, Serialize)]
+pub struct ManifestFrame {
     schema_version: u8,
     event: &'static str,
     timestamp_basis: &'static str,
@@ -139,6 +139,8 @@ struct ManifestFrame {
     sha256: String,
     generation: Option<u64>,
     source_id: Option<u64>,
+    previous_saved_gap_ms: Option<u64>,
+    estimated_missed_samples: u64,
 }
 
 pub struct PrivateRecorder {
@@ -152,6 +154,7 @@ pub struct PrivateRecorder {
     frame_index: u64,
     last_seen_ms: Option<u64>,
     last_recorded_ms: Option<u64>,
+    last_receipt: Option<ManifestFrame>,
 }
 
 fn unavailable() -> io::Error {
@@ -282,11 +285,21 @@ impl PrivateRecorder {
             frame_index: 0,
             last_seen_ms: None,
             last_recorded_ms: None,
+            last_receipt: None,
         })
     }
 
     pub fn handle(&self) -> RecorderHandle {
         self.handle.clone()
+    }
+
+    /// Private CLI provenance only; never send this path or receipt to the browser.
+    pub fn session_path(&self) -> &Path {
+        &self.session
+    }
+
+    pub fn last_receipt(&self) -> Option<&ManifestFrame> {
+        self.last_receipt.as_ref()
     }
 
     fn stop(&self, status: RecorderStatus) {
@@ -382,6 +395,13 @@ impl PrivateRecorder {
             sha256: hash.clone(),
             generation: stamp.generation,
             source_id: stamp.source_id,
+            previous_saved_gap_ms: self
+                .last_recorded_ms
+                .map(|last| stamp.captured_at_monotonic_ms - last),
+            estimated_missed_samples: self.last_recorded_ms.map_or(0, |last| {
+                ((stamp.captured_at_monotonic_ms - last) / self.config.interval_ms)
+                    .saturating_sub(1)
+            }),
         };
         let mut line = serde_json::to_vec(&row).map_err(io_failure)?;
         line.push(b'\n');
@@ -427,6 +447,7 @@ impl PrivateRecorder {
         self.manifest.write_all(&line).map_err(io_failure)?;
         self.manifest.flush().map_err(io_failure)?;
         self.manifest.sync_all().map_err(io_failure)?;
+        self.last_receipt = Some(row);
         Ok(bytes)
     }
 }
@@ -663,9 +684,24 @@ mod tests {
         assert_eq!(rows[0]["frame_index"], 1);
         assert_eq!(rows[1]["frame_index"], 5);
         assert_eq!(rows[1]["captured_at_monotonic_ms"], 1_100);
+        assert_eq!(rows[1]["previous_saved_gap_ms"], 1_000);
+        assert_eq!(rows[1]["estimated_missed_samples"], 0);
         assert!(rows[1]["generation"].is_null());
         assert!(!recorder.session.join("frame-0000000002.png").exists());
         assert_eq!(recorder.handle().snapshot().recorded_frames, 2);
+    }
+
+    #[test]
+    fn recorder_gaps_are_explicit_not_independent_opportunities() {
+        let root = temp_root();
+        let mut recorder = recorder(&root, RecorderConfig::default());
+        recorder.record(&frame(), stamp(0));
+        recorder.record(&frame(), stamp(20_330));
+        let receipt = serde_json::to_value(recorder.last_receipt().unwrap()).unwrap();
+        assert_eq!(receipt["previous_saved_gap_ms"], 20_330);
+        assert_eq!(receipt["estimated_missed_samples"], 39);
+        assert!(receipt.get("positive_opportunities").is_none());
+        assert_eq!(recorder.session_path(), recorder.session);
     }
 
     #[test]

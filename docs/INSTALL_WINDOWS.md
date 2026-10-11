@@ -73,14 +73,18 @@ and clean-account acceptance is still unrun.
 
 ## 3. Open the read-only local dashboard
 
+**2026-10-11 companion checkpoint:** use [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md)
+for the current first-session workflow. Both default launch and `-DashboardOnly`
+load no model, attach no window and record nothing. `-EnableInference` is a separate
+explicit runtime opt-in, not authorized for the first capture-only session.
+
 For the first-phase dashboard without model loading or GPU use:
 
 ```powershell
 pwsh -File scripts/start-vlm.ps1 -DashboardOnly
 ```
 
-Alternatively, normal startup is intended to bind the dashboard independently
-of asynchronous verification/loading of the existing pinned model:
+The ordinary launcher is also dashboard-only:
 
 ```powershell
 pwsh -File scripts/start-vlm.ps1
@@ -113,7 +117,13 @@ Gemma red/blue probes and stop-reason contract are not the current Laya API.
 The coordinator must record actual launcher, metadata, unavailable/busy predict
 and dashboard behavior before these follow-on instructions are marked tested.
 
-## 4. Prepare a measured passive capture profile
+## 4. Historical passive-profile diagnostics
+
+The commands and auto-recovery discussion below describe the previous diagnostic
+mechanism, **not the first seated session**. The current launcher rejects
+`-LiveConfig`/automatic attachment. Do not remove identity pins or reuse the old
+capture loop to bypass fresh manual confirmation. Use the bounded `laya_capture.py`
+flow in [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md) instead.
 
 Launch the client normally. The helper's listing reads process/window metadata,
 not pixels. Keep its output local because titles may contain private details.

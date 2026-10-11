@@ -1165,3 +1165,94 @@ splits pending, training/calibration/activation disabled. ExistingB/it1 preserve
 helper not restarted, binaries isolated, noGPU/newcapture/gameinput/uploads/commits.
 Stop afterstage2. Real quality, warmtotalp95, actualhand/convention and human/data/
 provider-policy gates remain; GateF FAIL, humanUNVERIFIED, no full live acceptance.
+
+### Addendum 12 continuation: offline draft data readiness (2026-10-10)
+
+Existing B/stage2 was preserved as `68832c5` (41 files), pushed by
+20:58:19.709308Z without a co-author trailer before this authorized offline task.
+No private captures/datasets/weights/receipts were pushed. Full current outcome
+and exact review entry points are at the top of the active practice/dashboard/
+history plan. Private pack:
+`.local/laya/datasets/observing-20261010-v2-staging/human-review-20261010/`.
+
+All72 indexed entries/all1878 archive images hash/size/dimension checked;67 unique
+indexed PNGs,62 table rows/58 unique table PNGs. There are432 physical-seat draft
+rows and280 coverage cells with exact frame/crop hashes. Everything is DRAFT,
+human PENDING, not ground truth. Original staging manifest stays unlabeled and
+ineligible; it1 artifacts and historical outcomes are preserved. No new UI/runtime
+changes. Earlier seat1-wager absence is corrected:12 indexed positives at879x670;
+330 wider-archive positive-display frames/53 exact crops/18 sampled runs, NOT
+independent actions. Corrected bounds remain review-only. Other-size/seat/class
+gaps, ambiguous participation/phase and unknown pot conventions remain explicit.
+
+Six stable visible board-cycle candidates and one gapped animation candidate are
+not complete betting/return/side-pot accounting. Source gaps reach20.330s. Hand
+IDs/splits remain pending; adjacent sessions/duplicates stay together in one
+exposed development episode. Actual seated hero/cards/stack/controls positives0;
+educational roots and lobby excluded. Finite manual quotas include>=20 distinct
+positive seated controls EACH for held-out and late, with separate train/calib
+and per-seat/size/sequence requirements, capped at80 segments/2400 review frames.
+Missing quotas stay blocked; none is automatic quality or collection approval.
+
+Official tools policy rechecked (maxAge0/HTTP200, updated25June2026): no established
+practice/observing/anonymity exemption for gameplay-connected tracking/assistance.
+Offline existing/provider-approved data only; provider clarification plus separate
+user permission gate any later live route. No new capture, input, restart,
+inference, training, fitting or activation. Private UTC/command/exit/stdout/stderr
+receipts: `.local/laya/train/data-readiness-20261010T2054Z/`; failures and initial
+unclocked read-only preflight limits disclosed. Artifact integrity checks are not
+recognition tests. STOP: GateF historicalFAIL, humanUNVERIFIED, suggestionsOFF, R17strict.
+
+Final artifact-only verification21:24:51.172336Z..21:25:08.912858Z exit0, empty
+stderr:6635 bound fields/1739 field crops/1878 source rehashes/71 protected files
+byte-identical. Temporal check57 source bindings/13 intervals/328 crops also exit0.
+Remote68832c5 confirmed; four new handoff-document edits are left uncommitted for
+human review, private pack ignored. No new production-suite or recognition score.
+
+## Addendum 13: Desktop Companion and Manual Seated Diagnostic (2026-10-11)
+
+The new explicit implementation authorization supersedes the previous dashboard
+prohibition. B/stage2 and all four incoming uncommitted handoffs were preserved.
+This checkpoint stops at **READY FOR MANUAL SEATED DIAGNOSTIC/CAPTURE**, not trusted
+live recognition. Suggestions OFF, R17 strict, Gate F historical FAIL; all existing
+draft labels stay DRAFT / human PENDING.
+
+Root cause of the tall browser: leftover CDP400x844 override inside an802x534 outer
+window. Clearing it restored786x439. Actual Windows DPI100%/browser scale1; measured
+resized800x520 outer784x425 CSS. Fluid width is retained with no forced min-width.
+Short landscape Monitor, six independent physical seats, literal amounts and
+per-field reasons now fit; history/diagnostics collapse. Reference uses the current
+content/search in a topic/content split, no new app/framework or live advice.
+
+Fieldwise fixes retain independent board slots, hero stack under uncertain turn,
+literal amount text and source-bound closed failure reasons throughout typed native
+assembly/feed/projection. Original UTC/expiry and strict state validation remain.
+Saved actual answers still yield pot+3/5/5stacks, no admitted cards, strictnull and
+lobby refusal. No new model call. Positive physical-seat1 wagers exist, but p6/p7
+remain disabled without required qualification. Actual seated hero/control evidence
+is not established; board cycles do not establish betting/accounting sequences.
+
+Manual capture uses the existing PlatformCapture/PrivateRecorder via a one-shot
+`laya_capture.py` flow: fresh exact PID/HWND challenge, literal seated-ready assertion,
+600s or1200frames whicheverfirst, terminal replacement/failure, explicit stop,
+private hash/source-time/gap receipts and DRAFT markers. Target20 means distinct
+operator-marked opportunities; unmet target stops anyway and is reported. Normal
+dashboard launch has no model load/auto-attach. Separate inference opt-in is neither
+active nor approved here; no browser refresh can start collection.
+
+Final workspace514pass/1real-HWNDignored, Python/Node240pass, full-workspace strict
+Clippy and formatting pass. Independent review defects (non-object receipt crash
+and false inference-OFF during loading) were fixed and rechecked, no open actionable
+finding. Browser23checks each at780x400,640x360,1000x600 and actual800x520outer passed;
+console clean, no mutation/inference requests. Earlier failed attempts retained.
+Exact UTC/commands/exits/stderr are under `.local/laya/train/companion-20261011/`;
+browser/screenshot receipts under `.local/captures/20261011-companion-ui/`.
+The active practice plan records the final UTC table. Occupied-port launch check
+returned expected exit1 without stopping/starting a helper. The old runtime remains
+untouched pending controlled operator launch. No actual HWND/capture/session/model
+inference, training, download, client input or push occurred.
+
+The first-session runbook and capability matrix are `docs/SEATED_DIAGNOSTIC.md`.
+No requirement to complete the future full training corpus blocks this implemented
+UI/capture workflow; recognition acceptance and real stop/latency measurements remain
+separate, unrun gates.

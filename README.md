@@ -17,6 +17,7 @@ without a practice-only bypass. This plan provides no real-money acceptance.
 
 ## Start here
 
+- [First manual seated diagnostic: launch, confirm, stop and checklist](docs/SEATED_DIAGNOSTIC.md)
 - [Windows setup and read-only dashboard](docs/INSTALL_WINDOWS.md)
 - [VLM compatibility and provenance](docs/VLM_COMPATIBILITY.md)
 - [Live JSON-lines contract](docs/EVENTS_V2.md)
@@ -37,11 +38,12 @@ is at `/v1/models` under alias `coinpoker-laya-vision`; typed Laya requests use
 chat-completions and remote VLM opt-in are retired product instructions, not
 alternate endpoints or fallbacks.
 
-The browser has exactly two views, **Monitor** and **Reference**. Monitor puts a
-separate **Suggested action** box first, with table readings, odds and recent
-betting activity below it. Suggestions are currently **OFF**. Reference is a
-searchable, collapsible, locally bundled study guide with cited education sources;
-it makes no runtime network requests and does not copy the root charts.
+The browser has exactly two views, **Monitor** and **Reference** in a compact
+landscape companion. Monitor shows source/role/freshness, independent readings,
+six physical seats and a separate recorder status; history and diagnostics are
+collapsible. Suggestions are **OFF**. Reference uses a searchable topic list and
+selected content, with the existing bundled education and citations unchanged.
+It makes no runtime content requests and does not copy the root charts.
 
 Open `http://127.0.0.1:18090/` beside the practice table. There are no connect,
 seating, betting or process controls in the page. For development startup, choose
@@ -54,7 +56,7 @@ pwsh -File scripts/start-vlm.ps1 -DashboardOnly
 ```
 
 ```powershell
-# Normal startup: dashboard plus asynchronous verified loading of the pinned model.
+# Normal startup is also dashboard-only. No automatic model load or attachment.
 pwsh -File scripts/start-vlm.ps1
 ```
 
@@ -67,17 +69,13 @@ of unavailable fields. Expiry, heartbeat loss, hidden/resumed tabs and disconnec
 clear current readings without renewing their leases. Runtime/lease/ledger details
 and synthetic fixtures stay behind the scenes, not in extra app views.
 
-Normal startup follows the unique visible `CoinPoker.exe` window using the
-private confirmed selector when present. This client's confirmed OS title is
-`CoinPoker`; the visible logo/NLH number are drawn inside the window. No NLH
-OS-title, practice/lobby/cash distinction or fixed resolution is required for
-that confirmed profile. Current dimensions drive normalized six-max crops.
-Missing or ambiguous matches keep Monitor waiting. The built-in NLH-number title
-rule remains for clients that expose it, not a requirement imposed on this client.
-Practice-six-max is user-declared scope, not a mode the title proves.
-`-DashboardOnly` does not attach; `-NoAutoAttach` is diagnostic only, not a browser
-connect step. Resize/replacement invalidates current evidence; history/source
-identity protections are separate from recognition quality.
+Normal startup no longer follows a saved selector. `-LiveConfig`, an explicitly
+supplied `-PracticeConfig`, and server `--auto-attach` are refused. A fresh manual
+session requires exact PID/HWND confirmation and `I am seated and ready` via
+`scripts/laya_capture.py`; replacement requires new approval. Default first-session
+limits are **600 seconds or 1,200 saved frames**, whichever comes first. Model
+loading requires separately approved `-EnableInference`; it never starts capture.
+See the [manual runbook](docs/SEATED_DIAGNOSTIC.md) for commands and draft markers.
 
 Some client windows draw the CoinPoker logo and `NLH` number inside their frame
 but expose only `CoinPoker` as the OS title. A confirmed private selector can
@@ -87,9 +85,11 @@ identity, current dimensions and perception-quality gates stay independent;
 transition/loading/lobby captures are not positive table labels.
 
 The native recorder saves only private PNGs and a durable SHA-256 manifest under
-`.local/captures/<UTC>-practice/`. Defaults are 7,200 frames, 1 GiB and 500 ms.
+`.local/captures/<UTC>-practice/`. The historical generic recorder defaults were
+7,200 frames, 1 GiB and 500 ms; the new bounded manual entry point overrides the
+frame limit to 1,200 and adds the independent 600-second stop.
 Caps or I/O failures preserve the prefix and stop new recording without deleting
-evidence or restarting monitoring/history. No images, paths or window titles are
+evidence. The manual session never rearms or follows a replacement. No images, paths or window titles are
 served to the browser. Real counters are separate from capture-health counters.
 The confirmed real-window B check recorded 900x686 frames, followed the
 replacement table and captured its 800x613-to-879x670 resize. SHA-256 audits passed
@@ -131,7 +131,8 @@ GameState/R17. Independent pot/sixstacks, source-region witnesses/originalexpiry
 gated per-seat wagers and occupancy/status/badge/button/blind/acting paths are
 wired. New capabilities require their own pinned crop/floor/evidence/human-held-out
 proof; defaults remainuntrained/unknown. No suggestions/metrics or qualitypromotion.
-Monitor/Reference remain the onlyviews, with separate stack/wager/contribution rows.
+Monitor/Reference remain the onlyviews; stack and wager are distinct, and
+unsupported contributions remain unknown in secondary diagnostics.
 
 Workspace506pass/1realcaptureignored, offlinePython/Node207pass, strictclippy pass.
 Saved-answer regression preserves pot+3/5/5stackcandidates withstrictnull, not live

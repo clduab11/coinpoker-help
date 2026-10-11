@@ -24,6 +24,7 @@ use ingest::state_machine::{StateMachine, TableEvent};
 mod config;
 mod evaluation;
 mod live;
+mod manual_capture;
 use config::{Mode, USAGE};
 use opponent_model::classifier::Archetype;
 use opponent_model::exploit::ExploitEngine;
@@ -51,7 +52,17 @@ impl From<io::Error> for RunError {
 }
 
 fn main() -> ExitCode {
-    let options = match config::parse(std::env::args().skip(1), |key| std::env::var(key).ok()) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "--capture-only") {
+        return match manual_capture::run(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                let _ = writeln!(io::stderr().lock(), "{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let options = match config::parse(args, |key| std::env::var(key).ok()) {
         Ok(options) => options,
         Err(message) => {
             let _ = writeln!(io::stderr().lock(), "{message}\n\n{USAGE}");
