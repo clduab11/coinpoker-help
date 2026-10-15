@@ -145,7 +145,8 @@ class InferenceConsentTests(unittest.TestCase):
         def worker(**kwargs):
             captured["initialize"] = kwargs["target"]
             return Mock()
-        def verify(_):
+        def verify(_, *, verified_files=None):
+            captured["verification_started"] = True
             service.shutting_down.set()
             return []
         with patch.object(srv, "BoundedHTTPServer") as http, patch.object(srv, "Service", return_value=service), \
@@ -154,6 +155,7 @@ class InferenceConsentTests(unittest.TestCase):
             http.return_value.serve_forever.side_effect = lambda: captured["initialize"]()
             srv.cmd_serve(pins, None, None, dashboard_only=False, enable_inference=True)
         engine.assert_not_called()
+        self.assertTrue(captured.get("verification_started"))
         self.assertIsNone(service.engine)
         self.assertNotEqual(service.state.model["model_state"], "ready")
 

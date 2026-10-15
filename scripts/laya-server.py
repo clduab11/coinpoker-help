@@ -50,6 +50,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import laya_dashboard as dashboard
 import laya_capture as manual_capture
+import laya_provenance as provenance
 from laya_server_validation import (
     ACCEPTANCE_PASSES,
     ASSETS,
@@ -657,6 +658,7 @@ class Service:
         self.experimental_bet_action = experimental_bet_action
         self.inference_enabled = engine is not None
         self.instance_id = uuid.uuid4().hex
+        self.provenance = None
         self.manual_feed = None
         self.automatic_startup = None
         self.capture_control_lock = threading.RLock()
@@ -1012,7 +1014,7 @@ def snapshot_dir(pins):
     return os.path.join(hf_home, "hub", "models--" + m["repository"].replace("/", "--"), "snapshots", m["revision"])
 
 
-def verify(pins, check_runtime=True):
+def verify(pins, check_runtime=True, *, verified_files=None):
     problems = []
     if check_runtime:
         from importlib import metadata
@@ -1032,11 +1034,23 @@ def verify(pins, check_runtime=True):
         if commit != pins["runtime"]["laya"]["commit"]:
             problems.append("laya commit %s != %s" % (commit, pins["runtime"]["laya"]["commit"]))
     snap = snapshot_dir(pins)
+    def check_file(path, entry):
+        before = os.stat(path)
+        actual = sha256_file(path) if before.st_size == entry["size"] else None
+        after = os.stat(path)
+        stable = (before.st_size, before.st_mtime_ns, before.st_ino) == (after.st_size, after.st_mtime_ns, after.st_ino)
+        matches = stable and before.st_size == entry["size"] and actual == entry["sha256"]
+        if verified_files is not None:
+            verified_files.append({"path": str(Path(path).absolute()), "sha256": actual, "size_bytes": after.st_size,
+                                   "state": "verified" if matches else "unknown",
+                                   "verified_at_unix_ms": time.time_ns() // 1_000_000})
+        return matches
+
     for f in pins["model"]["files"]:
         p = os.path.join(snap, f["path"])
         if not os.path.exists(p):
             problems.append("missing base file %s" % f["path"])
-        elif os.path.getsize(p) != f["size"] or sha256_file(p) != f["sha256"]:
+        elif not check_file(p, f):
             problems.append("hash mismatch base %s" % f["path"])
     ft = pins["model"].get("finetuned")
     if not ft:
@@ -1047,7 +1061,7 @@ def verify(pins, check_runtime=True):
             p = os.path.join(d, f["path"])
             if not os.path.exists(p):
                 problems.append("missing fine-tuned file %s" % f["path"])
-            elif os.path.getsize(p) != f["size"] or sha256_file(p) != f["sha256"]:
+            elif not check_file(p, f):
                 problems.append("hash mismatch fine-tuned %s" % f["path"])
     return problems
 
@@ -1070,7 +1084,7 @@ def cmd_verify(pins):
 def cmd_serve(pins, answers_log, batch_size, dashboard_only=True, live_config=None,
                auto_attach=False, practice_config=dashboard.DEFAULT_PROFILE, enable_inference=False,
                 automatic_inference=False, *, experimental_bet_action=False, continuous_observation=False,
-                manual_start=False):
+                manual_start=False, provenance_directory=None, diagnostic_streams=None):
     if live_config or auto_attach or practice_config != dashboard.DEFAULT_PROFILE and not automatic_inference:
         raise ValueError("use --automatic-inference with --practice-config; legacy attachment arguments are unsupported")
     if automatic_inference and (not enable_inference or dashboard_only):
@@ -1089,12 +1103,16 @@ def cmd_serve(pins, answers_log, batch_size, dashboard_only=True, live_config=No
         raise ValueError("Laya dashboard/model service requires port 18090; no alternate-port fallback")
     log_fn = None
     fh = None
+    diagnostics = dict(diagnostic_streams or {})
     if answers_log:
         path = dashboard.local_path(answers_log)
         path.parent.mkdir(parents=True, exist_ok=True)
         fh = path.open("a", encoding="utf-8", newline="\n")
         log_lock = threading.Lock()
         logged_bytes = path.stat().st_size
+        answer_counter = provenance.DiagnosticCounter()
+        answer_counter.value.update(preexisting_bytes=logged_bytes, cap_bytes=manual_capture.MAX_LOG)
+        diagnostics["answers"] = answer_counter.value
 
         def log_fn(rec):
             nonlocal logged_bytes
@@ -1102,23 +1120,69 @@ def cmd_serve(pins, answers_log, batch_size, dashboard_only=True, live_config=No
                 line = json.dumps(rec) + "\n"
                 size = len(line.encode("utf-8"))
                 if continuous_observation and logged_bytes + size > manual_capture.MAX_LOG:
+                    answer_counter.account(size, 0)
                     return
-                fh.write(line)
-                fh.flush()
+                try:
+                    if fh.write(line) != len(line):
+                        raise OSError("short-diagnostic-write")
+                    fh.flush()
+                except (OSError, ValueError):
+                    answer_counter.fail_write(size)
+                    raise
                 logged_bytes += size
+                answer_counter.account(size, size)
     ft = pins["model"].get("finetuned") or {}
     meta = {"checkpoint": ft.get("path"), "base_revision": pins["model"]["revision"],
             "calibrated": False, "temperature_calibration_loaded": False,
             "acceptance_floors_loaded": False,
             "quality_gate": "failed", "seated_advice_supported": False}
     service = Service(srv["alias"], meta, log_fn=log_fn, experimental_bet_action=experimental_bet_action)
+    model = pins.get("model", {})
+    model_snapshot = (snapshot_dir(pins) if model.get("repository") and model.get("hf_home")
+                      else str(ROOT / "models/unknown"))
+    try:
+        service.provenance = provenance.service_identity(ROOT, service.instance_id, pins, model_snapshot,
+            argv=[sys.executable, str(Path(SCRIPTS) / "laya-server.py"), *sys.argv[1:]],
+            options={"enable_inference": enable_inference, "automatic_inference": automatic_inference,
+                     "continuous_observation": continuous_observation, "manual_start": manual_start,
+                     "experimental_bet_action": experimental_bet_action,
+                     "batch_size": batch_size or srv.get("batch_size", 32), "practice_config": practice_config,
+                     "answers_log": answers_log})
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        service.provenance = {"version": 1, "instance_id": service.instance_id, "complete": False,
+                              "state": "unknown", "build": {"complete": False, "state": "unknown"}}
+    service.provenance["diagnostic_streams"] = diagnostics
+
+    def publish_provenance():
+        streams = {name: dict(row) for name, row in diagnostics.items()}
+        service.provenance["diagnostics_complete"] = all(not row["truncated"] and row["accounting_complete"]
+                                                        for row in streams.values())
+        if provenance_directory is not None:
+            try:
+                directory = manual_capture.private_path(Path(provenance_directory), root=ROOT)
+                directory.mkdir(parents=True, exist_ok=True)
+                service.provenance["publication_state"] = "known"
+                manual_capture.write_json(directory / (service.instance_id + ".json"),
+                                          {**service.provenance, "diagnostic_streams": streams})
+            except (OSError, ValueError):
+                # Missing private publication is incomplete evidence, not a new startup gate.
+                service.provenance["complete"] = False
+                service.provenance["publication_state"] = "unknown"
+
+    publish_provenance()
     service.inference_enabled = enable_inference
     httpd = BoundedHTTPServer((HOST, PORT), make_handler(None, srv["alias"], meta, log_fn, service))
 
     def initialize():
         service.state.set_model("loading")
         try:
-            problems = verify(pins)
+            verified_files = []
+            problems = verify(pins, verified_files=verified_files)
+            service.provenance["model"] = provenance.model_identity(pins, ROOT, model_snapshot, verified_files)
+            service.provenance["complete"] = bool(not problems and service.provenance["build"]["complete"]
+                                                   and service.provenance["build"]["runtime"]["complete"]
+                                                   and service.provenance["model"]["complete"])
+            publish_provenance()
             if problems:
                 service.state.set_model("failed", "verification-failed")
                 print(json.dumps({"event": "laya-verify", "ok": False, "problems": problems}), flush=True)
@@ -1179,8 +1243,15 @@ def cmd_serve(pins, answers_log, batch_size, dashboard_only=True, live_config=No
                     service.automatic_startup.stop()
             finally:
                 httpd.server_close()
-                if fh is not None:
-                    fh.close()
+                try:
+                    if fh is not None:
+                        try:
+                            fh.close()
+                        except (OSError, ValueError):
+                            answer_counter.fail_write(0)
+                            raise
+                finally:
+                    publish_provenance()
     return 0
 
 
@@ -1189,16 +1260,22 @@ class BoundedErrorLog:
 
     def __init__(self, stream):
         self.stream, self.lock = stream, threading.Lock()
+        self.counter = provenance.DiagnosticCounter()
+        self.counter.value["cap_bytes"] = manual_capture.MAX_LOG
 
     def write(self, text):
         with self.lock:
-            manual_capture._write_capped(self.stream, text.encode(self.encoding, errors="backslashreplace"))
+            manual_capture._write_capped(self.stream, text.encode(self.encoding, errors="backslashreplace"), self.counter)
         return len(text)
 
     def flush(self):
         with self.lock:
             if not self.stream.closed:
-                self.stream.flush()
+                try:
+                    self.stream.flush()
+                except (OSError, ValueError):
+                    self.counter.fail_write(0)
+                    raise
 
     def isatty(self):
         return False
@@ -1244,14 +1321,19 @@ def main(argv=None):
         return cmd_verify(pins)
     if a.command == "fetch":
         return cmd_fetch(pins)
+    diagnostic_streams = {}
     def serve():
         return cmd_serve(pins, a.answers_log, a.batch_size, not a.enable_inference, a.live_config,
                          a.auto_attach, a.practice_config, a.enable_inference, a.automatic_inference,
                           experimental_bet_action=a.experimental_bet_action, continuous_observation=a.continuous_observation,
-                          manual_start=a.manual_start)
+                          manual_start=a.manual_start, provenance_directory=".local/laya/service-provenance",
+                          diagnostic_streams=diagnostic_streams)
     if error_log is not None:
-        with manual_capture.private_path(error_log).open("xb") as stream, contextlib.redirect_stderr(BoundedErrorLog(stream)):
-            return serve()
+        with manual_capture.private_path(error_log).open("xb") as stream:
+            logger = BoundedErrorLog(stream)
+            diagnostic_streams["stderr"] = logger.counter.value
+            with contextlib.redirect_stderr(logger):
+                return serve()
     return serve()
 
 

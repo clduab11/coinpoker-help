@@ -21,6 +21,7 @@ import uuid
 import urllib.request
 
 import laya_attach as attach
+import laya_provenance as provenance
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = Path(".local/laya/manual-capture")
@@ -492,17 +493,26 @@ class _PipeReader:
         self.stream.close()
 
 
-def _write_capped(stream, block):
-    prefix = block[:max(0, MAX_LOG - stream.tell())]
-    if prefix:
-        stream.write(prefix)
-        stream.flush()
+def _write_capped(stream, block, counter=None):
+    try:
+        prefix = block[:max(0, MAX_LOG - stream.tell())]
+        if prefix:
+            if stream.write(prefix) != len(prefix):
+                raise OSError("short-diagnostic-write")
+            stream.flush()
+    except (OSError, ValueError):
+        if counter is not None:
+            counter.fail_write(len(block))
+        raise
+    if counter is not None:
+        counter.account(len(block), len(prefix))
     return len(prefix) == len(block)
 
 
 def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECONDS, max_frames=MAX_FRAMES,
                output=print, mode="capture-only", inference_approval=None, source_policy="manual",
-               automatic_assertion=None, stop_event=None, on_session=None, startup_deadline=None, on_record=None):
+               automatic_assertion=None, stop_event=None, on_session=None, startup_deadline=None, on_record=None,
+               provenance_context=None):
     if mode not in MODES:
         raise ValueError("invalid-mode")
     inference = mode == "inference-enabled"
@@ -548,6 +558,11 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
         stream.write(b"manual capture in progress; do not auto-rearm\n")
     child, pipes = None, []
     diagnostics_complete = True
+    diagnostic_accounting_complete = True
+    diagnostic_counters = {name: provenance.DiagnosticCounter() for name in ("stdout", "stderr")}
+    provenance_binding = {"state": "unknown", "complete": False}
+    service_identity = None
+    receipt_valid = True
     session_id = uuid.uuid4().hex
     path = session_path(session_id, root=root)
     status = default_snapshot()
@@ -628,6 +643,38 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
             if cpu_visual_board:
                 approval["cpu_visual_board"] = True
         write_json(path / "approval.json", approval, exclusive=True)
+        # Rust denies unknown approval fields. Bind its unchanged bytes in a
+        # separate private receipt rather than silently changing that protocol.
+        context = provenance_context if isinstance(provenance_context, dict) else {}
+        service_identity = context.get("service")
+        if inference and service_identity is None:
+            try:
+                service_file = private_path(Path(".local/laya/service-provenance") /
+                    (server["instance_id"] + ".json"), root=root)
+                if service_file.is_file():
+                    service_identity = read_json(service_file, maximum=provenance.MAX_IDENTITY)
+            except (OSError, ValueError, KeyError, TypeError):
+                service_identity = None
+        try:
+            identity = provenance.admission_identity(root, binary, approval,
+                service=service_identity, selector=context.get("selector"))
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            identity = {"version": 1, "complete": False, "state": "unknown", "reason": "identity-unavailable"}
+        approval_identity = provenance.file_identity(path / "approval.json", maximum=MAX_RECORD)
+        identity.update(approval=approval_identity, command=command,
+                        invoking_argv=list(sys.argv), cwd=str(Path(root).resolve()))
+        identity["complete"] &= approval_identity["state"] == "known"
+        try:
+            write_json(path / "provenance.json", identity, exclusive=True)
+            provenance_binding = {"file": "provenance.json",
+                                  "sha256": provenance.file_identity(path / "provenance.json",
+                                      maximum=provenance.MAX_IDENTITY)["sha256"],
+                                  "approval_sha256": approval_identity["sha256"],
+                                  "complete": identity["complete"]}
+            provenance_binding["complete"] &= provenance_binding["sha256"] is not None
+        except (OSError, ValueError):
+            provenance_binding = {"state": "unknown", "complete": False,
+                                  "approval_sha256": approval_identity["sha256"]}
         write_json(path / "status.json", status)
         write_json(base / "current.json", {"session_id": session_id})
         if on_session is not None:
@@ -661,8 +708,8 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
                         reason = "log-limit"
                     if sustained:
                         block = pipes[0].read()
-                        diagnostics_complete &= _write_capped(stdout, block)
-                        diagnostics_complete &= _write_capped(stderr, pipes[1].read())
+                        diagnostics_complete &= _write_capped(stdout, block, diagnostic_counters["stdout"])
+                        diagnostics_complete &= _write_capped(stderr, pipes[1].read(), diagnostic_counters["stderr"])
                         write_json(path / "status.json", {**status, "capture_directory": capture_directory,
                                                          "latest_frame": latest})
                         consume(block)
@@ -696,6 +743,8 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
         reason = reason or "operator-stop"
     except (OSError, ValueError, KeyError, TypeError):
         reason = "supervisor-error"
+        receipt_valid = False
+        diagnostics_complete = diagnostic_accounting_complete = False
     finally:
         # Publish terminal state before waiting/terminating: late native completions
         # cannot refill the Monitor while the owned child winds down.
@@ -727,24 +776,26 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
                 reason = "child-stop-unconfirmed"
         elif child is not None:
             exit_code = child.poll()
+        if reason == "child-stop-unconfirmed":
+            diagnostics_complete = diagnostic_accounting_complete = False
         if child is not None and reason != "child-stop-unconfirmed":
             try:
                 if sustained:
                     if len(pipes) != 2:
                         raise ValueError("pipe-failed")
                     deadline = time.monotonic() + 2
-                    with (path / "stdout.jsonl").open("ab") as out_log, (path / "stderr.log").open("ab") as err_log:
+                    with (path / "stdout.jsonl").open("ab") as out_log, (path / "stderr.txt").open("ab") as err_log:
                         while True:
                             blocks = [pipe.read() for pipe in pipes]
-                            for log, block in zip((out_log, err_log), blocks):
-                                diagnostics_complete &= _write_capped(log, block)
+                            for name, log, block in zip(("stdout", "stderr"), (out_log, err_log), blocks):
+                                diagnostics_complete &= _write_capped(log, block, diagnostic_counters[name])
                             consume(blocks[0])
                             threads = [pipe.thread for pipe in pipes if hasattr(pipe, "thread")]
                             if all(not thread.is_alive() for thread in threads):
                                 # Drain any final block enqueued between read and EOF.
                                 blocks = [pipe.read() for pipe in pipes]
-                                for log, block in zip((out_log, err_log), blocks):
-                                    diagnostics_complete &= _write_capped(log, block)
+                                for name, log, block in zip(("stdout", "stderr"), (out_log, err_log), blocks):
+                                    diagnostics_complete &= _write_capped(log, block, diagnostic_counters[name])
                                 consume(blocks[0])
                                 break
                             if time.monotonic() >= deadline:
@@ -769,20 +820,51 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
                 if pending:
                     raise ValueError("partial-native-tail")
             except (OSError, ValueError, KeyError, TypeError):
+                receipt_valid = False
+                diagnostics_complete = diagnostic_accounting_complete = False
                 if reason != "feed-failed":
                     reason = "receipt-invalid"
+        if not sustained and path.exists():
+            # Direct-file mode does not discard bytes, but overshoot after the
+            # polling boundary must still be explicit (no invented truncation).
+            for name, filename in (("stdout", "stdout.jsonl"), ("stderr", "stderr.txt")):
+                try:
+                    size = (path / filename).stat().st_size
+                    diagnostic_counters[name].account(size, size)
+                    diagnostics_complete &= size <= MAX_LOG
+                except OSError:
+                    diagnostics_complete = diagnostic_accounting_complete = False
         reason = reason or "supervisor-error"
         status.update(status="stopped" if reason in {"operator-stop", "duration-limit", "frame-limit"} else "failed",
                       activity_state="idle", stop_reason=reason,
-                      elapsed_ms=int((time.monotonic() - started) * 1000), updated_at_unix_ms=now_ms())
+                       elapsed_ms=int((time.monotonic() - started) * 1000), updated_at_unix_ms=now_ms())
+        service_diagnostics = {"state": "unknown"}
+        streams = service_identity.get("diagnostic_streams") if isinstance(service_identity, dict) else None
+        if isinstance(streams, dict) and all(isinstance(row, dict) for row in streams.values()):
+            streams = {name: dict(row) for name, row in streams.items()}
+            service_diagnostics = {"scope": "service lifetime snapshot; standalone capture uses last private publication",
+                                   "streams": streams,
+                                   "complete": all(row.get("truncated") is False and row.get("accounting_complete") is True
+                                                   for row in streams.values())}
         try:
             if path.exists():
                 write_json(path / "status.json", {**status, "capture_directory": capture_directory, "latest_frame": latest})
                 write_json(path / "run.json", {"command": command, "cwd": str(Path(root).resolve()),
                            "started_utc": started_utc, "ended_utc": utc(), "exit_code": exit_code,
                            "stdout": "stdout.jsonl", "stderr": "stderr.txt", "forced_stop": forced,
-                            "stop_reason": reason, "receipt_complete": native_terminal and not pending and not forced,
-                            "diagnostics_complete": diagnostics_complete,
+                             "stop_reason": reason, "receipt_complete": native_terminal and not pending and not forced
+                             and receipt_valid and exit_code is not None and reason != "child-stop-unconfirmed"
+                             and not any(pipe.failed.is_set() for pipe in pipes),
+                             "diagnostics_complete": diagnostics_complete,
+                             "diagnostics_scope": "native-child stdout/stderr",
+                             "diagnostic_streams": {name: {**counter.value, "cap_bytes": MAX_LOG,
+                                 "cap_exceeded": counter.value["bytes_seen"] > MAX_LOG,
+                                 "accounting_complete": counter.value["accounting_complete"] and diagnostic_accounting_complete and
+                                     (not sustained or len(pipes) == 2 and not any(pipe.failed.is_set() for pipe in pipes))}
+                                 for name, counter in diagnostic_counters.items()},
+                             "provenance": provenance_binding,
+                             "service_diagnostics": service_diagnostics,
+                             "child_pid": child.pid if child is not None and type(child.pid) is int else None,
                             "transport_failures": {name: pipe.failure_reason for name, pipe in zip(("stdout", "stderr"), pipes)
                                                    if getattr(pipe, "failure_reason", None) is not None},
                             "loss_note": "Sampling is not complete action history. Forced stop may leave an unacknowledged PNG or manifest tail."}, exclusive=True)
@@ -880,6 +962,8 @@ class AutomaticStart:
                                                "service_instance_id": self.service.instance_id,
                                                 "experimental_bet_action": getattr(self.service, "experimental_bet_action", False),
                                                 "cpu_visual_board": cpu_visual_board},
+                           provenance_context={"service": getattr(self.service, "provenance", None),
+                                               "selector": self.profile},
                            stop_event=self.closed, on_session=self._bind,
                            startup_deadline=deadline,
                            on_record=self.service.manual_feed.ingest_live if self.continuous_observation else None,

@@ -378,13 +378,29 @@ class CaptureTests(unittest.TestCase):
         child.terminate.assert_not_called()
         self.assertEqual(len(admitted), 27, "terminal/tail rows cannot enter live admission")
         session = next((self.root / capture.BASE).glob("[a-f0-9]" * 32))
-        self.assertTrue((session / "stderr.log").read_bytes().endswith(b"tail diagnostic\n"))
+        self.assertEqual((session / "stderr.txt").read_bytes(), b"main diagnostic\ntail diagnostic\n")
+        self.assertFalse((session / "stderr.log").exists())
         self.assertEqual((session / "stdout.jsonl").stat().st_size, 64)
         self.assertFalse((session / "stdout.jsonl").read_bytes().endswith(b"\n"))
         receipt = capture.read_json(session / "run.json")
         self.assertFalse(receipt["diagnostics_complete"])
         self.assertTrue(receipt["receipt_complete"], "a clipped diagnostic file is not a clipped live receipt")
         self.assertEqual(receipt["transport_failures"], {})
+        approval = capture.read_json(session / "approval.json")
+        self.assertEqual(approval["version"], 2)
+        self.assertNotIn("provenance", approval)
+        self.assertEqual(approval["service_instance_id"], "b" * 32)
+        out = receipt["diagnostic_streams"]["stdout"]
+        self.assertEqual(out["bytes_archived"], 64)
+        self.assertGreater(out["bytes_dropped"], 0)
+        self.assertEqual(out["bytes_seen"], out["bytes_archived"] + out["bytes_dropped"])
+        self.assertTrue(out["truncated"])
+        self.assertTrue(out["accounting_complete"])
+        self.assertIsNotNone(out["first_dropped_at_unix_ms"])
+        err = receipt["diagnostic_streams"]["stderr"]
+        self.assertEqual(err["bytes_seen"], len(b"main diagnostic\ntail diagnostic\n"))
+        self.assertEqual(err["bytes_dropped"], 0)
+        self.assertFalse(err["truncated"])
 
     def test_sustained_log_cap_never_hides_invalid_live_records_or_pipe_failures(self):
         cases = (b"{]\n", b"[]\n", b'{"schema_version":3,"event":"status"}\n',
@@ -441,6 +457,7 @@ class CaptureTests(unittest.TestCase):
                 self.assertEqual(receipt["transport_failures"], {"stdout": "pipe-backlog"} if invalid is None else {})
                 if invalid is None:
                     self.assertEqual(receipt["stop_reason"], "feed-failed")
+                    self.assertFalse(receipt["diagnostic_streams"]["stdout"]["accounting_complete"])
 
     def test_stop_only_sets_named_session_sentinel(self):
         path, _ = self.session()
@@ -567,6 +584,73 @@ class CaptureTests(unittest.TestCase):
         self.assertTrue(receipt["forced_stop"])
         self.assertEqual(capture.public_snapshot(root=self.root)["opportunity_deficit"], 20)
 
+    def test_private_provenance_binds_unchanged_strict_approval_and_actual_executable(self):
+        _, _, _, path, _ = self.run_supervisor()
+        approval = capture.read_json(path / "approval.json")
+        self.assertEqual(set(approval), {"version", "mode", "confirmed_at_unix_ms", "max_seconds",
+                                         "max_frames", "source", "operator_assertion"})
+        self.assertEqual(approval["version"], 1)
+        identity = capture.read_json(path / "provenance.json", maximum=capture.provenance.MAX_IDENTITY)
+        receipt = capture.read_json(path / "run.json")
+        self.assertEqual(identity["build"]["executable"]["sha256"], hashlib.sha256(self.binary.read_bytes()).hexdigest())
+        self.assertEqual(identity["approval"]["sha256"], hashlib.sha256((path / "approval.json").read_bytes()).hexdigest())
+        self.assertEqual(receipt["provenance"]["sha256"], hashlib.sha256((path / "provenance.json").read_bytes()).hexdigest())
+        self.assertEqual(receipt["provenance"]["approval_sha256"], identity["approval"]["sha256"])
+        self.assertIsNone(identity["build"]["git"]["dirty"])
+        self.assertFalse(identity["complete"], "a fake root cannot inherit the checkout's clean identity")
+        self.assertFalse(receipt["provenance"]["complete"])
+        self.assertNotIn("provenance", capture.public_snapshot(root=self.root))
+
+    def test_capped_diagnostics_exact_over_empty_and_repeated_tail_are_accounted(self):
+        log = io.BytesIO()
+        counter = capture.provenance.DiagnosticCounter()
+        with patch.object(capture, "MAX_LOG", 4):
+            self.assertTrue(capture._write_capped(log, b"abcd", counter))
+            self.assertTrue(capture._write_capped(log, b"", counter))
+            self.assertFalse(counter.value["truncated"], "exact cap loses no bytes")
+            self.assertFalse(capture._write_capped(log, b"e", counter))
+            self.assertFalse(capture._write_capped(log, b"tail", counter))
+        self.assertEqual(log.getvalue(), b"abcd")
+        self.assertEqual(counter.value["bytes_seen"], 9)
+        self.assertEqual(counter.value["bytes_archived"], 4)
+        self.assertEqual(counter.value["bytes_dropped"], 5)
+        self.assertGreaterEqual(counter.value["last_dropped_at_unix_ms"], counter.value["first_dropped_at_unix_ms"])
+
+    def test_unavailable_provenance_is_incomplete_not_a_new_capture_gate(self):
+        with patch.object(capture.provenance, "admission_identity", side_effect=OSError("synthetic identity unavailable")):
+            code, process, _, path, _ = self.run_supervisor()
+        self.assertEqual(code, 0)
+        process.assert_called_once()
+        identity = capture.read_json(path / "provenance.json")
+        self.assertEqual(identity["state"], "unknown")
+        self.assertFalse(identity["complete"])
+        self.assertFalse(capture.read_json(path / "run.json")["provenance"]["complete"])
+
+    def test_diagnostic_write_failure_cannot_claim_complete_archive_or_accounting(self):
+        class Pipe:
+            def __init__(self, stream):
+                self.failed = capture.threading.Event()
+            def read(self):
+                return b""
+            def finish(self):
+                pass
+        child = Mock()
+        child.poll.return_value = 0
+        with patch.object(capture.subprocess, "Popen", return_value=child), \
+                patch.object(capture, "_PipeReader", Pipe), \
+                patch.object(capture, "_write_capped", side_effect=OSError("synthetic archive failure")), \
+                patch.object(capture, "inference_service", return_value={"instance_id": "b" * 32,
+                    "model_state": "ready", "acceptance_floors_loaded": True}):
+            self.assertEqual(capture.supervise(window(), root=self.root, confirmed_at_unix_ms=capture.now_ms(),
+                mode="inference-enabled", source_policy="automatic-sustained", automatic_assertion=capture.SUSTAINED_ASSERTION,
+                inference_approval={"inference_assertion": capture.INFERENCE_ASSERTION, "service_instance_id": "b" * 32},
+                on_record=lambda *_: True, output=lambda _: None), 1)
+        session = capture.read_json(self.root / capture.BASE / "current.json")["session_id"]
+        receipt = capture.read_json(capture.session_path(session, root=self.root) / "run.json")
+        self.assertFalse(receipt["diagnostics_complete"])
+        self.assertFalse(receipt["receipt_complete"])
+        self.assertFalse(receipt["diagnostic_streams"]["stdout"]["accounting_complete"])
+
     def test_frame_budget_stops_before_time_and_logs_gaps(self):
         row = {"event": "manual_capture", "version": 1, "mode": "capture-only",
                "recording": {"recorded_frames": 1, "recorded_bytes": 600}, "capture_failures": 2,
@@ -638,6 +722,11 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(capture.supervise(window(), confirmed_at_unix_ms=capture.now_ms(), root=self.root, output=lambda _: None), 1)
         self.assertTrue((self.root / capture.BASE / "active.lock").exists())
         self.assertEqual(capture.public_snapshot(root=self.root)["stop_reason"], "child-stop-unconfirmed")
+        session = capture.read_json(self.root / capture.BASE / "current.json")["session_id"]
+        receipt = capture.read_json(capture.session_path(session, root=self.root) / "run.json")
+        self.assertFalse(receipt["diagnostics_complete"])
+        self.assertFalse(receipt["receipt_complete"])
+        self.assertTrue(all(not row["accounting_complete"] for row in receipt["diagnostic_streams"].values()))
         process.assert_called_once()
 
     def test_bounds_are_not_relaxed_by_command_line(self):
@@ -646,6 +735,34 @@ class CaptureTests(unittest.TestCase):
                 capture.supervise(window(), confirmed_at_unix_ms=capture.now_ms(), root=self.root, max_seconds=seconds, max_frames=frames)
         with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
             capture.main(["start", "--pid", "42", "--hwnd", "0x123", "--enable-inference"])
+
+    def test_unconfirmed_sustained_child_has_incomplete_diagnostics_even_with_healthy_pipes(self):
+        pipes = []
+        class Pipe:
+            def __init__(self, stream):
+                self.failed = capture.threading.Event()
+                pipes.append(self)
+            def read(self):
+                return b""
+        child = Mock()
+        child.poll.return_value = None
+        child.terminate.side_effect = OSError("synthetic stop not confirmed")
+        def start(command, **kwargs):
+            Path(command[-1]).with_name("STOP").touch()
+            return child
+        with patch.object(capture.subprocess, "Popen", side_effect=start), patch.object(capture, "_PipeReader", Pipe), \
+                patch.object(capture, "inference_service", return_value={"instance_id": "b" * 32,
+                    "model_state": "ready", "acceptance_floors_loaded": True}):
+            self.assertEqual(capture.supervise(window(), root=self.root, confirmed_at_unix_ms=capture.now_ms(),
+                mode="inference-enabled", source_policy="automatic-sustained", automatic_assertion=capture.SUSTAINED_ASSERTION,
+                inference_approval={"inference_assertion": capture.INFERENCE_ASSERTION, "service_instance_id": "b" * 32},
+                on_record=lambda *_: True, output=lambda _: None), 1)
+        session = capture.read_json(self.root / capture.BASE / "current.json")["session_id"]
+        receipt = capture.read_json(capture.session_path(session, root=self.root) / "run.json")
+        self.assertEqual(receipt["stop_reason"], "child-stop-unconfirmed")
+        self.assertTrue(all(not pipe.failed.is_set() for pipe in pipes))
+        self.assertFalse(receipt["diagnostics_complete"])
+        self.assertTrue(all(not row["accounting_complete"] for row in receipt["diagnostic_streams"].values()))
 
     def test_expired_confirmation_cannot_be_renewed_when_spawning(self):
         for timestamp in (capture.now_ms() - 30_001, capture.now_ms() + 10_000, True):
