@@ -28,6 +28,7 @@ __pycache__/
 *.pyc
 
 # Editor / OS noise
+/.claude/
 *.swp
 .idea/
 .vscode/
