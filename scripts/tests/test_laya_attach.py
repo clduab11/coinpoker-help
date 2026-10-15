@@ -49,7 +49,7 @@ def listing(*windows, version=2):
 
 class AttachTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="attach-b-nlh-", dir=SCRIPTS.parent / ".local")
+        self.temp = tempfile.TemporaryDirectory(prefix="attach-b-nlh-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.binary = self.root / "target/debug/coinpoker.exe"

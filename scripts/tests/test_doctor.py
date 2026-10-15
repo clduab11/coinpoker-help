@@ -83,7 +83,7 @@ class DoctorTests(unittest.TestCase):
                 doctor.check_model_files(root, pins)
 
     def test_hf_snapshot_links_may_resolve_only_into_the_configured_hub_cache(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / ".local") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             hub = Path(directory) / "hub"
             cache = hub / "repo"
             snapshot = cache / "snapshots" / "revision"

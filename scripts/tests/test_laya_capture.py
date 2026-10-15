@@ -29,7 +29,7 @@ def listing(value=None):
 
 class CaptureTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="manual-capture-fixture-", dir=SCRIPTS.parent / ".local")
+        self.temp = tempfile.TemporaryDirectory(prefix="manual-capture-fixture-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.binary = self.root / "target/debug/coinpoker.exe"

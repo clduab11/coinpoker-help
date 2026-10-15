@@ -18,7 +18,7 @@ REAL_POPEN = capture.subprocess.Popen
 class InferenceConsentTests(unittest.TestCase):
     @unittest.skipUnless(capture.os.name == "nt", "Windows shared-delete receipt contract")
     def test_receipt_reader_does_not_block_atomic_replacement_and_reads_one_version(self):
-        with tempfile.TemporaryDirectory(prefix="receipt-sharing-contract-", dir=dashboard.ROOT / ".local") as temporary:
+        with tempfile.TemporaryDirectory(prefix="receipt-sharing-contract-") as temporary:
             path = Path(temporary) / "receipt.json"
             capture.write_json(path, {"version": "original"})
             fdopen = capture.os.fdopen
@@ -160,7 +160,7 @@ class InferenceConsentTests(unittest.TestCase):
 
 class ManualFeedTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="manual-feed-contract-", dir=dashboard.ROOT / ".local")
+        self.temp = tempfile.TemporaryDirectory(prefix="manual-feed-contract-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         fixture = stage2.PartialTests()
@@ -942,7 +942,7 @@ class AutomaticStartupTests(unittest.TestCase):
         self.assertEqual(self.auto.reason, "automatic-discovery-timeout")
 
     def test_missing_explicit_profile_cannot_fall_back_to_an_nlh_window(self):
-        with tempfile.TemporaryDirectory(prefix="automatic-profile-contract-", dir=dashboard.ROOT / ".local") as root:
+        with tempfile.TemporaryDirectory(prefix="automatic-profile-contract-") as root:
             auto = capture.AutomaticStart(self.service, profile=".local/missing-explicit.json", root=Path(root))
             listing = capture_tests.attach.WindowListing(windows=(capture_tests.window(title="NLH100"),))
             with patch.object(capture.attach, "list_windows", return_value=listing), patch.object(capture, "supervise") as run:

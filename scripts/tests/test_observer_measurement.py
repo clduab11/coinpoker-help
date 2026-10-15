@@ -6,13 +6,16 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("observer_measurement", ROOT / ".local/laya/train/measure_observer.py")
+SPEC = importlib.util.spec_from_file_location("observer_measurement", ROOT / "scripts/measure_observer.py")
 measurement = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(measurement)
 
@@ -57,6 +60,39 @@ def run(end=50000):
     return {"session": "a" * 32, "service_instance": "service", "api_session": "feed",
         "source_id": "source", "source_epoch": 1, "started_at_unix_ms": 1000,
         "ended_at_unix_ms": end, "poll_ms": 1000}
+
+
+class HermeticImportTests(unittest.TestCase):
+    def test_clean_imports_without_private_implementation_or_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tests = root / "scripts/tests"
+            tests.mkdir(parents=True)
+            shutil.copy2(ROOT / "scripts/measure_observer.py", root / "scripts/measure_observer.py")
+            test_path = tests / Path(__file__).name
+            shutil.copy2(__file__, test_path)
+            code = """
+import importlib.util
+from pathlib import Path
+import sys
+import numpy
+from PIL import Image
+
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('clean_measurement_tests', path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert module.measurement.ROOT == path.parents[2]
+assert module.measurement.PRIVATE == path.parents[2] / '.local'
+assert not module.measurement.PRIVATE.exists()
+module.measurement.measurement_self_test()
+assert not module.measurement.PRIVATE.exists()
+"""
+            result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(test_path)],
+                cwd=root, capture_output=True, text=True, check=False, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((root / ".local").exists())
+            self.assertEqual(list(root.rglob("__pycache__")), [])
 
 
 class MeasurementTests(unittest.TestCase):

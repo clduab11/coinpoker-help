@@ -866,7 +866,7 @@ class PartialTests(unittest.TestCase):
         self.assertEqual(self.state.snapshot(), before)
 
     def test_scoped_invalidation_private_ledger_is_sanitized_without_public_ticket(self):
-        with tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"
             self.state.begin_stream(path)
             self.health(2)
@@ -1024,7 +1024,7 @@ class PartialTests(unittest.TestCase):
         self.assertIsNotNone(self.reading(generation=2))
 
     def test_private_diagnostics_are_closed_bounded_and_never_browser_data(self):
-        with tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"
             self.state.begin_stream(path)
             self.state.diagnostics.max_events = 2
@@ -1076,7 +1076,7 @@ class PartialTests(unittest.TestCase):
         self.assertEqual(value["passes"][0]["segments"], {"n": 12, "overflow": True})
 
     def test_obsolete_zero_lease_diagnostics_are_private_history_not_source_admission(self):
-        with tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"
             self.state.begin_stream(path)
             self.health(2, 2)

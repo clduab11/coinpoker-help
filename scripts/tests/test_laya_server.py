@@ -1430,7 +1430,7 @@ class ExperimentalTests(unittest.TestCase):
 
 class AcceptanceTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=srv.dashboard.ROOT / ".local")
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         root_patch = patch.object(srv, "REPO", str(self.root))

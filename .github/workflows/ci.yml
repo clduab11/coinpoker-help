@@ -19,7 +19,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install lightweight Python test dependencies
+        run: python -B -m pip install --requirement scripts/requirements-test.txt
       - name: Install pinned Rust
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - name: Formatting
@@ -31,7 +36,9 @@ jobs:
       - name: Clippy
         run: cargo +1.95.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Python diagnostics
-        run: python -m unittest discover -s scripts/tests -v
+        run: python -B -m unittest discover -s scripts/tests -v
+      - name: Workflow YAML validation
+        run: python -B -c "from pathlib import Path; from scripts.validate import validate_workflow_workflows; code, output = validate_workflow_workflows(Path.cwd()); print(output); raise SystemExit(code)"
       - name: Synthetic evaluation
         run: cargo +1.95.0 run --locked --bin coinpoker -- --evaluate fixtures/synthetic/manifest.json
       - name: PowerShell script syntax

@@ -576,7 +576,7 @@ class StateTests(unittest.TestCase):
             self.assertIsNone(self.state.snapshot()["observation"])
 
     def test_ledger_preserves_prefix_and_stops_at_cap(self):
-        with tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"
             ledger = dashboard.PrivateLedger(path, max_events=2)
             for n in range(4):
@@ -633,7 +633,7 @@ class StateTests(unittest.TestCase):
         self.assertNotIn("PRIVATE", json.dumps(history))
 
     def test_private_ledger_keeps_sanitized_role_changes_without_a_new_session(self):
-        with tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"
             self.state.begin_stream(path)
             for generation, role in enumerate(("observing", "seated_waiting", "your_turn"), 1):
@@ -648,7 +648,7 @@ class StateTests(unittest.TestCase):
                 self.assertNotIn(private, text)
 
     def test_ledger_does_not_overwrite_existing_file(self):
-        with tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"
             path.write_text("user-data")
             ledger = dashboard.PrivateLedger(path)
@@ -930,7 +930,7 @@ class NativeProjectionTests(unittest.TestCase):
 
 class CaptureTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local")
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.root_patch = patch.object(dashboard, "ROOT", self.root)
@@ -1144,7 +1144,7 @@ class FakeFeed:
 
 class SupervisorTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local")
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         root_patch = patch.object(dashboard, "ROOT", self.root)

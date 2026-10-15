@@ -47,7 +47,7 @@ class FeedFailureTests(unittest.TestCase):
         visual = patch("laya_visual.VisualWorker", return_value=Mock())
         self.visual = visual.start().return_value
         self.addCleanup(visual.stop)
-        temporary = tempfile.TemporaryDirectory(prefix="feed-failure-", dir=dashboard.ROOT / ".local")
+        temporary = tempfile.TemporaryDirectory(prefix="feed-failure-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.feed = dashboard.ManualSessionFeed(self.state, INSTANCE, root=self.root)

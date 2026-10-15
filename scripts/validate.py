@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run Windows-first automated checks with separate local evidence."""
+import argparse
 import json
 from pathlib import Path
 import re
@@ -21,7 +22,6 @@ def validate_workflow_workflows(root):
         return 127, "no workflow files found under .github/workflows"
     lines = []
     failures = 0
-    blocked = False
     try:
         import yaml
     except ImportError:
@@ -47,8 +47,6 @@ def validate_workflow_workflows(root):
             failures += 1
         if trigger_keys and "jobs" in document:
             lines.append(f"OK {name}: jobs + trigger {trigger_keys[0]!r} present")
-    if blocked:
-        return 127, "\n".join(lines)
     return (1 if failures else 0), "\n".join(lines)
 
 
@@ -89,15 +87,27 @@ def run_command(root, out, name, command):
     (out / (name + ".log")).write_text(output, encoding="utf-8")
     passed = sum(int(n) for n in re.findall(r"test result: ok\. (\d+) passed", output)) if name == "test" else None
     result = {"check": name, "command": command, "exit_code": code, "seconds": round(time.monotonic() - start, 3), "rust_tests_passed": passed}
+    if name == "python-tests":
+        summary = re.search(r"^Ran (\d+) tests? in ", output, re.MULTILINE)
+        skipped = re.search(r"^(?:OK|FAILED) \([^\n]*\bskipped=(\d+)", output, re.MULTILINE)
+        result["python_tests"] = {
+            "run": int(summary[1]) if summary else None,
+            "skipped": int(skipped[1]) if skipped else (0 if summary else None),
+            "skip_details": re.findall(r"^(.+?) \.\.\. skipped (.+)$", output, re.MULTILINE),
+        }
     print(json.dumps(result), flush=True)
     if code:
         print(output, flush=True)
     return result
 
 
-def main():
+def main(argv=None):
     root = Path(__file__).resolve().parents[1]
-    out = root / ".local" / "validation"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=Path(".local/validation"),
+                        help="Validation receipts directory (relative paths use the repository root)")
+    args = parser.parse_args(argv)
+    out = (root / args.output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
     commands = [
         ("fmt", ["cargo", "fmt", "--all", "--", "--check"]),
@@ -113,7 +123,7 @@ def main():
             for p in powershell_files
         ]
     commands += [
-        ("python-tests", [sys.executable, "-m", "unittest", "discover", "-s", "scripts/tests", "-v"]),
+        ("python-tests", [sys.executable, "-B", "-m", "unittest", "discover", "-s", "scripts/tests", "-v"]),
         ("synthetic-evaluation", ["cargo", "run", "--locked", "--bin", "coinpoker", "--", "--evaluate", "fixtures/synthetic/manifest.json"]),
     ]
     results = []
@@ -139,6 +149,7 @@ def main():
     report = {
         "format": 1,
         "checks": results,
+        "python": {"executable": sys.executable, "version": sys.version},
         "powershell_available": bool(powershell),
         "physical_windows_acceptance": False,
     }
@@ -149,7 +160,7 @@ def main():
     if failed:
         print("FAILED: " + ", ".join(failed), flush=True)
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print("Report: .local/validation/report.json")
+    print(f"Report: {out / 'report.json'}")
     return int(bool(failed))
 
 
