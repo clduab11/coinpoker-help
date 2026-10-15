@@ -1,4 +1,4 @@
-//! Independent, read-only Laya field assembly. Never feeds the strict action validator.
+//! Independent Laya field assembly. Incomplete evidence is not an actionable GameState.
 
 use std::collections::HashMap;
 

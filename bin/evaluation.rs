@@ -289,6 +289,7 @@ pub fn run(path: &str, config: VlmConfig) -> Result<(), RunError> {
                     generation: f.generation,
                     epoch: f.epoch,
                     captured_at_ms: 0,
+                    captured_at_unix_ms: None,
                 },
                 Freshness {
                     identity: f.current_identity.as_ref(),

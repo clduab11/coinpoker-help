@@ -1183,11 +1183,13 @@ mod tests {
                 width: 320,
                 height: 240,
                 rgba: vec![0; 15],
+                ..Frame::default()
             },
             Frame {
                 width: u32::MAX,
                 height: u32::MAX,
                 rgba: vec![],
+                ..Frame::default()
             },
             synthetic_frame(0, 240),
             synthetic_frame(320, 0),

@@ -29,7 +29,10 @@ Enabled B telemetry supersedes the fixed first-phase no-recorder fields below.
 
 The user's `2026-10-10T15:03:16Z` correction selects the unique visible CoinPoker
 window matching `^NLH\s*[0-9]+`, without practice/lobby/cash title distinctions.
-Practice-six-max is user-declared scope, not mode proof from a title. Stable
+Current profile `user_scope` is `six-max-table`, not a practice/cash restriction.
+Legacy `practice-six-max` values load as the same exact selector, without profile
+rewrites or selector widening. `.local/practice-table.json` and `-PracticeConfig`
+remain compatibility names; metadata/title never proves actual game mode/layout. Stable
 executable/PID/HWND identity survives resizing, title suffix and role changes.
 Capture reads current dimensions; normalized six-max regions scale and
 letter/pillar-box to them. Missing/ambiguous windows block. Lobby imagery stays
@@ -46,7 +49,9 @@ pinned from temperature calibration. Responses carry `acceptance_floor`;
 native comparisons are f64 and use `max(vendor, fitted, optional override)`.
 Missing/invalid floors fail closed. P0 0.995 and board 1.0 are not clamped to the
 CLI override bound; 0.99999999 cannot round into a confident board card.
-Untrained passes remain unrun, metrics/advice remain off and Gate F is unchanged.
+Untrained passes remain unrun and Gate F is unchanged. The original checkpoint
+kept metrics/advice off; the current experimental projection contract below does
+not change those historical results or establish new model capabilities.
 
 Actual-window calibration after the user's `16:52:31Z` table report found the
 logo/NLH/number caption drawn internally while Win32 exposes exact `CoinPoker`.
@@ -65,7 +70,7 @@ integrity and fresh capture health do not establish accepted poker readings.
 | --- | --- |
 | `configuration` | Active `runtime` thresholds, `identity_configured`, `model`, `vlm_timeout_secs`, `visual_calibration:"not_validated"`; this does not assert readiness. |
 | `status` | `state`, `reason`, `identity`. Runtime status identity is an object or null. Early configuration and listing failure records may omit it; treat omission as null. Emitted only when this tuple changes. |
-| `decision` | Existing decision fields plus `observation`, `captured_at_unix_ms`, `valid_for_ms`, `emitted_at_unix_ms`, `expires_at_unix_ms`. Only emitted after source-current admission; the first-phase browser still withholds all advice because seated quality is unapproved. |
+| `decision` | Existing decision fields plus `observation`, `captured_at_unix_ms`, `valid_for_ms`, `emitted_at_unix_ms`, `expires_at_unix_ms`. Only emitted after source-current full-state admission. A matching current decision can project as explicitly experimental analysis; it does not certify perception quality. |
 | `observation` | Separately admitted full-state observation with `observation` ticket, source capture/emission/expiry times, remaining lease, cards/phase, nullable chip amounts/actions, `action_required` and `quality_approved`. This is the browser's freshness-bound diagnostic source, not a raw model response or a quality approval. Unseated hero amounts and offered controls are null, not zero/absent. |
 | `observation_invalidated` | `reason`, `generation`, `epoch`, `identity`, `emitted_at_unix_ms`. Invalidates current diagnostics even when no recommendation exists. |
 | `capture_health` | Every 1000 ms: cumulative `frame_count`, nullable `frame_width`/`frame_height`, capture/emission time, generation/epoch/identity and `fresh_capture`. A delayed source frame cannot claim fresh health. `recording_enabled:false` and `recorded_frames:0` explicitly distinguish capture from image recording. |
@@ -101,7 +106,6 @@ after a meaningful frame or scope change.
    full lease. Use the shorter available wall-clock or monotonic lease.
 3. Never show an older generation/epoch over a newer one; duplicate packets/polls cannot renew a lease. Tombstone cleared/expired versions until a newer source admission.
 4. If transport delay or clock uncertainty makes freshness unknowable, clear.
-5. Never execute a recommendation as a client input command.
 
 ## States and reasons
 
@@ -153,9 +157,10 @@ The previous iteration's latency/quality failure is not retroactively passed.
 The browser and model API share `http://127.0.0.1:18090/`. `GET /api/state`
 normalizes the native JSONL pipe into a small snapshot:
 opaque stream `session_id`, monotonic `event_seq`, model/capture states, nullable
-experimental observation, history/ledger status, `advice:null`, and readiness.
+experimental observation, history/ledger status, nullable experimental `advice`, and readiness.
 It omits native HWND/PID/name data, raw responses, images and backend bodies.
-The service never accepts browser capture/process/poker-control requests. The
+The service accepts an explicit, session-bound capture-stop request; HTTP start,
+mark, model/process management and poker-input routes are not implemented. The
 user-facing app has exactly **Monitor** and **Reference** views; runtime details,
 freshness internals, private ledger status and synthetic fixtures are not extra
 app views. A disconnected/empty Monitor has one compact message.
@@ -185,17 +190,44 @@ null. Controls keep independent presence/enabled labels, are multi-label, and
 distinguish Bet from Raise (including re-raises). Neither presence nor an empty
 legacy action list establishes legality. No parser/raw-model bypass is added.
 
-`metrics` has `hand_rank`, `pot_odds`, `draw`, and `equity_pct`. Until separate
-capability approval, all are null even if a feed asserts `quality_approved:true`.
-Future pot-odds metrics carry the acting seat; future draw-completion probability
-is not win equity. Browser rendering does not derive poker strategy from
-experimental perception. `advice` remains null and `advice_ready:false`.
+`metrics` has `hand_rank`, `pot_odds`, `draw`, and `equity_pct`. Only a current full
+native observation that passes native-shape and semantic checks can supply them;
+partial fields, raw model answers or a claimed `quality_approved:true` cannot.
+Numbers must be finite and in range, with the required card/role/amount evidence.
+Hand ranks use the closed native vocabulary; hero metrics require a seated hero
+with two cards. Pot odds carry an explicit acting seat when observing and must
+match the verified call/pot amounts. Draw completion applies to flop/turn and is
+not win equity. Missing or unsupported metrics stay null, not zero.
+
+Public full observations and advice carry `session_id`, opaque 16-hex `source_id`,
+`generation`, `epoch`, original `captured_at_unix_ms`, `expires_at_unix_ms`, and
+`remaining_ms`. They bind to the current root session, `capture.source_id`,
+`capture.generation`/epoch and service `server.instance_id`. Advice must match
+the full observation's source, generation, epoch and capture time; its expiry and
+remaining lease cannot exceed the observation's. Polls, duplicates or relabelled
+generations cannot renew the original lease.
+
+`advice` is null or a bounded projection of the matching native decision:
+`action`, `amount`, `ev`, `equity_pct`, nullable `pot_odds_pct`, `break_even_pct`
+and `confidence`, plus the source/lease fields above. Actions are `fold`, `check`,
+`call`, `raise`, or `all_in` and must be explicitly offered/enabled on a current
+`your_turn` full state. Fold/check amount is zero; call is `min(to_call, hero_chips)`;
+raise uses verified min/max bounds. The current DTO can validate `all_in` only
+as a short all-in call, not an all-in raise-to amount; native Bet is unsupported.
+No recommendation is inferred from weak `table` events or partial observations.
+
+Projected observations/advice stay `experimental:true`, `quality_approved:false`.
+`server.advice_ready` is true only while admitted experimental advice is current,
+not a certification flag. The model's `quality_gate:"failed"` remains factual;
+it is not a blanket veto on genuine validated native analysis. R17/parser checks,
+the current model's untrained hero/control limits, source freshness, legal-action
+validation and clearing on stale/partial/replaced input all remain in force.
 
 - `UI_READY` means the page/status service works, not that a model/recorder/adviser passed.
-- `COLLECTOR_READY` requires actual registered capture/recording evidence. This
-  phase has no image recorder in the native feed and cannot claim it from a heartbeat.
+- `COLLECTOR_READY` requires actual registered capture/recording evidence; a
+  capture-health heartbeat alone does not establish a recorder receipt.
 - `server.model_state:ready` means verified weights loaded; temperature calibration
-  loading is separate from the failed quality gate and `advice_ready:false`.
+  loading is separate from the failed quality gate and experimental advice availability.
 - Live controls remain independently unknown, with presence/enabled labels. No
   empty legacy array or recommended action supplies missing offered controls.
 - The private session ledger is prefix-preserving, capped at 10,000 events / 25 MiB;
@@ -218,6 +250,29 @@ GPU admission slot. Status/UI remain responsive during slow inference. The
 browser polls at 250 ms with one outstanding request and source-bound local
 expiry; disconnect, heartbeat loss, older sequence/session, and tab hide/resume
 clear before revalidation. Same-session polls never refresh a source lease.
+
+### Explicit Capture Stop
+
+`POST /api/capture/stop` accepts a JSON object with exactly `session_id` and
+`service_instance_id`, both 32-character lowercase hex identifiers. The browser
+uses the current `capture_session.session_id` and `server.instance_id`; duplicate
+or extra keys are invalid. Requests require `application/json`, a body of at most
+512 bytes, and the service's local Host/same-origin checks. The request is admitted
+only for a fresh currently capturing receipt and matching service/session binding.
+
+`200 {"ok":true}` acknowledges a stop request, not completed child teardown.
+`409 {"error":"capture-session-unavailable"}` reports an ended/stale/mismatched
+session or service; malformed JSON/identifiers return `400`. The route requests
+the named session's existing stop path and invalidates current output. It neither
+loads a model nor waits for a GPU slot. Monitor exposes it through **Stop capture**;
+GET polling remains side-effect-free. HTTP start/mark and poker-input endpoints
+are not implemented; their absence is a capability description, not an authorization ban.
+
+### Historical Checkpoint A/B Startup
+
+The following paragraph records the old startup design, not current commands.
+Current defaults, explicit inference opt-in and manual/automatic source workflows
+are in [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md).
 
 Launch `scripts/start-vlm.ps1 -DashboardOnly` for Monitor/Reference without GPU loading;
 the default asynchronously verifies/loads the pinned model. An explicit
@@ -259,21 +314,161 @@ admit values, extend source expiry, or turn draft labels into approval. A change
 board slot clears only that slot plus dependent phase/count, not unchanged cards.
 
 `capture_session` is an allowlisted, read-only projection of the separate manual
-session receipt: opaque session ID, capture-only mode/status, elapsed/remaining
+session receipt: opaque session ID, capture-only or inference-enabled mode/status, elapsed/remaining
 time,600000ms/1200-frame maxima, acknowledged saved frames/bytes, capture failures,
 gap count/max gap/estimated missed samples, distinct draft opportunity count,
-target20/deficit, stop reason, update time and inference false. Missing/malformed
+target20/deficit, stop reason, update time and separate inference consent. Missing/malformed
 receipts remain unknown/failed; stale active status becomes interrupted. Estimates
 are missed samples, never inferred poker actions. No HWND/title/path/PNG/marker
-prose is served; no HTTP start/stop/mark or poker-input endpoint is added.
+prose is served. Capture stop is the explicit POST described above; HTTP start/mark
+and poker-input endpoints are not implemented.
 
 Manual capture emits separate private `manual_capture` progress JSONL and uses
 the existing recorder manifest, with capture-call-start UTC, PNG SHA256 and
 previous-saved-gap receipts. Markers reference an acknowledged hash/frame index
 without rewriting observations or evidence; labels DRAFT, human PENDING and
-accepted_correction false. The operator must confirm an exact current source and
-seated readiness before any child can capture. Terminal budget/source/error stops
+accepted_correction false. Manual startup requires only the fresh exact
+`CAPTURE <PID> <HWND> <nonce>` challenge, identity recheck and 30-second deadline,
+not seating. New manual receipts use `operator_assertion:null`; the known legacy
+`I am seated and ready` value is accepted only for persisted-receipt compatibility,
+and arbitrary strings are rejected. Neither form establishes hero identity.
+Terminal budget/source/error stops
 do not rearm. See [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md).
+
+### Manual Inference Transport (2026-10-12)
+
+The separate native entry point is `--manual-inference --approval-file <private>`.
+Its supervisor requires separate installed-it1 consent and ready service, then fresh
+exact-source confirmation with no seating assertion. `--capture-only` keeps its independent dispatch,
+without model probes or prediction calls. Automatic attachment is not restored.
+
+One approved capture owner records the identical frame before passing it to existing
+LiveRuntime/Laya machinery. Tickets carry optional original capture-call-start UTC
+alongside monotonic time; lease endpoints never use inference/HTTP/poll time.
+Same-source resize revalidates geometry, not budget or consent. The first duration
+or frame limit stops the entire session, not only recording.
+
+Native stdout mixes private version-1 progress and existing schema-2 typed capture,
+partial/full observation, diagnostics and history. Records add private
+`service_instance_id` and `mode: inference-enabled`. Manual single/batch prediction
+requests add `X-Coinpoker-Service` and `X-Coinpoker-Session`. The exact active private
+session must remain approved before/after work; mismatch, STOP, expiry or terminal
+state returns `409 manual-session-ended`. Separately enabled saved-frame diagnostic
+callers keep their existing API. No new capability or floor is activated.
+
+The bounded passive `ManualSessionFeed` reads the owned child's private JSONL and
+invokes existing `DashboardState.ingest`/projection. It never selects/spawns capture.
+The browser reads sanitized `GET /api/state`, distinguishing
+session consent, model loading/ready/error, busy/idle, rejected or independently
+accepted fields, and terminal states. Source replacement and terminal conditions
+tombstone results and stop the retired owned session; recovered status cannot rearm
+it. Refresh starts neither mode; only an explicit Stop action issues the POST above.
+Manual mode now supplies the existing decision Pipeline and forwards its genuinely
+admitted full observations/decisions instead of dropping them categorically.
+R17/parser/source/deadline validation remains; partials and unleased `table` records
+cannot stand in for complete GameState or leased analysis. Old
+logs are not rebased into current readings. See the runbook for bounded receipts.
+
+### Explicit Automatic Observation Policy
+
+After the operator's later authorization, `--enable-inference --automatic-inference`
+arms one bounded startup attempt using a required, existing private source profile.
+Approval uses `source_policy: automatic-bounded` and a separate automatic assertion,
+never a fabricated seated assertion. The native dispatch/recorder/Laya/feed stay the
+same. Missing profiles, ambiguity, replacement and terminal conditions fail closed.
+`automatic_startup` describes metadata search/loading independently of any session.
+Progress and typed events include `source_policy` and `activity_state`. Under the
+2026-10-12 standing GO, independently admitted partial Pot/stack/card readings can
+publish while `activity_state: verifying`; history/full observations still require
+qualified visible table activity. Source health and partial display do not depend
+on a betting-content change or seated assertion. The former 30s unconfirmed-probe
+stop is removed; all frames/time count against the original 600s/1200-frame limits.
+Activity qualification does not claim continuing poker actions. Automatic jobs run
+p0 plus one trained field from startup in bounded three-job lanes; qualified partial
+readouts continue requesting distinct fresh sources rather than pausing a full lease.
+Exact field-source witnesses, two-source consensus, fitted floors, five-second source
+expiry and invalidation remain unchanged. Partial readouts cannot enable advice;
+experimental analysis still requires the full-state contract above.
+
+### Sustained Observation Receipt Variant
+
+`--continuous-observation` additionally requires both inference/automatic opt-ins
+and refuses experimental diagnostics. It authorizes only `automatic-sustained`
+with a private version-2 source approval and a distinct same-source assertion;
+version-1 manual and automatic-bounded approvals retain their original limits.
+Native progress is version 2 only for sustained mode and adds a required nullable
+`recording_end_reason` (`duration-limit`, `frame-limit`, or `disk-limit`). Native
+`elapsed_ms` continues measuring observation; expected recorder closure freezes
+its durable counters but does not stop fresh, validated live inference.
+
+The browser root schema stays version 1. Its sustained `capture_session` requires
+`receipt_version: 2`, explicit `source_policy: automatic-sustained`, inference-only
+mode, experiment false, and null `max_duration_ms`, `remaining_ms`, and `max_frames`.
+It retains observation status, elapsed time, heartbeat, opaque session ID, and top
+saved counters. Its exact `evidence` object has `status: active|ended`, nullable
+cap-only `stop_reason`, frozen-on-end `elapsed_ms`, finite `max_duration_ms`,
+`max_frames`, `max_bytes`, and matching `recorded_frames`/`recorded_bytes`.
+Limits remain at most 600000ms/1200 frames and exactly 1073741824 bytes. Disk closure
+can precede the byte maximum when the next PNG would not fit. Terminal observation
+may retain an earlier active evidence receipt, but neither is then current.
+
+Sustained `elapsed_ms` is the original owner-monotonic sample, not that sample
+plus wall-clock receipt age. On Windows those clocks can have different tick
+granularities; interpolating UTC age can manufacture a backward elapsed counter
+at the next valid heartbeat and falsely retire the owner. Receipt freshness and
+the non-renewable monotonic heartbeat deadline remain independent and unchanged.
+
+Only the current approved owner's bounded stdout pipe can submit sustained typed
+events through ManualSessionFeed's existing source/instance/activity/DTO guards;
+its capped diagnostic JSONL is never a live feed or replay source. Recorder-budget
+closure does not authorize new evidence, change source, renew a five-second field
+lease, or relax the three-second receipt / 2500ms capture heartbeat. Terminal and
+stale receipts remain tombstoned; GET remains passive. Numeric scheduling combines
+Pot and one physical-seat stack where supported, repeats Board captures for actual
+consensus, and prioritizes numeric refresh using measured job cost. It never merges
+unrelated generations or promises simultaneously current stacks at every seat.
+
+The explicit automatic mode now reads the selected window's current unobscured
+desktop rectangle using a synchronous GDI screen copy. It does not ask the client
+to paint, send input, change focus/geometry, use disk PNGs, or restamp a WGC surface.
+Window identity, visibility, Z-order obstruction and rectangle equality are checked
+before/after the copy; an obscured/moved/lost source stops rather than switches.
+Private native stderr records the capture backend. Each saved frame and model job
+retains its original capture-call UTC/monotonic stamp and five-second lease. Manual
+and ordinary platform capture retain WGC and its compositor-timestamp checks.
+
+Automatic readout scheduling compares the existing trained readout regions
+independently; inference still receives original, unmasked pixels. Activity's two
+baseline/two changed witnesses must refer to the same exact-current region within
+the original freshness interval and source epoch. Missing witnesses never renew a
+baseline. Source/scope/geometry changes still invalidate the source; cosmetic pixel
+changes outside a field do not make that field's unchanged pixels obsolete.
+
+The private schema-2 `partial_observation_invalidated` event contains `reason`,
+the exact originally published `observation` ticket, its `generation`, `epoch`,
+`identity`, optional original `captured_at_unix_ms`, and current emission time.
+It contains no values or renewed lease. Without `fields`, it clears only the
+matching published partial. An optional nonempty `fields` list names exact removed
+verified fields from the closed field allowlist; only those values and their
+dependent display aggregates are cleared. Unchanged fields retain the original
+ticket, capture timestamps, expiry, and remaining lease. Empty, duplicate, or unknown
+field lists are invalid. Recognized fields already cleared or withheld by consumer
+projection are ignored; they must not prevent invalidating other admitted fields
+in the same list. An invalidation cannot add values or make the old source admissible
+again. Complete source/core loss still clears the bundle. Publication-only expiry
+uses the original publication ticket with `observation-expired` and no `fields`;
+it does not tombstone a newer worker ticket or renew any candidate's original budget.
+Capture-health version remains monotonic, an older publication cannot
+tombstone a newer in-flight result, and the invalidated original source cannot be
+replayed under another generation. Foreign, malformed, mismatched or delayed scoped
+events cannot clear a newer packet. Existing global `observation_invalidated`
+retains its whole-generation/source veto. The public `/api/state` shape is unchanged.
+
+The real corrected trial produced three private `perception_diagnostics` and three
+`discarded` events: two decision-deadline-exceeded and one obsolete-observation.
+DashboardState retained original source provenance but did not admit expired values;
+the browser displayed stopped/cleared readings and the actual recorder receipt.
+These rejection events verify transport, not live reading accuracy or activation.
 
 Implemented2026-10-10: independently leased `partial_observation` bundles use
 nullable phase/board slots/count/pot and six explicit physical seats1..6, separate

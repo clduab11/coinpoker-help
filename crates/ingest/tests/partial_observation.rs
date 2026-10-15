@@ -774,6 +774,171 @@ fn source_region_witnesses_bind_original_zero_frame_once_and_never_enter_public_
 }
 
 #[test]
+fn current_activity_witnesses_are_independent_and_never_tolerate_changed_field_pixels() {
+    use ingest::capture::Frame;
+    use ingest::laya::geometry::TABLE_READOUT_REGIONS;
+    let original = Frame::new(800, 613, vec![64; 800 * 613 * 4]).unwrap();
+    let mut candidate = assemble(&scripts(), None).0.unwrap();
+    assert!(candidate.table_content_witness(&original).is_none());
+    candidate.bind_source_frame(&original).unwrap();
+    let baseline = candidate.table_content_witness(&original).unwrap();
+    let mut cosmetic = original.clone();
+    cosmetic.rgba[0] = 255;
+    let witness = candidate.table_content_witness(&cosmetic).unwrap();
+    assert!((0..12).all(|index| witness.same_region(&baseline, index)));
+    candidate.retain_source_current_fields(&cosmetic);
+    assert!(candidate.view.role.is_none() && candidate.view.game_phase.is_none());
+    assert_eq!(candidate.view.pot_size, Some(1050));
+    for (changed, region) in TABLE_READOUT_REGIONS.into_iter().enumerate() {
+        let mut latest = original.clone();
+        let (x, y, _, _) = ingest::laya::geometry::region_px(region, 800, 613).unwrap();
+        latest.rgba[(y * 800 + x) as usize * 4] += 1;
+        let witness = candidate.table_content_witness(&latest).unwrap();
+        assert!(!witness.has_current_region(changed));
+        assert!(!witness.same_region(&baseline, changed));
+        assert!((0..12)
+            .filter(|index| *index != changed)
+            .all(|index| witness.same_region(&baseline, index)));
+    }
+    let different = Frame::new(800, 613, vec![65; 800 * 613 * 4]).unwrap();
+    assert!(candidate.table_content_witness(&different).is_none());
+    let resized = Frame::new(801, 613, vec![64; 801 * 613 * 4]).unwrap();
+    assert!(candidate.table_content_witness(&resized).is_none());
+}
+
+#[test]
+fn original_and_current_occlusion_masks_reject_equal_crop_hashes_independently() {
+    use ingest::capture::{Frame, FrameReadability};
+    let clear = Frame::new(800, 613, vec![64; 800 * 613 * 4]).unwrap();
+    let (a, b, c, d) = ingest::laya::geometry::region_px("seat_1_stack", 800, 613).unwrap();
+    let mut covered = clear.clone();
+    covered.visibility.readability = FrameReadability::Regional;
+    covered.visibility.occluded_regions = vec![[a, b, c, d]];
+    assert_eq!(clear.rgba, covered.rgba);
+    for (original, latest) in [(&covered, &covered), (&covered, &clear), (&clear, &covered)] {
+        let mut candidate = assemble(&scripts(), None).0.unwrap();
+        candidate.bind_source_frame(original).unwrap();
+        let witness = candidate.table_content_witness(latest).unwrap();
+        assert!(!witness.has_current_region(6));
+        assert!(witness.has_current_region(5) && witness.has_current_region(7));
+        assert!(candidate.retain_source_current_fields(latest));
+        assert!(candidate.view.seats[0].displayed_stack.is_none());
+        assert!(candidate.view.seats[0].displayed_stack_text.is_none());
+        assert!(candidate.view.seats[0].occupied.is_none());
+        assert!(candidate.view.role.is_none() && candidate.view.hero_seated.is_none());
+        assert_eq!(candidate.view.pot_size, Some(1050));
+        assert!(candidate.view.seats[1].displayed_stack.is_some());
+        assert!(candidate
+            .evidence
+            .iter()
+            .any(|field| field.field == FieldName::DisplayedStack
+                && field.seat == Some(1)
+                && field.admission_reason == DiagnosticReason::Occluded));
+        assert!(candidate.retain_source_current_fields(&clear));
+        assert!(
+            candidate.view.seats[0].displayed_stack.is_none(),
+            "no re-authoring the covered original"
+        );
+    }
+}
+
+#[test]
+fn queued_original_capture_receipt_is_carried_without_latest_frame_substitution_or_lease_renewal() {
+    use ingest::capture::Frame;
+    use ingest::recorder::{CaptureStamp, PrivateRecorder, RecorderConfig};
+    use std::fs;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let root = std::env::temp_dir().join(format!(
+        "coinpoker-original-receipt-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let mut recorder =
+        PrivateRecorder::new(&root, RecorderConfig::default(), SystemTime::now()).unwrap();
+    let session = recorder
+        .session_path()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let stamp = |ms| CaptureStamp {
+        source_utc: UNIX_EPOCH + Duration::from_millis(1_791_642_000_000 + ms),
+        captured_at_monotonic_ms: ms,
+        generation: None,
+        source_id: Some(u64::MAX),
+    };
+    let mut original = Frame::new(800, 613, vec![64; 800 * 613 * 4]).unwrap();
+    let first = recorder.live_frame(&original, stamp(100), 11).unwrap();
+    original.original_capture = Some(first.original_capture(session.clone()));
+    let mut candidate = assemble(&scripts(), None).0.unwrap();
+    candidate.bind_source_frame(&original).unwrap();
+    let bound = candidate.view.original_capture.clone().unwrap();
+    let mut latest = original.clone();
+    latest.original_capture = Some(
+        recorder
+            .live_frame(&latest, stamp(200), 12)
+            .unwrap()
+            .original_capture(session),
+    );
+    assert!(candidate.retain_source_current_fields(&latest));
+    assert_eq!(candidate.view.original_capture.as_ref(), Some(&bound));
+    assert_eq!(bound.captured_at_monotonic_ms, 100);
+    assert_eq!(bound.frame_index, 11);
+    assert_eq!(
+        bound.sha256,
+        latest.original_capture.as_ref().unwrap().sha256
+    );
+    assert_eq!(
+        bound.native_source_id.as_deref(),
+        Some("18446744073709551615")
+    );
+    let mut next = assemble(&scripts(), None).0.unwrap();
+    next.bind_source_frame(&latest).unwrap();
+    assert_eq!(next.view.original_capture, latest.original_capture);
+    let wire = serde_json::to_value(next.view).unwrap();
+    assert_eq!(wire["original_capture"]["frame_index"], 12);
+    assert_eq!(wire["original_capture"]["captured_at_monotonic_ms"], 200);
+    assert_eq!(
+        wire["original_capture"]["native_source_id"],
+        "18446744073709551615"
+    );
+    for private in ["filename", "hwnd", "window_class", "exe_name", "title"] {
+        assert!(wire["original_capture"].get(private).is_none());
+    }
+    latest.original_capture.as_mut().unwrap().width += 1;
+    assert!(latest.validate().is_err());
+}
+
+#[test]
+fn covered_board_is_unknown_not_gameplay_clear_and_global_unreadable_stays_rejected() {
+    use ingest::capture::{Frame, FrameReadability};
+    let mut frame = Frame::new(800, 613, vec![64; 800 * 613 * 4]).unwrap();
+    frame.visibility.readability = FrameReadability::Regional;
+    let (a, b, c, d) = ingest::laya::geometry::region_px("board_slot_1", 800, 613).unwrap();
+    frame.visibility.occluded_regions = vec![[a, b, c, d]];
+    let mut candidate = assemble(&scripts(), None).0.unwrap();
+    candidate.bind_source_frame(&frame).unwrap();
+    assert!(candidate.retain_source_current_fields(&frame));
+    assert!(candidate.view.board_slots[0].is_none() && candidate.view.board_count.is_none());
+    assert!(candidate.view.game_phase.is_none() && candidate.view.board_slots[1].is_some());
+    assert_eq!(candidate.view.pot_size, Some(1050));
+    let mut passes = scripts();
+    passes
+        .get_mut("p0_full")
+        .unwrap()
+        .answers
+        .insert("ev_readable".into(), flag(false));
+    let (candidate, _, calls) = assemble(&passes, None);
+    assert!(candidate.is_none_or(|candidate| !candidate.core_accepted()));
+    assert_eq!(calls, ["p0_full"]);
+}
+
+#[test]
 fn board_source_region_change_clears_only_changed_slot_and_dependent_count_phase() {
     use ingest::capture::Frame;
     let zero = Frame::new(800, 613, vec![0; 800 * 613 * 4]).unwrap();

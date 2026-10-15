@@ -1,13 +1,13 @@
 //! Opt-in private PNG evidence, independent of inference and publication leases.
 //!
 //! Only new `ROOT/.local/captures/utc-SECONDS-NANOSECONDS-practice` sessions are
-//! writable. UTC names use the Unix epoch, not local time. No cleanup, overwrite,
+//! writable. UTC names use the Unix epoch, not local time. No archival overwrite,
 //! resume, arbitrary destination, title, executable name, or player field exists.
 
 use std::collections::hash_map::RandomState;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::hash::BuildHasher;
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -16,7 +16,10 @@ use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::capture::{CaptureError, CaptureSource, DiscoverySnapshot, Frame, WindowInfo};
+use crate::capture::{
+    CaptureError, CaptureSource, DiscoverySnapshot, Frame, FrameVisibility, OriginalCapture,
+    OwnedPopup, WindowInfo, MAX_OWNED_POPUPS,
+};
 
 pub const PRIVATE_CAPTURE_DIR: &str = ".local/captures";
 pub const MAX_RECORD_FRAMES: u64 = 20_000;
@@ -65,6 +68,7 @@ impl RecorderConfig {
 pub enum RecorderStatus {
     Disabled,
     Active,
+    DurationLimit,
     CountLimit,
     DiskLimit,
     IoFailure,
@@ -141,6 +145,8 @@ pub struct ManifestFrame {
     source_id: Option<u64>,
     previous_saved_gap_ms: Option<u64>,
     estimated_missed_samples: u64,
+    #[serde(flatten)]
+    visibility: FrameVisibility,
 }
 
 pub struct PrivateRecorder {
@@ -155,6 +161,69 @@ pub struct PrivateRecorder {
     last_seen_ms: Option<u64>,
     last_recorded_ms: Option<u64>,
     last_receipt: Option<ManifestFrame>,
+    live_slots: [Option<File>; 2],
+    popup_live_slots: [[Option<File>; MAX_OWNED_POPUPS]; 2],
+}
+
+/// A bounded latest-frame mailbox, independent of the archival evidence budget.
+#[derive(Clone, Serialize)]
+pub struct LiveFrameReceipt {
+    pub frame_index: u64,
+    pub filename: String,
+    pub source_utc_unix_ms: u64,
+    pub captured_at_monotonic_ms: u64,
+    pub width: u32,
+    pub height: u32,
+    pub sha256: String,
+    pub png_bytes: u64,
+    pub source_id: Option<u64>,
+    pub archival: bool,
+    #[serde(flatten)]
+    pub visibility: FrameVisibility,
+    pub popup_frames: Vec<PopupFrameReceipt>,
+}
+
+impl LiveFrameReceipt {
+    pub fn original_capture(&self, recording_session_id: String) -> OriginalCapture {
+        OriginalCapture {
+            schema_version: 1,
+            timestamp_basis: "capture_call_start",
+            frame_index: self.frame_index,
+            recording_session_id,
+            capture_session_id: None,
+            native_source_id: self.source_id.map(|id| id.to_string()),
+            source_utc_unix_ms: self.source_utc_unix_ms,
+            captured_at_monotonic_ms: self.captured_at_monotonic_ms,
+            width: self.width,
+            height: self.height,
+            sha256: self.sha256.clone(),
+            pixel_source: self.visibility.pixel_source,
+            readability: self.visibility.readability,
+            occluded_regions: self.visibility.occluded_regions.clone(),
+        }
+    }
+}
+
+/// Actual pixels of a separate window. This is not an atomic table/profile
+/// snapshot and does not qualify a profile owner or any imported statistic.
+#[derive(Clone, Serialize)]
+pub struct PopupFrameReceipt {
+    pub parent_frame_index: u64,
+    pub popup_index: usize,
+    pub filename: String,
+    pub timestamp_basis: &'static str,
+    pub non_atomic: bool,
+    pub source_utc_unix_ms: u64,
+    pub captured_at_monotonic_ms: u64,
+    pub width: u32,
+    pub height: u32,
+    pub sha256: String,
+    pub png_bytes: u64,
+    pub source_id: Option<u64>,
+    pub archival: bool,
+    pub window: OwnedPopup,
+    #[serde(flatten)]
+    pub visibility: FrameVisibility,
 }
 
 fn unavailable() -> io::Error {
@@ -286,6 +355,8 @@ impl PrivateRecorder {
             last_seen_ms: None,
             last_recorded_ms: None,
             last_receipt: None,
+            live_slots: [None, None],
+            popup_live_slots: std::array::from_fn(|_| std::array::from_fn(|_| None)),
         })
     }
 
@@ -300,6 +371,164 @@ impl PrivateRecorder {
 
     pub fn last_receipt(&self) -> Option<&ManifestFrame> {
         self.last_receipt.as_ref()
+    }
+
+    /// Caller must use this only immediately after acknowledging this frame.
+    pub fn original_capture(&self) -> Option<OriginalCapture> {
+        let saved = self.last_receipt.as_ref()?;
+        Some(OriginalCapture {
+            schema_version: 1,
+            timestamp_basis: saved.timestamp_basis,
+            frame_index: saved.frame_index,
+            recording_session_id: self.session.file_name()?.to_str()?.to_owned(),
+            capture_session_id: None,
+            native_source_id: saved.source_id.map(|id| id.to_string()),
+            source_utc_unix_ms: saved.source_utc_unix_ms,
+            captured_at_monotonic_ms: saved.captured_at_monotonic_ms,
+            width: saved.width,
+            height: saved.height,
+            sha256: saved.sha256.clone(),
+            pixel_source: saved.visibility.pixel_source,
+            readability: saved.visibility.readability,
+            occluded_regions: saved.visibility.occluded_regions.clone(),
+        })
+    }
+
+    pub fn live_frame(
+        &mut self,
+        frame: &Frame,
+        stamp: CaptureStamp,
+        frame_index: u64,
+    ) -> io::Result<LiveFrameReceipt> {
+        frame.validate().map_err(|_| unavailable())?;
+        let captured = stamp
+            .source_utc
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| unavailable())?;
+        let captured = u64::try_from(captured.as_millis()).map_err(|_| unavailable())?;
+        if let Some(saved) = self.last_receipt.as_ref().filter(|saved| {
+            saved.captured_at_monotonic_ms == stamp.captured_at_monotonic_ms
+                && saved.source_utc_unix_ms == captured
+                && saved.source_id == stamp.source_id
+                && saved.width == frame.width
+                && saved.height == frame.height
+                && saved.visibility == frame.visibility
+        }) {
+            return Ok(LiveFrameReceipt {
+                frame_index,
+                filename: format!("frame-{:010}.png", saved.frame_index),
+                source_utc_unix_ms: captured,
+                captured_at_monotonic_ms: stamp.captured_at_monotonic_ms,
+                width: saved.width,
+                height: saved.height,
+                sha256: saved.sha256.clone(),
+                png_bytes: saved.png_bytes,
+                source_id: stamp.source_id,
+                archival: true,
+                visibility: saved.visibility.clone(),
+                popup_frames: Vec::new(),
+            });
+        }
+        frame.validate().map_err(|_| unavailable())?;
+        if frame.width == 0 || frame.height == 0 || frame.rgba.len() > MAX_RGBA_BYTES {
+            return Err(unavailable());
+        }
+        let mut encoded = BoundedHashWriter::new(Vec::new(), MAX_PNG_BYTES);
+        encode(frame, &mut encoded).map_err(|_| unavailable())?;
+        let hash = format!("{:x}", encoded.hasher.clone().finalize());
+        let bytes = encoded.bytes;
+        let slot = (frame_index % 2) as usize;
+        let filename = format!("live-frame-{slot}.png");
+        if self.live_slots[slot].is_none() {
+            self.live_slots[slot] = Some(create_file(&self.session.join(&filename), false)?);
+        }
+        let file = self.live_slots[slot].as_mut().ok_or_else(unavailable)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&encoded.inner)?;
+        file.set_len(bytes)?;
+        file.sync_all()?;
+        Ok(LiveFrameReceipt {
+            frame_index,
+            filename,
+            source_utc_unix_ms: captured,
+            captured_at_monotonic_ms: stamp.captured_at_monotonic_ms,
+            width: frame.width,
+            height: frame.height,
+            sha256: hash,
+            png_bytes: bytes,
+            source_id: stamp.source_id,
+            archival: false,
+            visibility: frame.visibility.clone(),
+            popup_frames: Vec::new(),
+        })
+    }
+
+    pub fn live_frame_with_popups(
+        &mut self,
+        frame: &Frame,
+        stamp: CaptureStamp,
+        frame_index: u64,
+        capture_started: Instant,
+    ) -> io::Result<LiveFrameReceipt> {
+        let mut receipt = self.live_frame(frame, stamp, frame_index)?;
+        let slot = (frame_index % 2) as usize;
+        for (index, popup) in frame.popup_frames.iter().enumerate() {
+            let elapsed = popup
+                .started
+                .checked_duration_since(capture_started)
+                .ok_or_else(unavailable)?;
+            let captured_at_monotonic_ms = stamp
+                .captured_at_monotonic_ms
+                .checked_add(u64::try_from(elapsed.as_millis()).map_err(|_| unavailable())?)
+                .ok_or_else(unavailable)?;
+            if popup.source_utc_unix_ms < receipt.source_utc_unix_ms
+                || popup.started > Instant::now()
+                || popup.frame.rgba.len() > MAX_RGBA_BYTES
+            {
+                return Err(unavailable());
+            }
+            let mut encoded = BoundedHashWriter::new(Vec::new(), MAX_PNG_BYTES);
+            encode(&popup.frame, &mut encoded).map_err(|_| unavailable())?;
+            let sha256 = format!("{:x}", encoded.hasher.clone().finalize());
+            let filename = format!("live-popup-{slot}-{index}.png");
+            if self.popup_live_slots[slot][index].is_none() {
+                self.popup_live_slots[slot][index] =
+                    Some(create_file(&self.session.join(&filename), false)?);
+            }
+            let file = self.popup_live_slots[slot][index]
+                .as_mut()
+                .ok_or_else(unavailable)?;
+            file.seek(SeekFrom::Start(0))?;
+            file.write_all(&encoded.inner)?;
+            file.set_len(encoded.bytes)?;
+            file.sync_all()?;
+            receipt.popup_frames.push(PopupFrameReceipt {
+                parent_frame_index: frame_index,
+                popup_index: index,
+                filename,
+                timestamp_basis: "popup_desktop_copy_start",
+                non_atomic: true,
+                source_utc_unix_ms: popup.source_utc_unix_ms,
+                captured_at_monotonic_ms,
+                width: popup.frame.width,
+                height: popup.frame.height,
+                sha256,
+                png_bytes: encoded.bytes,
+                source_id: stamp.source_id,
+                archival: false,
+                window: popup.window.clone(),
+                visibility: popup.frame.visibility.clone(),
+            });
+        }
+        Ok(receipt)
+    }
+
+    /// Close an active evidence prefix without changing its counters or earlier end status.
+    /// The capture owner supplies the elapsed-time budget; this never resumes recording.
+    pub fn end_duration(&mut self) {
+        if self.handle.snapshot().recording_status == RecorderStatus::Active {
+            self.stop(RecorderStatus::DurationLimit);
+        }
     }
 
     fn stop(&self, status: RecorderStatus) {
@@ -371,9 +600,9 @@ impl PrivateRecorder {
             .and_then(|time| u64::try_from(time.as_millis()).ok())
             .ok_or(RecorderStatus::IoFailure)?;
         let remaining = self.config.max_bytes - self.handle.snapshot().recorded_bytes;
-        // Measure/hash into a sink first. A disk cap never creates an oversized
-        // orphan, and streaming avoids an extra full PNG/RGBA buffer or queue.
-        let mut probe = BoundedHashWriter::new(io::sink(), remaining.min(MAX_PNG_BYTES));
+        // Encode once into a bounded, call-local buffer. Budget checks still
+        // precede file creation; neither pixels nor this PNG are queued.
+        let mut probe = BoundedHashWriter::new(Vec::new(), remaining.min(MAX_PNG_BYTES));
         if encode(frame, &mut probe).is_err() {
             return Err(if probe.limit_hit {
                 RecorderStatus::DiskLimit
@@ -402,6 +631,7 @@ impl PrivateRecorder {
                 ((stamp.captured_at_monotonic_ms - last) / self.config.interval_ms)
                     .saturating_sub(1)
             }),
+            visibility: frame.visibility.clone(),
         };
         let mut line = serde_json::to_vec(&row).map_err(io_failure)?;
         line.push(b'\n');
@@ -430,7 +660,7 @@ impl PrivateRecorder {
         )
         .map_err(io_failure)?;
         let mut writer = BoundedHashWriter::new(file, probe.bytes);
-        encode(frame, &mut writer).map_err(io_failure)?;
+        writer.write_all(&probe.inner).map_err(io_failure)?;
         writer.flush().map_err(io_failure)?;
         writer.inner.sync_all().map_err(io_failure)?;
         if writer.bytes != probe.bytes || format!("{:x}", writer.hasher.finalize()) != hash {
@@ -592,9 +822,12 @@ mod tests {
             .unwrap()
             .parent()
             .unwrap();
+        let fixtures =
+            root.join(".local/laya/train/manual-inference-20261012/native/recorder-fixtures");
+        fs::create_dir_all(&fixtures).unwrap();
         tempfile::Builder::new()
             .prefix("recorder-b-synthetic-")
-            .tempdir_in(root.join(".local/laya/train/checkpoint-b-20261010"))
+            .tempdir_in(fixtures)
             .unwrap()
     }
 
@@ -617,6 +850,208 @@ mod tests {
 
     fn recorder(root: &tempfile::TempDir, config: RecorderConfig) -> PrivateRecorder {
         PrivateRecorder::new(root.path(), config, utc()).unwrap()
+    }
+
+    #[test]
+    fn single_encode_preserves_original_png_bytes_hash_pixels_and_budget() {
+        let root = temp_root();
+        let mut recorder = recorder(&root, RecorderConfig::default());
+        let pixels = (0..(640 * 480))
+            .flat_map(|i| {
+                [
+                    (i % 256) as u8,
+                    ((i / 640) % 256) as u8,
+                    (i % 73) as u8,
+                    255,
+                ]
+            })
+            .collect::<Vec<_>>();
+        let image = Frame::new(640, 480, pixels).unwrap();
+        let mut upstream = Vec::new();
+        encode(&image, &mut upstream).unwrap();
+        recorder.record(&image, stamp(0));
+        let receipt = recorder.last_receipt().unwrap();
+        let stored = fs::read(recorder.session.join("frame-0000000001.png")).unwrap();
+        assert_eq!(stored, upstream);
+        assert_eq!(receipt.sha256, format!("{:x}", Sha256::digest(&upstream)));
+        assert_eq!(receipt.png_bytes, upstream.len() as u64);
+        assert_eq!(
+            image::load_from_memory(&stored)
+                .unwrap()
+                .to_rgba8()
+                .as_raw(),
+            &image.rgba
+        );
+        let manifest_bytes = fs::metadata(recorder.session.join("manifest.jsonl"))
+            .unwrap()
+            .len();
+        assert_eq!(
+            recorder.handle().snapshot().recorded_bytes,
+            stored.len() as u64 + manifest_bytes
+        );
+    }
+
+    #[test]
+    fn live_mailbox_reuses_archival_png_without_reencoding_or_changing_budget() {
+        let root = temp_root();
+        let mut recorder = recorder(&root, RecorderConfig::default());
+        let image = frame();
+        recorder.record(&image, stamp(10));
+        let before = recorder.handle().snapshot();
+        let preview = recorder.live_frame(&image, stamp(10), 1).unwrap();
+        let saved = recorder.last_receipt().unwrap();
+        assert!(preview.archival);
+        assert_eq!(preview.sha256, saved.sha256);
+        assert_eq!(preview.source_utc_unix_ms, saved.source_utc_unix_ms);
+        assert_eq!(preview.captured_at_monotonic_ms, 10);
+        assert_eq!(recorder.handle().snapshot(), before);
+        assert!(recorder.live_slots.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn popup_mask_and_separate_pixels_have_original_non_atomic_receipts_without_compositing() {
+        use crate::capture::{CapturedPopup, FrameReadability, PixelSource};
+        let root = temp_root();
+        let mut recorder = recorder(
+            &root,
+            RecorderConfig {
+                max_frames: 1,
+                ..RecorderConfig::default()
+            },
+        );
+        let started = Instant::now() - Duration::from_secs(1);
+        let window = OwnedPopup {
+            hwnd: 20,
+            owner_hwnd: 10,
+            root_owner_hwnd: 10,
+            process_id: 42,
+            process_created_at_100ns: 100,
+            window_class: "tooltips_class32".into(),
+            relative_bounds: [1, 0, 3, 2],
+        };
+        let mut image = frame();
+        image.visibility = FrameVisibility {
+            pixel_source: PixelSource::VisibleDesktopPixels,
+            source_process_created_at_100ns: Some(100),
+            readability: FrameReadability::Regional,
+            occluded_regions: vec![[1, 0, 2, 2]],
+            owned_popups: vec![window.clone()],
+        };
+        let mut pixels = Frame::new(2, 2, [90, 12, 34, 255].repeat(4)).unwrap();
+        pixels.visibility.pixel_source = PixelSource::VisibleDesktopPixels;
+        pixels.visibility.source_process_created_at_100ns = Some(100);
+        image.popup_frames.push(CapturedPopup {
+            window,
+            frame: Box::new(pixels.clone()),
+            started: started + Duration::from_millis(25),
+            source_utc_unix_ms: 1_791_642_000_025,
+        });
+        recorder.record(&image, stamp(100));
+        let before = recorder.handle().snapshot();
+        let receipt = recorder
+            .live_frame_with_popups(&image, stamp(100), 1, started)
+            .unwrap();
+        assert!(receipt.archival);
+        assert_eq!(receipt.visibility, image.visibility);
+        let popup = &receipt.popup_frames[0];
+        assert!(!popup.archival && popup.non_atomic);
+        assert_eq!(popup.parent_frame_index, 1);
+        assert_eq!(popup.source_utc_unix_ms, 1_791_642_000_025);
+        assert_eq!(popup.captured_at_monotonic_ms, 125);
+        let bytes = fs::read(recorder.session.join(&popup.filename)).unwrap();
+        assert_eq!(popup.sha256, format!("{:x}", Sha256::digest(&bytes)));
+        assert_eq!(
+            image::load_from_memory(&bytes).unwrap().to_rgba8().as_raw(),
+            &pixels.rgba
+        );
+        let table = fs::read(recorder.session.join(&receipt.filename)).unwrap();
+        assert_eq!(
+            image::load_from_memory(&table).unwrap().to_rgba8().as_raw(),
+            &image.rgba
+        );
+        assert_eq!(
+            recorder.handle().snapshot(),
+            before,
+            "mailbox is not extra archival budget"
+        );
+        let row = &rows(&recorder)[0];
+        assert_eq!(row["pixel_source"], "visible_desktop_pixels");
+        assert_eq!(row["occluded_regions"], serde_json::json!([[1, 0, 2, 2]]));
+        assert_eq!(
+            row["owned_popups"][0]["relative_bounds"],
+            serde_json::json!([1, 0, 3, 2])
+        );
+        let wire = serde_json::to_value(receipt).unwrap();
+        assert_eq!(
+            wire["popup_frames"][0]["timestamp_basis"],
+            "popup_desktop_copy_start"
+        );
+        assert_eq!(wire["popup_frames"][0]["source_id"], 42);
+        assert!(wire.get("profile_qualified").is_none());
+    }
+
+    #[test]
+    fn changed_visibility_same_stamp_does_not_reuse_old_archival_mask() {
+        use crate::capture::FrameReadability;
+        let root = temp_root();
+        let mut recorder = recorder(&root, RecorderConfig::default());
+        let clear = frame();
+        recorder.record(&clear, stamp(100));
+        let mut covered = clear;
+        covered.visibility.readability = FrameReadability::Regional;
+        covered.visibility.occluded_regions = vec![[0, 0, 1, 1]];
+        let receipt = recorder.live_frame(&covered, stamp(100), 2).unwrap();
+        assert!(!receipt.archival);
+        assert_eq!(receipt.visibility, covered.visibility);
+        assert_eq!(
+            recorder.last_receipt().unwrap().visibility.readability,
+            FrameReadability::Full
+        );
+    }
+
+    #[test]
+    fn live_mailbox_after_cap_keeps_only_two_owned_slots_and_original_stamps() {
+        let root = temp_root();
+        let mut recorder = recorder(
+            &root,
+            RecorderConfig {
+                max_frames: 1,
+                ..RecorderConfig::default()
+            },
+        );
+        recorder.record(&frame(), stamp(0));
+        recorder.record(&frame(), stamp(500));
+        let before = recorder.handle().snapshot();
+        let manifest = fs::read(recorder.session.join("manifest.jsonl")).unwrap();
+        for index in 2..8 {
+            let image = Frame::new(2, 2, [index as u8, 31, 73, 255].repeat(4)).unwrap();
+            let preview = recorder
+                .live_frame(&image, stamp(index * 500), index)
+                .unwrap();
+            assert!(!preview.archival);
+            assert_eq!(preview.frame_index, index);
+            assert_eq!(preview.captured_at_monotonic_ms, index * 500);
+            let bytes = fs::read(recorder.session.join(&preview.filename)).unwrap();
+            assert_eq!(preview.sha256, format!("{:x}", Sha256::digest(&bytes)));
+            assert_eq!(preview.png_bytes, bytes.len() as u64);
+        }
+        assert_eq!(recorder.handle().snapshot(), before);
+        assert_eq!(
+            fs::read(recorder.session.join("manifest.jsonl")).unwrap(),
+            manifest
+        );
+        assert!(recorder.live_slots.iter().all(Option::is_some));
+        assert_eq!(fs::read_dir(&recorder.session).unwrap().count(), 4);
+    }
+
+    #[test]
+    fn live_mailbox_never_overwrites_a_preexisting_unowned_slot() {
+        let root = temp_root();
+        let mut recorder = recorder(&root, RecorderConfig::default());
+        let path = recorder.session.join("live-frame-1.png");
+        fs::write(&path, b"unrelated synthetic contents").unwrap();
+        assert!(recorder.live_frame(&frame(), stamp(500), 1).is_err());
+        assert_eq!(fs::read(path).unwrap(), b"unrelated synthetic contents");
     }
 
     fn rows(recorder: &PrivateRecorder) -> Vec<serde_json::Value> {
@@ -733,6 +1168,49 @@ mod tests {
             image
         );
         assert!(!recorder.session.join("frame-0000000002.png").exists());
+    }
+
+    #[test]
+    fn sustained_recorder_duration_closes_one_prefix_without_rearming_or_masking_io() {
+        let root = tempfile::tempdir().unwrap();
+        let mut recorder = recorder(&root, RecorderConfig::default());
+        assert_eq!(recorder.config.max_bytes, 1_073_741_824);
+        recorder.record(&frame(), stamp(0));
+        let prefix = fs::read(recorder.session.join("manifest.jsonl")).unwrap();
+        recorder.end_duration();
+        let frozen = recorder.handle().snapshot();
+        assert_eq!(frozen.recording_status, RecorderStatus::DurationLimit);
+        assert_eq!(
+            serde_json::to_value(frozen.recording_status).unwrap(),
+            "duration_limit"
+        );
+        assert_eq!(frozen.recorded_frames, 1);
+        assert!(frozen.recording_enabled && !frozen.recording_complete);
+        for ms in [600_000, 600_500, 2_700_000] {
+            recorder.record(&frame(), stamp(ms));
+            recorder.end_duration();
+            assert_eq!(recorder.handle().snapshot(), frozen);
+        }
+        assert_eq!(
+            fs::read(recorder.session.join("manifest.jsonl")).unwrap(),
+            prefix
+        );
+        assert!(!recorder.session.join("frame-0000000002.png").exists());
+
+        for status in [
+            RecorderStatus::CountLimit,
+            RecorderStatus::DiskLimit,
+            RecorderStatus::IoFailure,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut ended =
+                PrivateRecorder::new(root.path(), RecorderConfig::default(), utc()).unwrap();
+            ended.stop(status);
+            let frozen = ended.handle().snapshot();
+            ended.end_duration();
+            ended.record(&frame(), stamp(600_000));
+            assert_eq!(ended.handle().snapshot(), frozen);
+        }
     }
 
     #[test]
@@ -891,6 +1369,7 @@ mod tests {
                 width: 0,
                 height: 0,
                 rgba: vec![],
+                ..Frame::default()
             },
             stamp(0),
         );

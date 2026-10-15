@@ -160,12 +160,11 @@ The user's position: classifier models like Laya are used for game decisions (th
   - A capture loop that calls the harness every N seconds is fine while the user leaves a table open.
   - Derived crops and synthetic training images may be written **only** under `.local/captures/<UTC>-laya-train/derived/` (gitignored).
   - Evidence files and logs contain no pixels.
-- Run Laya on the saved captures and on the live table window, read-only.
+- Run Laya inference on the saved captures and on the live table window.
 
 **Not authorized:**
 - Commits and pushes; the user commits.
 - Release or workflow changes.
-- Any client input: clicks, keys, window resizing, seating.
 - Pixels outside `.local/captures`.
 - Uploads of any kind.
 

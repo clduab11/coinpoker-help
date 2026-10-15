@@ -3,7 +3,7 @@
 ## Active Laya-only candidate
 
 **Status:** iteration-1 Gate F **FAIL**, human verification **UNVERIFIED**;
-no seated advice. The active backend is Laya, not an evaluation-only install
+no validated live seated advice. The active backend is Laya, not an evaluation-only install
 or a Gemma alternative. Reuse the completed local checkpoint
 `models/laya-vision/finetuned/20261009T190322Z-it1`, derived from
 `thaitea/laya-vision@f2fe3c12cb6d04c59d8a190250bf3fb40fc828dc`.
@@ -24,29 +24,34 @@ CC-BY-NC-SA-4.0, local-only and not redistributed. See
 
 | Surface | Canonical local address / meaning |
 | --- | --- |
-| Read-only browser | `http://127.0.0.1:18090/` |
+| Local dashboard | `http://127.0.0.1:18090/` |
 | Sanitized status/history snapshot | `http://127.0.0.1:18090/api/state` |
+| Explicit current-session stop | `POST http://127.0.0.1:18090/api/capture/stop`; exact session/service binding, no model/GPU required |
 | Model metadata | `http://127.0.0.1:18090/v1/models`, alias `coinpoker-laya-vision` |
 | Typed image/question prediction | `http://127.0.0.1:18090/v1/laya/predict` |
 
 No current chat-completions backend, remote opt-in, retired `18080`/`8080`
 product endpoint or automatic alternate-port fallback is supported. Explicit
 retired product endpoints should be configuration errors, not connections to
-an unrelated application. Host/Origin, request bounds and sanitized read-only
+an unrelated application. Host/Origin, request bounds and sanitized status
 DTO handling are follow-on test requirements, not assumed acceptance.
 
-`scripts/start-vlm.ps1 -DashboardOnly` is planned to bind the dashboard with no
-GPU/model load. Default startup asynchronously verifies, loads and warms the
-pinned model while status remains independent; predictions stay unavailable
-on loading/failed verification and do not queue concurrent GPU work. Optional
-`-LiveConfig .local/profile.json` explicitly supervises one operator-configured
-native passive feed; neither default mode starts live capture. These launcher
-and concurrency instructions remain subject to the coordinator's actual tests.
-No first-phase client capture, training or advice is implied by a healthy page.
-The native feed is capture-health only (`recording_enabled:false`,
-`recorded_frames:0`), not an image recorder. Typed `-LiveConfig` target settings
-do not forward a `--record-dir` option. Actual recorder/profile readiness stays
-pending; a frame counter alone cannot establish `COLLECTOR_READY`.
+The local full-state projection can carry genuine current native decisions as
+`experimental:true`, `quality_approved:false`, without changing the failed model
+grade. Partial/untrained fields cannot supply actionable state; R17 and all
+source/lease/legal-action checks remain. This is transport capability, not a
+live seated acceptance result. See [EVENTS_V2.md](EVENTS_V2.md).
+
+Default startup and `scripts/start-vlm.ps1 -DashboardOnly` bind the dashboard
+without GPU/model loading or capture. Explicit `-EnableInference` enables pinned
+model loading; predictions stay unavailable during loading/failed verification
+and do not queue concurrent GPU work. Manual capture requires fresh exact-source
+confirmation, not seating; explicit automatic modes use the confirmed profile.
+See [the current runbook](SEATED_DIAGNOSTIC.md). Neither page health nor an
+experimental decision is live recognition acceptance. The original first-phase
+health-only feed reported `recording_enabled:false`, `recorded_frames:0`; current
+recorder receipts distinguish attempted capture from acknowledged saved images.
+A frame counter alone cannot establish `COLLECTOR_READY`.
 
 Loaded temperature calibration (`meta.calibrated:true` in the baseline server)
 is not capability approval. Source/vendor `thresholds.calibrated:false` stays
@@ -60,8 +65,9 @@ prospective full end-to-end tests; the old nine-pass benchmark is neither a
 seated nor an end-to-end pass. Do not lower thresholds or extend freshness
 leases to reclassify this failure. See [the baseline receipt](LAYA_VISION_PHASE_A.md#7-phase-gates).
 
-The actual Practice Games development scope uses the same representation and
-guards as cash, without a validation bypass or real-money acceptance. Positive
+Current profile metadata declares `six-max-table`, not practice/cash mode.
+Both modes use the same representation and guards, without a validation bypass
+or established real-money acceptance. Positive
 real hero-card/control UI data and approved human-held-out calibration/evaluation
 are still missing. Root charts/PDF are mathematical references, not positive
 seated screenshots. Planned private bounded per-session history lives under

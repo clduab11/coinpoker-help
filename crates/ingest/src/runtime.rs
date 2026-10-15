@@ -17,6 +17,7 @@ use crate::discovery::{CaptureManager, DiscoveryConfig, DiscoveryState, TableIde
 use crate::parser::{Card, GamePhase, GameState};
 use crate::partial::{
     DiagnosticAdmission, PartialObservation, PartialObservationView, PerceptionDiagnostics,
+    TableContentWitness, VerifiedField,
 };
 use crate::screen::{
     inspect_frame, MetadataEvidence, ScreenKind, ScreenObservation, TableGate, VisualEvidence,
@@ -95,6 +96,9 @@ pub struct Ticket {
     pub generation: u64,
     pub epoch: u64,
     pub captured_at_ms: u64,
+    /// Exact source call-start UTC when supplied by a recording capture owner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captured_at_unix_ms: Option<u64>,
 }
 
 /// Shared admission predicate for live capture and local sequence evaluation.
@@ -119,6 +123,8 @@ pub fn observation_is_current(ticket: &Ticket, current: Freshness<'_>) -> bool {
 pub struct InferenceJob {
     pub ticket: Ticket,
     pub frame: Frame,
+    /// Collect current table-core witnesses for separate activity qualification.
+    pub activity_probe: bool,
     /// Source-anchored worker deadline, including time already spent capturing/queuing.
     pub deadline: Instant,
 }
@@ -383,6 +389,13 @@ impl ObservationView {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LiveEvent<T> {
+    /// Invalidates only this previously published partial, not newer in-flight work.
+    PartialObservationInvalidated {
+        ticket: Ticket,
+        reason: &'static str,
+        /// Exact removed fields from the closed allowlist; None invalidates the whole packet.
+        fields: Option<Vec<VerifiedField>>,
+    },
     Status {
         state: &'static str,
         reason: &'static str,
@@ -450,6 +463,7 @@ pub struct LiveRuntime<S: CaptureSource, W, T> {
     discovery: DiscoveryConfig,
     selected: Option<WindowInfo>,
     tracker: FrameTracker,
+    field_trackers: Vec<FrameTracker>,
     gate: TableGate,
     epoch: u64,
     generation: u64,
@@ -459,6 +473,10 @@ pub struct LiveRuntime<S: CaptureSource, W, T> {
     recommendation_deadline: Option<u64>,
     observation_deadline: Option<u64>,
     partial_candidate: Option<(Ticket, PartialObservation)>,
+    published_partial: Option<(Ticket, PartialObservation)>,
+    field_observation: bool,
+    activity_probe: bool,
+    activity_sample: Option<(Ticket, Option<TableContentWitness>)>,
     frame_geometry: Option<(u32, u32)>,
     next_health: u64,
     frame_count: u64,
@@ -467,6 +485,7 @@ pub struct LiveRuntime<S: CaptureSource, W, T> {
     last_analysis: Option<u64>,
     needs_analysis: bool,
     worker_dead: bool,
+    stopped: bool,
     worker_failures: u32,
     last_status: Option<(&'static str, &'static str, Option<TableIdentity>)>,
     last_table: Option<(GamePhase, Vec<Card>, Vec<Card>, bool)>,
@@ -485,6 +504,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
             capture: CaptureManager::new(source, discovery.clone()),
             worker,
             tracker: FrameTracker::new(config.change.clone(), config.stability.clone()),
+            field_trackers: Vec::new(),
             discovery,
             config,
             selected: None,
@@ -497,6 +517,10 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
             recommendation_deadline: None,
             observation_deadline: None,
             partial_candidate: None,
+            published_partial: None,
+            field_observation: false,
+            activity_probe: false,
+            activity_sample: None,
             frame_geometry: None,
             next_health: 0,
             frame_count: 0,
@@ -505,6 +529,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
             last_analysis: None,
             needs_analysis: true,
             worker_dead: false,
+            stopped: false,
             worker_failures: 0,
             last_status: None,
             last_table: None,
@@ -515,6 +540,10 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
     /// A caller must tick at the configured poll interval, not on inference completion.
     pub fn tick(&mut self, clock: &impl Clock) -> Vec<LiveEvent<T>> {
         let mut events = Vec::new();
+        self.activity_sample = None;
+        if self.stopped {
+            return events;
+        }
         let mut now = clock.now_ms();
         if self
             .recommendation_deadline
@@ -526,10 +555,33 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
             .observation_deadline
             .is_some_and(|deadline| now >= deadline)
         {
-            self.invalidate_observation("observation-expired", &mut events);
+            if let Some((ticket, _)) = self.published_partial.take() {
+                self.observation_deadline = None;
+                events.push(LiveEvent::PartialObservationInvalidated {
+                    ticket,
+                    reason: "observation-expired",
+                    fields: None,
+                });
+            } else {
+                self.invalidate_observation("observation-expired", &mut events);
+            }
             self.needs_analysis = true;
             self.gate.break_consensus();
-            self.partial_candidate = None;
+            // Publication expiry cannot erase a newer independent consensus seed.
+            // This tick's capture and completion still recheck its original ROIs.
+            self.partial_candidate = self.partial_candidate.take().filter(|(ticket, candidate)| {
+                self.field_observation
+                    && candidate.core_accepted()
+                    && ticket.epoch == self.epoch
+                    && self.selected.as_ref().map(WindowInfo::identity).as_ref()
+                        == Some(&ticket.identity)
+                    && now.checked_sub(ticket.captured_at_ms).is_some_and(|age| {
+                        age < self
+                            .config
+                            .max_frame_age_ms
+                            .min(self.config.decision_budget_ms)
+                    })
+            });
         }
         if now >= self.next_discovery {
             match self.capture.refresh() {
@@ -587,6 +639,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
 
         // Always observe current pixels BEFORE looking at any completed inference.
         let mut current = None;
+        let mut latest_readout_frame = None;
         let mut dimensions = None;
         let mut captured_at = None;
         let mut fresh_capture = false;
@@ -595,6 +648,10 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
             let capture_started = Instant::now();
             match self.capture.capture() {
                 Ok(frame) => {
+                    let timing = self.capture.source().last_capture_timing();
+                    let captured_at_ms = timing.map_or(captured_at_ms, |t| t.monotonic_ms);
+                    let capture_started = timing.map_or(capture_started, |t| t.started);
+                    let captured_at_unix_ms = timing.map(|t| t.utc_unix_ms);
                     now = clock.now_ms();
                     self.frame_count = self.frame_count.saturating_add(1);
                     dimensions = Some((frame.width, frame.height));
@@ -610,9 +667,33 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                         self.next_analysis = now;
                     }
                     self.frame_geometry = dimensions;
-                    let progress = self.tracker.observe(&frame, now);
+                    let progress = if self.field_observation {
+                        let regions = crate::laya::geometry::readout_tracking_frames(&frame);
+                        let mut progress = crate::change_detect::FrameProgress {
+                            changed: false,
+                            stable: false,
+                        };
+                        if let Some(regions) = regions {
+                            for (tracker, region) in self.field_trackers.iter_mut().zip(&regions) {
+                                let field = tracker.observe(region, now);
+                                progress.changed |= field.changed;
+                                progress.stable |= field.stable;
+                            }
+                        }
+                        progress
+                    } else {
+                        self.tracker.observe(&frame, now)
+                    };
                     if progress.changed {
-                        self.invalidate("frame-changed", false, &mut events);
+                        if self.field_observation {
+                            // Content changes schedule work; each original field crop
+                            // independently decides what is still current below.
+                            self.needs_analysis = true;
+                            self.gate.break_consensus();
+                            self.clear("frame-changed", &mut events);
+                        } else {
+                            self.invalidate("frame-changed", false, &mut events);
+                        }
                         self.next_analysis = now;
                         self.last_analysis = None;
                         self.status("candidate_table", "stabilizing-changed-frame", &mut events);
@@ -621,16 +702,61 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                         self.invalidate("unreadable-frame", false, &mut events);
                         self.status("unknown", "unreadable-frame", &mut events);
                     } else {
+                        if self.field_observation {
+                            self.clear("observation-only", &mut events);
+                            if let Some((_, candidate)) = &mut self.partial_candidate {
+                                candidate.retain_source_current_fields(&frame);
+                            }
+                            let invalidated =
+                                self.published_partial
+                                    .as_mut()
+                                    .and_then(|(ticket, published)| {
+                                        let fields = published.view.verified_fields.clone();
+                                        if !published.retain_source_current_fields(&frame)
+                                            || !published.core_accepted()
+                                            || published.view.verified_fields.is_empty()
+                                        {
+                                            return Some((ticket.clone(), None));
+                                        }
+                                        let removed: Vec<_> = fields
+                                            .into_iter()
+                                            .filter(|field| {
+                                                !published.view.verified_fields.contains(field)
+                                            })
+                                            .collect();
+                                        (!removed.is_empty())
+                                            .then(|| (ticket.clone(), Some(removed)))
+                                    });
+                            if let Some((ticket, fields)) = invalidated {
+                                // Survivors keep their original witness, ticket and deadline.
+                                if fields.is_none() {
+                                    self.published_partial = None;
+                                    self.observation_deadline = None;
+                                }
+                                events.push(LiveEvent::PartialObservationInvalidated {
+                                    ticket,
+                                    reason: "source-region-changed",
+                                    fields,
+                                });
+                                self.needs_analysis = true;
+                            }
+                            latest_readout_frame = Some(frame.clone());
+                        }
                         // Periodic invalidation bounds the lifetime of changes below thresholds.
                         if self.last_analysis.is_some_and(|last| {
                             now.saturating_sub(last) >= self.config.force_refresh_ms
                         }) {
-                            self.invalidate("forced-refresh", false, &mut events);
+                            if self.field_observation {
+                                self.needs_analysis = true;
+                            } else {
+                                self.invalidate("forced-refresh", false, &mut events);
+                            }
                             self.last_analysis = None;
                             self.next_analysis = now;
                         }
                         if progress.stable {
-                            current = Some((frame, captured_at_ms, capture_started));
+                            current =
+                                Some((frame, captured_at_ms, capture_started, captured_at_unix_ms));
                         }
                     }
                 }
@@ -668,7 +794,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                             generation: self.generation,
                             epoch: self.epoch,
                             now_ms: now,
-                            fresh_capture: current.is_some(),
+                            fresh_capture: current.is_some() || latest_readout_frame.is_some(),
                             max_frame_age_ms: self.config.max_frame_age_ms,
                         },
                     );
@@ -684,7 +810,9 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     self.complete(
                         completion,
                         now,
-                        current.as_ref().map(|(frame, _, _)| frame),
+                        latest_readout_frame
+                            .as_ref()
+                            .or_else(|| current.as_ref().map(|(frame, _, _, _)| frame)),
                         clock,
                         &mut events,
                     );
@@ -734,7 +862,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
         }
 
         now = clock.now_ms();
-        if let Some((frame, captured_at_ms, capture_started)) = current {
+        if let Some((frame, captured_at_ms, capture_started, captured_at_unix_ms)) = current {
             let active_current = self
                 .active
                 .as_ref()
@@ -748,6 +876,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                 if let Some(queued) = self.queued.as_mut() {
                     queued.frame = frame;
                     queued.ticket.captured_at_ms = captured_at_ms;
+                    queued.ticket.captured_at_unix_ms = captured_at_unix_ms;
                     queued.deadline = capture_started
                         + Duration::from_millis(
                             self.config.decision_budget_ms - PUBLICATION_RESERVE_MS,
@@ -760,8 +889,10 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                             generation: self.generation,
                             epoch: self.epoch,
                             captured_at_ms,
+                            captured_at_unix_ms,
                         },
                         frame,
+                        activity_probe: self.activity_probe,
                         deadline: capture_started
                             + Duration::from_millis(
                                 self.config.decision_budget_ms - PUBLICATION_RESERVE_MS,
@@ -772,7 +903,8 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
         }
         if self.active.is_none() && !self.worker_dead && self.worker_failures < MAX_WORKER_FAILURES
         {
-            if let Some(job) = self.queued.take() {
+            if let Some(mut job) = self.queued.take() {
+                job.activity_probe = self.activity_probe;
                 let ticket = job.ticket.clone();
                 match self.worker.start(job) {
                     Ok(()) => {
@@ -875,6 +1007,14 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                         }
                     }
                 }
+                let activity = if self.activity_probe {
+                    partial.as_ref().and_then(|candidate| {
+                        latest_frame.and_then(|frame| candidate.table_content_witness(frame))
+                    })
+                } else {
+                    None
+                };
+                let activity_eligible = activity.is_some();
                 // Pixel hashing cannot extend the original source lease or admit a late result.
                 let now = clock.now_ms().max(now);
                 if now.saturating_sub(completion.ticket.captured_at_ms)
@@ -916,7 +1056,47 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     self.needs_analysis = true;
                     return;
                 }
+                if diagnostics
+                    .as_ref()
+                    .is_some_and(|value| value.experimental.is_some())
+                {
+                    let current = diagnostics
+                        .as_ref()
+                        .and_then(|value| value.experimental.as_ref())
+                        .is_some_and(|proof| {
+                            metadata == MetadataEvidence::TableTitle
+                                && analysis.observation.screen_kind == ScreenKind::PokerTable
+                                && self.frame_geometry
+                                    == latest_frame.map(|frame| (frame.width, frame.height))
+                                && latest_frame.is_some_and(|frame| proof.source_matches(frame))
+                        });
+                    if let Some(mut value) = diagnostics.take() {
+                        value.set_admission(
+                            if current {
+                                DiagnosticAdmission::SourceCurrent
+                            } else {
+                                DiagnosticAdmission::ObsoleteObservation
+                            },
+                            None,
+                        );
+                        events.push(LiveEvent::PerceptionDiagnostics {
+                            ticket: completion.ticket.clone(),
+                            value,
+                            valid_for_ms: deadline.saturating_sub(now),
+                        });
+                    }
+                    // Unvalidated candidates neither seed nor clear numerical consensus,
+                    // and can never enter GameState, recommendations or action history.
+                    self.activity_sample = None;
+                    self.needs_analysis = true;
+                    self.next_analysis = now;
+                    self.status("candidate_table", "experimental-diagnostics-only", events);
+                    return;
+                }
                 let partial_pending = partial.is_some();
+                if self.activity_probe {
+                    self.activity_sample = Some((completion.ticket.clone(), activity));
+                }
                 if let Some(candidate) = partial {
                     if let Some((previous_ticket, previous)) = self.partial_candidate.as_ref() {
                         if previous_ticket.identity == completion.ticket.identity
@@ -935,6 +1115,12 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                             // No all-null packet masquerades as admitted perception.
                             if !value.verified_fields.is_empty() {
                                 self.observation_deadline = Some(deadline);
+                                if self.field_observation {
+                                    let mut published = candidate.clone();
+                                    published.view = value.clone();
+                                    self.published_partial =
+                                        Some((completion.ticket.clone(), published));
+                                }
                                 admitted_view = Some(value.clone());
                                 events.push(LiveEvent::PartialObservation {
                                     ticket: completion.ticket.clone(),
@@ -956,6 +1142,38 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                         value,
                         valid_for_ms: deadline.saturating_sub(now),
                     });
+                }
+                if self.field_observation {
+                    // This opt-in path cannot promote a partial read to GameState/advice.
+                    // A missing optional field must not clear a different current field.
+                    if !partial_pending {
+                        self.invalidate_observation("screen-not-accepted", events);
+                    }
+                    // Independently leased field lanes keep refreshing even without
+                    // activity/history qualification; no five-second lane starvation.
+                    self.needs_analysis = true;
+                    // Capture already supplied a distinct fresh frame this tick.
+                    // Do not skip it while qualifying/confirming fields: the outer
+                    // capture cadence and single worker still bound all work.
+                    self.next_analysis = if partial_pending {
+                        now
+                    } else {
+                        now.saturating_add(self.config.retry_ms)
+                    };
+                    self.status(
+                        if partial_admitted {
+                            "capturing_table"
+                        } else {
+                            "candidate_table"
+                        },
+                        if partial_admitted {
+                            "matching-partial-fields"
+                        } else {
+                            "waiting-for-field-consensus"
+                        },
+                        events,
+                    );
+                    return;
                 }
                 if let Some(reason) = strict_source_veto {
                     // Additional source veto, never a relaxation of GameState/R17 validation.
@@ -1067,6 +1285,14 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                         );
                     }
                 }
+                if self.activity_probe && activity_eligible {
+                    // The startup probe needs distinct fresh candidates even after
+                    // partial consensus. Waiting for force_refresh_ms (5 s) would
+                    // exhaust the same 5 s evidence lease. Keep the existing single
+                    // worker/latest queue and poll cadence, without preempting work.
+                    self.needs_analysis = true;
+                    self.next_analysis = now.saturating_add(self.config.poll_ms);
+                }
             }
         }
     }
@@ -1109,6 +1335,9 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
         self.epoch += 1;
         self.partial_candidate = None;
         self.queued = None;
+        for tracker in &mut self.field_trackers {
+            tracker.reset();
+        }
         self.needs_analysis = true;
         if reset_gate {
             self.gate.reset();
@@ -1128,6 +1357,7 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
     }
     fn invalidate_observation(&mut self, reason: &'static str, events: &mut Vec<LiveEvent<T>>) {
         self.observation_deadline = None;
+        self.published_partial = None;
         events.push(LiveEvent::ObservationInvalidated {
             reason,
             generation: self.generation,
@@ -1160,6 +1390,55 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
         self.needs_analysis = true;
         self.gate.break_consensus();
         self.partial_candidate = None;
+        self.published_partial = None;
+    }
+
+    pub fn source(&self) -> &S {
+        self.capture.source()
+    }
+
+    pub fn source_mut(&mut self) -> &mut S {
+        self.capture.source_mut()
+    }
+
+    /// One opt-in bounded activity probe; ordinary manual/legacy runtimes do no extra hashing.
+    pub fn enable_activity_probe(&mut self) {
+        self.activity_probe = true;
+        self.field_observation = true;
+        self.field_trackers = crate::laya::geometry::TABLE_READOUT_REGIONS
+            .iter()
+            .map(|_| FrameTracker::new(self.config.change.clone(), self.config.stability.clone()))
+            .collect();
+    }
+
+    pub fn finish_activity_probe(&mut self) {
+        self.activity_probe = false;
+        self.activity_sample = None;
+        if self.observation_deadline.is_some() {
+            self.needs_analysis = false;
+        }
+    }
+
+    pub fn take_activity_sample(&mut self) -> Option<(Ticket, Option<TableContentWitness>)> {
+        self.activity_sample.take()
+    }
+
+    /// Terminal owner stop. It invalidates all leases and queued work, never rearms,
+    /// and does not wait for or pretend to cancel already-running worker work.
+    pub fn stop(&mut self, reason: &'static str) -> Vec<LiveEvent<T>> {
+        if self.stopped {
+            return Vec::new();
+        }
+        self.stopped = true;
+        self.activity_sample = None;
+        let mut events = Vec::new();
+        self.invalidate(reason, true, &mut events);
+        self.capture.source_mut().reset();
+        self.selected = None;
+        self.tracker.reset();
+        self.last_table = None;
+        self.frame_geometry = None;
+        events
     }
 
     pub fn queued_count(&self) -> usize {
@@ -1200,6 +1479,7 @@ mod tests {
             generation,
             epoch: 1,
             captured_at_ms: 10,
+            captured_at_unix_ms: None,
         }
     }
 
@@ -1342,6 +1622,7 @@ mod tests {
                 .start(InferenceJob {
                     ticket: ticket(generation),
                     frame: Frame::new(1, 1, vec![0; 4]).unwrap(),
+                    activity_probe: false,
                     deadline: Instant::now() + Duration::from_secs(5),
                 })
                 .unwrap();
@@ -1397,6 +1678,7 @@ mod tests {
             .start(InferenceJob {
                 ticket: ticket(1),
                 frame: Frame::new(1, 1, vec![0; 4]).unwrap(),
+                activity_probe: false,
                 deadline: Instant::now(),
             })
             .unwrap();

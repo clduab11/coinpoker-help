@@ -489,6 +489,7 @@ mod tests {
             width,
             height,
             rgba: vec![value; width as usize * height as usize * 4],
+            ..Frame::default()
         }
     }
 
@@ -597,6 +598,7 @@ mod tests {
             width: 2,
             height: 2,
             rgba: vec![128; 15],
+            ..Frame::default()
         };
         let result = detector.detect(&malformed);
         assert!(result.is_changed());

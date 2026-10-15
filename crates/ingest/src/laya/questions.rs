@@ -50,6 +50,7 @@ impl Layout {
 pub enum Calibration {
     Trained,
     UntrainedProvisional,
+    Uncalibrated,
     Calibrated,
 }
 

@@ -50,7 +50,7 @@ verification **UNVERIFIED**, and source/vendor `calibrated:false`. See
 
 Current service/browser target: `http://127.0.0.1:18090/`, with `/v1/models`
 (alias `coinpoker-laya-vision`) and `/v1/laya/predict` on the same loopback
-listener. The read-only dashboard and launcher follow-on are subject to
+listener. The dashboard and launcher are subject to
 implementation tests, not accepted live guidance. Release packaging currently
 omits the Laya server/support path and
 the user's local fine-tuned weights; no packaging change is claimed here.

@@ -1,7 +1,7 @@
 # Laya Vision Prototype — Phase A Design (Question Set + Calibration Corpus)
 
 Current status: Laya-only iteration-1 checkpoint installed/trained; **Gate F
-FAIL**, human verification **UNVERIFIED**, no seated advice. The current model
+FAIL**, human verification **UNVERIFIED**, no validated live seated advice. The current model
 is `models/laya-vision/finetuned/20261009T190322Z-it1`, served locally under
 alias `coinpoker-laya-vision` at `http://127.0.0.1:18090/`, with `/v1/models`
 and `/v1/laya/predict`. It is not evaluation-only; Gemma is not the default or
@@ -12,7 +12,13 @@ install instructions or pending tasks to repeat. The Phase A structure was
 complete with human annotation pending at that point. Subsequent wiring,
 download, iteration-1 training, dumps, calibration, scoring and verification
 already happened. Reuse them; no redownload or retraining is needed for the
-read-only dashboard phase. A fresh install lacks the user's local derivative.
+dashboard phase. A fresh install lacks the user's local derivative.
+
+The 2026-10-13 local integration adds exact-source-only manual confirmation,
+session-bound **Stop capture**, and experimental full-native-state analysis with
+`quality_approved:false`. It does not upgrade the model grade or its R17-limited
+hero/control capabilities. See [the current contract](EVENTS_V2.md) and
+[runbook](SEATED_DIAGNOSTIC.md); dated verification below remains historical.
 
 ## 1. Historical motivation
 
@@ -230,7 +236,9 @@ current. These are existing answers, not new model diagnostics or accuracy claim
 Positive physical-seat1 wager images exist; actual seated hero/control positives
 remain unestablished. All review labels stay DRAFT / human PENDING; Gate F FAIL.
 
-Capture-only requires fresh exact-source confirmation and `I am seated and ready`.
+Current capture-only confirmation supersedes this checkpoint's seating assertion:
+only the exact PID/HWND/nonce challenge and 30-second identity recheck are required.
+This later change is not covered by the 2026-10-11 test counts below.
 It stops at600s or1200savedframes, supports Ctrl+C/session stop, retains private
 source-time/hash/gap receipts and draft incorrect/missing/opportunity markers.
 Twenty repeated frames are not20opportunities; summary reports unmet distinct target.
@@ -279,10 +287,6 @@ held-out and late, with separate train/calibration and field/seat/size/sequence
 quotas, capped at80 segments/2400 selected frames. Quotas are minima, not proof
 of unchanged quality targets or permission to collect.
 
-Current official policy (maxAge0/HTTP200; updated25June2026) establishes no
-practice/observing/anonymity exemption for gameplay-connected tracking/assistance.
-Use offline existing or provider-supplied/explicitly approved genuine data;
-provider clarification and separate user approval gate any later live route.
 Synthetic tests are not recognition evidence. No new session/input/capture,
 restart, inference, GPU work, fitting/lowered floors, activation or application
 UI change was performed. STOP for human review: GateF historicalFAIL,
@@ -347,14 +351,12 @@ publish/render remain unmeasured. Audit-time capture was unavailable. It1 protec
 data/historical scores rechecked unchanged, exit 0. Gate F FAIL, human UNVERIFIED
 and suggestions OFF remain. Stage 2 needs explicit approval; observing session,
 seated data, human labels and GPU training remain separately gated.
-[CoinPoker's tools policy](https://coinpoker.com/third-party-tools) creates a separate
-live-use risk: practice/observing/anonymity is not a documented exemption.
 
 ### Practice dashboard infrastructure: verified 2026-10-10
 
 The separate follow-on implementation is complete through software/dashboard/feed/
 history infrastructure, not seated data or live advice acceptance. Browser and
-model API share **http://127.0.0.1:18090/**; the page is read-only. No actual
+model API shared **http://127.0.0.1:18090/**; the page was read-only at this checkpoint. No actual
 client capture or plays were performed by this validation.
 
 - 397 Rust tests passed (1 ignored), including 32 pure observer tests; 53 Python
@@ -444,13 +446,15 @@ and readiness-plan Addendum 10. Final read-only audit at `22:29:53.468Z`
 reproduced all four scores, checked the exact agent-reviewed frame filter, and
 confirmed protected data hashes and source/vendor `calibrated:false` unchanged.
 
-### Active follow-on: dashboard/history first, baseline still FAIL
+### Historical dashboard/history plan (2026-10-10), baseline still FAIL
 
 The historical stop above records the iteration-1 closeout; it does not claim
-that the approved 2026-10-10 dashboard/history follow-on has been tested.
+that the approved 2026-10-10 dashboard/history follow-on had been tested. The
+following first-phase design is historical, superseded by the current contract
+linked above for source confirmation, capture stop and experimental analysis.
 The work targets actual Practice Games with practice chips in this same repo,
 representation and mechanism as cash, without a bypass or real-money acceptance.
-First-phase browser/feed/ledger infrastructure remains no-advice; model health,
+First-phase browser/feed/ledger infrastructure was no-advice; model health,
 schema validity and fresh timestamps do not certify perception quality.
 
 On the 66 agent-reviewed frames, raw board accuracy was `307/330 = 93.03%`,
@@ -478,14 +482,15 @@ Current native feed is capture-health only: `recording_enabled:false`,
 `.local/laya/dataset/capture_loop.py` belongs to a later manual-data checkpoint,
 not an automatic first-phase capture job.
 
-The browser cannot start/stop capture, seat/play or trigger training. Bounded
+That first-phase browser had no capture, poker-input or training controls. Bounded
 per-session history lives privately under `.local/` with opaque IDs,
 unknowns and gaps, not public names or cross-session identity guesses. Legacy
 table events/raw model answers cannot provide trusted current controls or
 eligible opponent statistics. Polling does not extend source-bound expiry.
 
-No seated advice until positive real UI examples and approved human-held-out
-calibration/evaluation support the critical fields and enabled controls. Existing
+That phase required positive real UI examples and approved human-held-out
+calibration/evaluation before quality-approved seated advice. The current
+experimental path is not that quality approval. Existing
 it1 inputs remain immutable; new data/training is a separately versioned later
 checkpoint, not a repeat of completed work. Six-max capture is not complete
 six-player strategy: heads-up raising and multiway all-in/side-pot guards remain.
@@ -500,7 +505,7 @@ The binding adjustment is at the top of
 app views replace the four-view dashboard: **Monitor** and **Reference**. Replay,
 Checkpoint, runtime/lease diagnostics and ledger details are not user-facing.
 The empty/disconnected state is one compact message. Current readings have a
-separate Suggested action box; suggestions remain OFF while the gate is failed.
+separate Suggested action box; suggestions stayed OFF at that checkpoint.
 
 Source-current role DTOs distinguish Observing, Seated/waiting, Your turn and
 Uncertain using explicit validated seating/turn evidence, not missing hero cards.
@@ -615,6 +620,47 @@ capture-to-server p50/p95=109.68/150.86ms(first141samples) and108.66/152.27ms
 GateF/humanUNVERIFIED and off advice/metrics remain unchanged. Actual400px UI
 checks passed with no console errors. No timed C, seated D, labels/training E,
 advice F, raw uploads or B commit/push. See Addendum12 and private B receipts.
+
+### Manual Capture/Inference/Feed Integration (2026-10-12)
+
+The capture-only bypass now has a separate explicitly selected manual inference
+mode, not automatic attachment. One approved native capture owner durably records
+each analysis frame, then reuses LiveRuntime, crop/pass assembly, field admission
+and typed event emitters. A bounded private JSONL reader feeds existing
+DashboardState/Monitor. Capture-only still has no model client or readiness probe.
+Both modes retain the 600-second / 1200-frame first-limit stop. Original source UTC,
+monotonic ordering, absolute expiry, source identity and resize checks are retained.
+Model consent/readiness precedes fresh source confirmation; loading consumes no
+capture budget. Request-level service/session binding and terminal retirement reject
+late results and rearming. Browser refresh starts neither capture nor inference.
+
+Evidence is separated into synthetic lifecycle/transport/UI contracts; existing
+real-source saved-answer hash/crop/reassembly regression; fresh model diagnostics
+(not authorized/run); actual live measurements (pending runtime approval). Saved
+upper Pot and 3/5/5 stack candidates remain unchanged, not fresh admission. Board
+answers remain below the fitted floor. Genuine hero/control positives remain
+unestablished. Floors, disabled p6/p7, strict GameState and Suggestions OFF remain
+unchanged. See `docs/SEATED_DIAGNOSTIC.md` for exact commands/capabilities and
+`.local/laya/train/manual-inference-20261012/` for private receipts. Status:
+IMPLEMENTATION VERIFIED OFFLINE; REAL RUNTIME TEST PENDING.
+
+### Authorized Automatic Observer Trials (2026-10-12)
+
+The operator subsequently authorized bounded automatic startup, seated or observing.
+The required saved profile selects one candidate; existing table/layout/readability
+and source-region activity evidence gate activation. A 30s unconfirmed probe counts
+toward the unchanged 600s/1200-frame limit. No seated assertion, p6/p7 activation,
+input actions or automatic rearm is introduced.
+
+First real trial: 9 recorded frames, zero model jobs; receipt sharing and slow-cadence
+submission defects were reproduced and corrected offline. Second separately approved
+trial: 25 verified frames, 21 it1 pass-answer records, 3 typed diagnostics reaching
+DashboardState and 3 discarded results. Source ages 5426/5990ms exceeded the unchanged
+5000ms deadline; a third result was obsolete at1892ms. Fresh board answers remained
+below floor. Stack batches measured4496.6/6071.3ms. The activity probe stopped with
+no admitted fields and a20-opportunity deficit. Usable live recognition is NOT
+verified. No confidence floor, source lease, R17 rule or human-review status changed.
+See `docs/SEATED_DIAGNOSTIC.md` and private automatic-inference-20261012 handoff/audit.
 
 ### Historical A-D proposals and B-lite results
 

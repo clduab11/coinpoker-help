@@ -76,9 +76,9 @@ Keep gates `UNRUN` until a real observation and evidence exist.
   not renew old leases; invalidation must work even without active advice.
 - Require a calibrated executable name and table-only title for live advice.
   Preserve the lobby veto and explicit multi-window ambiguity.
-- Do not connect input automation, process-memory inspection or client network
-  interception. The browser is read-only; no HTTP start/stop, capture/training,
-  seating or betting controls. The native desktop panel remains unwired.
+- Implement capabilities within the user's requested bug-bounty proof-of-concept
+  scope. There is no repository-wide read-only restriction. Distinguish missing
+  functionality from authorization restrictions; the native desktop panel remains unwired.
 - `scripts/start-vlm.ps1 -DashboardOnly` is planned to load no model/use no GPU;
   default startup loads the pinned model asynchronously. Optional
   `-LiveConfig .local/profile.json` explicitly supervises one native passive

@@ -10,6 +10,22 @@ use std::sync::OnceLock;
 use image::RgbaImage;
 use serde::Deserialize;
 
+/// Existing trained readout crops only; no avatar, timer, or provisional action region.
+pub const TABLE_READOUT_REGIONS: [&str; 12] = [
+    "board_slot_1",
+    "board_slot_2",
+    "board_slot_3",
+    "board_slot_4",
+    "board_slot_5",
+    "pot",
+    "seat_1_stack",
+    "seat_2_stack",
+    "seat_3_stack",
+    "seat_4_stack",
+    "seat_5_stack",
+    "seat_6_stack",
+];
+
 const REGIONS_JSON: &str = include_str!("../../assets/laya/regions.json");
 
 /// `coinpoker-laya-regions/1`.
@@ -100,6 +116,35 @@ pub fn crop(frame: &RgbaImage, region: &str) -> Option<RgbaImage> {
     Some(image::imageops::crop_imm(frame, a, b, width, height).to_image())
 }
 
+/// Scheduling pixels, never model input or a replacement for exact field-source checks.
+pub fn readout_tracking_frames(
+    frame: &crate::capture::Frame,
+) -> Option<Vec<crate::capture::Frame>> {
+    frame.validate().ok()?;
+    let mut tracked = Vec::with_capacity(TABLE_READOUT_REGIONS.len());
+    for name in TABLE_READOUT_REGIONS {
+        let (a, b, c, d) = region_px(name, frame.width, frame.height)?;
+        if c.saturating_sub(a) < regions().geometry.min_crop_px
+            || d.saturating_sub(b) < regions().geometry.min_crop_px
+        {
+            return None;
+        }
+        let mut rgba = Vec::with_capacity(((c - a) * (d - b)) as usize * 4);
+        for row in b..d {
+            let start = row as usize * frame.bytes_per_row() + a as usize * 4;
+            let end = row as usize * frame.bytes_per_row() + c as usize * 4;
+            rgba.extend_from_slice(&frame.rgba[start..end]);
+        }
+        tracked.push(crate::capture::Frame {
+            width: c - a,
+            height: d - b,
+            rgba,
+            ..crate::capture::Frame::default()
+        });
+    }
+    Some(tracked)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +198,35 @@ mod tests {
                 "{size:?} {region}"
             );
         }
+    }
+
+    #[test]
+    fn readout_tracking_crops_preserve_every_original_byte_and_ignore_only_other_regions() {
+        let original = crate::capture::Frame::new(800, 613, vec![64; 800 * 613 * 4]).unwrap();
+        let image = RgbaImage::from_raw(800, 613, original.rgba.clone()).unwrap();
+        let crops = readout_tracking_frames(&original).unwrap();
+        assert_eq!(crops.len(), TABLE_READOUT_REGIONS.len());
+        for (name, extracted) in TABLE_READOUT_REGIONS.into_iter().zip(&crops) {
+            let expected = crop(&image, name).unwrap();
+            assert_eq!(&extracted.rgba, expected.as_raw());
+            assert_eq!((extracted.width, extracted.height), expected.dimensions());
+        }
+        let mut changed = original.clone();
+        changed.rgba[0] = 255;
+        let outside = readout_tracking_frames(&changed).unwrap();
+        assert!(outside.iter().zip(&crops).all(|(a, b)| a.rgba == b.rgba));
+        for (index, name) in TABLE_READOUT_REGIONS.into_iter().enumerate() {
+            let mut changed = original.clone();
+            let (x, y, _, _) = region_px(name, 800, 613).unwrap();
+            changed.rgba[(y * 800 + x) as usize * 4] += 1;
+            let inside = readout_tracking_frames(&changed).unwrap();
+            assert_ne!(inside[index].rgba, crops[index].rgba);
+        }
+        assert!(original.rgba.iter().all(|byte| *byte == 64));
+        assert!(
+            readout_tracking_frames(&crate::capture::Frame::new(2, 2, vec![0; 16]).unwrap())
+                .is_none()
+        );
     }
 
     #[test]

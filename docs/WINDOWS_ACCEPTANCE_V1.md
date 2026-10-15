@@ -26,27 +26,30 @@ Temperature calibration and matching reviewed annotations are not advice
 approval. The new proposed `<5000 ms` warm capture-to-display p95 and hard
 5000 ms full end-to-end deadline do not retroactively pass that benchmark.
 
-The follow-on scope is actual Practice Games development with practice chips,
-not real-money acceptance. Practice/cash use one repo, representation and
-validation mechanism; no bypass. First phase is read-only UI/feed/private
-per-session history with opaque IDs and explicit gaps, no UI-triggered capture
-or training and no seated advice. Positive real UI data and approved
-human-held-out calibration/evaluation are still needed. The root PNG charts
+Profile metadata now declares `six-max-table`, not a practice/cash restriction;
+it does not establish layout or real-money acceptance. Practice/cash use one repo, representation and
+validation mechanism; no bypass. First-phase UI/feed/private per-session history
+uses opaque IDs and explicit gaps. The current browser has a session-bound
+**Stop capture** control; HTTP start/mark, training and poker-input controls are
+not implemented. Genuine current full native state and a matching legal decision
+can display experimental analysis with `quality_approved:false`, not certified
+seated advice. Positive real UI data and approved human-held-out calibration/evaluation
+are still needed for quality acceptance. The root PNG charts
 and PDF are reference facts, not positive seated screenshots.
 
-`scripts/start-vlm.ps1 -DashboardOnly` is planned to load no model/use no GPU;
-default startup asynchronously verifies/loads/warms the pinned model. Optional
-`-LiveConfig .local/profile.json` explicitly supervises one native passive CLI
-feed and is not automatically used in this phase. These instructions remain
-subject to the coordinator's actual tests, not an accepted live receipt.
+Default startup and `scripts/start-vlm.ps1 -DashboardOnly` load no model/use no GPU.
+Inference requires the explicit `-EnableInference` resource opt-in, and manual
+capture requires a fresh exact-source challenge/recheck, not a seating assertion.
+Current startup/stop details are in [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md).
+The new transport/control behavior is not an accepted live receipt.
 Follow-on evidence still needed: root/status during loading/failure/busy
 prediction, truthful source timestamps/frame and optional recorder counters,
 expiry/disconnect/out-of-order clearing, sanitized bounded history and private
 output. A healthy page/model is not `COLLECTOR_READY` or `ADVICE_READY`.
-The native feed is capture-health only (`recording_enabled:false`,
-`recorded_frames:0`); typed `-LiveConfig` target settings do not forward a
-`--record-dir` option. Recorder/profile readiness remains a later manual-data
-checkpoint, not a receipt supplied by UI tests.
+The original first-phase feed was capture-health only (`recording_enabled:false`,
+`recorded_frames:0`). Those historical fields are not the current recorder contract;
+current manual/bounded/sustained receipts are documented in [EVENTS_V2.md](EVENTS_V2.md).
+UI tests still do not establish real recorder/profile or recognition acceptance.
 
 Laya server/dashboard support and the local fine-tuned weights are absent from
 historical release packaging. `scripts/vlm-pins.json` remains an orphaned

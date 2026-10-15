@@ -18,13 +18,13 @@ retired product endpoint or automatic alternate port. The local listener is
 unauthenticated; do not expose it through a proxy or tunnel. An occupied 18090
 is a conflict, not permission to stop an unowned process.
 
-The follow-on browser is read-only. UI/status requests must remain independent
+UI/status requests must remain independent
 of model loading and the single GPU admission slot, with bounded requests,
 Host/Origin validation, restrictive CSP and safe text rendering. No arbitrary
 file serving, raw images/model replies, backend bodies or player names belong
 in browser DTOs. These are implementation-test requirements, not an accepted
-live-security receipt. The page has no start/stop, capture/training, seating,
-betting or client-input controls.
+live-security receipt. Session mutations use explicit requests bound to the current
+service and session. Status polling does not implicitly start or stop capture.
 
 Live decisions are scoped to an executable name, PID and HWND, plus observation
 generation and expiry. Consumers must clear on `clear`, lease expiry, EOF or process
@@ -57,9 +57,8 @@ server/dashboard support and local weights, as well as credentials/private
 fixtures/logs. The helper does not hide processes, inspect client memory,
 intercept traffic or send client input.
 
-The active scope is actual Practice Games development with practice chips,
-using the same representation/guards as cash, without a bypass or real-money
-acceptance. Gate F remains FAIL; model/temperature readiness is not quality
+The project is a user-directed bug-bounty proof of concept. Gate F remains FAIL;
+model/temperature readiness is not quality
 approval. Positive real UI data and approved human-held-out calibration/evaluation
 are required before seated advice. The proposed 5-second full end-to-end budget
 does not retroactively pass the original 3.0273-second/<2-second failed benchmark.

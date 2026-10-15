@@ -187,6 +187,8 @@ fn help_prints_usage_and_succeeds() {
     assert!(stdout.contains("--exe-name"));
     assert!(stdout.contains("--window-hwnd"));
     assert!(stdout.contains("--decision-budget-ms"));
+    assert!(stdout.contains("native UI is not implemented"));
+    assert!(!stdout.contains("read-only"));
     assert!(stdout.contains("18090"));
 }
 
@@ -258,13 +260,14 @@ fn retired_product_ports_fail_before_doctor_or_capture_can_start() {
 }
 
 #[test]
-fn ui_option_points_to_the_separately_launched_read_only_dashboard() {
+fn unimplemented_native_ui_points_to_the_separately_launched_browser_dashboard() {
     let output = run(&["--ui"]);
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
     assert!(stderr.contains("no native interactive UI"));
     assert!(stderr.contains("http://127.0.0.1:18090/"));
-    assert!(stderr.contains("read-only"));
+    assert!(stderr.contains("browser dashboard"));
+    assert!(!stderr.contains("read-only"));
     assert!(stderr.contains("--stdin"));
 }
 

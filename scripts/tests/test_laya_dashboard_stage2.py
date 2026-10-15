@@ -9,8 +9,9 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
-from scripts.tests.test_laya_dashboard import Clock, IDENTITY, dashboard
+from scripts.tests.test_laya_dashboard import Clock, IDENTITY, dashboard, native_decision, native_observation
 
 
 def capability(field, seat=None):
@@ -36,6 +37,41 @@ class PartialTests(unittest.TestCase):
                            "emitted_at_unix_ms": now, "captured_at_unix_ms": now,
                            "frame_width": 800, "frame_height": 613, **extra})
 
+    def test_public_capture_epoch_survives_missing_observation_and_tracks_epoch_only_changes(self):
+        snap = self.state.snapshot()
+        self.assertIsNone(snap["partial_observation"])
+        self.assertEqual(snap["capture"]["epoch"], 1)
+        self.health(generation=2, epoch=2)
+        snap = self.state.snapshot()
+        self.assertEqual(snap["capture"]["epoch"], 2)
+        self.assertIsNone(snap["partial_observation"])
+        self.assertNotIn("identity", snap["capture"])
+        self.assertRegex(snap["capture"]["source_id"], r"^[0-9a-f]{16}$")
+        self.assertEqual(snap["capture"]["generation"], 2)
+        self.assertNotIn("PRIVATE", json.dumps(snap["capture"]))
+
+    def test_public_capture_epoch_preserves_known_source_during_freshness_lag_not_source_loss(self):
+        self.health(generation=2, fresh_capture=False)
+        snap = self.state.snapshot()
+        self.assertEqual(snap["capture"]["epoch"], 1)
+        self.assertFalse(snap["capture"]["fresh_capture"])
+        self.assertIsNone(snap["partial_observation"])
+        self.health(generation=3, epoch=2, identity=None)
+        self.assertIsNone(self.state.snapshot()["capture"]["epoch"])
+
+    def test_public_capture_epoch_clears_on_terminal_blocked_and_expired_owner(self):
+        self.state.end_stream()
+        self.assertIsNone(self.state.snapshot()["capture"]["epoch"])
+        self.state.begin_stream()
+        self.assertIsNone(self.state.snapshot()["capture"]["epoch"])
+        self.health()
+        self.state.attach_blocked("source-unavailable")
+        self.assertIsNone(self.state.snapshot()["capture"]["epoch"])
+        self.state.begin_stream()
+        self.health()
+        self.clock.value += 3
+        self.assertIsNone(self.state.snapshot()["capture"]["epoch"])
+
     def record(self, generation=1, epoch=1, **extra):
         now = int(self.clock.wall() * 1000)
         capabilities = [capability(field) for field in ("role", "hero_seated", "game_phase",
@@ -60,6 +96,39 @@ class PartialTests(unittest.TestCase):
         self.state.ingest(self.record(**extra))
         return self.state.snapshot()["partial_observation"]
 
+    def scoped_invalidation(self, source, **extra):
+        ticket = copy.deepcopy(source["observation"])
+        return {"schema_version": 2, "event": "partial_observation_invalidated",
+                "observation": ticket, "generation": ticket["generation"], "epoch": ticket["epoch"],
+                "identity": copy.deepcopy(ticket["identity"]), "reason": "source-region-changed",
+                "captured_at_unix_ms": ticket.get("captured_at_unix_ms"),
+                "emitted_at_unix_ms": int(self.clock.wall() * 1000), **extra}
+
+    def manual_tail(self, records, **current_extra):
+        instance, session = "b" * 32, "a" * 32
+        current = {"session_id": session, "mode": "inference-enabled", "inference_enabled": True,
+                    "source_policy": "automatic-bounded", "status": "capturing", "remaining_ms": 10000,
+                    "activity_state": "active", "recorded_frames": 7, "max_frames": 100, **current_extra}
+        self.state.set_model("ready")
+        feed = dashboard.ManualSessionFeed(self.state, instance)
+        feed.session_id, feed.stream_id = session, self.state.session_id
+        feed.path = dashboard.ROOT / ".local" / "offline-scoped-tail"
+        feed.source_policy, feed.deadline = "automatic-bounded", self.clock.mono() + 10
+        feed.identity = IDENTITY["exe_name"].lower(), IDENTITY["process_id"], IDENTITY["hwnd"].lower()
+        data = b"".join((json.dumps({"service_instance_id": instance, "source_policy": "automatic-bounded",
+                                    "activity_state": "active", **record}) + "\n").encode() for record in records)
+        filename = Mock()
+        filename.exists.return_value = True
+        filename.stat.return_value.st_size = len(data)
+        filename.open.side_effect = lambda *_: io.BytesIO(data)
+        with patch.object(dashboard.manual_capture, "public_snapshot", return_value=current), \
+                patch.object(dashboard.manual_capture, "private_path", return_value=filename), \
+                patch.object(dashboard.manual_capture, "fail_session"), \
+                patch.object(dashboard.manual_capture, "stop_session"):
+            feed.poll()
+            feed.poll()
+        return feed
+
     def test_independent_stack_pot_and_card_slots_survive_unknown_role_or_one_bad_card(self):
         board = self.record()["board_slots"]
         board[1] = {"rank": [], "suit": "clubs"}
@@ -76,6 +145,52 @@ class PartialTests(unittest.TestCase):
         self.assertIsNone(snapshot["observation"])
         self.assertIsNone(snapshot["advice"])
         self.assertFalse(snapshot["server"]["advice_ready"])
+
+    def test_automatic_verifying_source_health_and_status_preserve_readout_without_history(self):
+        self.state.begin_stream()
+        self.health(source_policy="automatic-bounded", activity_state="verifying", reason="activity-verifying")
+        source = self.record(source_policy="automatic-bounded", activity_state="verifying",
+                             hero_seated=True, role="your_turn", action_required=True)
+        self.state.ingest(source)
+        before = self.state.snapshot()
+        self.assertEqual(before["partial_observation"]["pot_size"], 12345)
+        self.assertEqual(before["partial_observation"]["role"], "uncertain")
+        self.assertIsNone(before["partial_observation"]["hero_seated"])
+        deadline = self.state.partial_deadline
+        for event in ("observation", "table", "history", "decision", "recommendation"):
+            self.state.ingest({**source, "event": event, "hero_cards": [], "board": [], "game_phase": "preflop",
+                               "summary": {"counts": {"folds": 1}, "events": [{"event": "action"}]}})
+            self.assertEqual(self.state.snapshot()["partial_observation"], before["partial_observation"])
+        self.state.ingest({"schema_version": 2, "event": "status", "state": "verifying",
+                           "source_policy": "automatic-bounded", "activity_state": "verifying"})
+        self.health(2, source_policy="automatic-bounded", activity_state="verifying", reason="activity-verifying")
+        snapshot = self.state.snapshot()
+        self.assertEqual(snapshot["partial_observation"], before["partial_observation"])
+        self.assertEqual(self.state.partial_deadline, deadline)
+        self.assertTrue(snapshot["capture"]["fresh_capture"])
+        self.assertIsNone(snapshot["observation"])
+        self.assertIsNone(snapshot["advice"])
+        self.assertEqual(snapshot["history"]["state"], "unavailable")
+        self.assertEqual(snapshot["history"]["events"], [])
+        self.assertEqual(snapshot["history"]["gaps"], 0)
+
+    def test_automatic_verifying_invalidations_clear_readout_without_history_gaps(self):
+        for scoped in (False, True):
+            with self.subTest(scoped=scoped):
+                self.state.begin_stream()
+                self.health(2, source_policy="automatic-bounded", activity_state="verifying")
+                source = self.record(2, source_policy="automatic-bounded", activity_state="verifying")
+                self.state.ingest(source)
+                event = self.scoped_invalidation(source) if scoped else {
+                    "schema_version": 2, "event": "observation_invalidated", "generation": 2,
+                    "epoch": 1, "reason": "frame-changed"}
+                self.state.ingest({**event, "source_policy": "automatic-bounded", "activity_state": "verifying"})
+                snapshot = self.state.snapshot()
+                self.assertIsNone(snapshot["partial_observation"])
+                self.assertEqual(snapshot["history"]["state"], "unavailable")
+                self.assertEqual(snapshot["history"]["gaps"], 0)
+                self.state.ingest(source)
+                self.assertIsNone(self.state.snapshot()["partial_observation"])
 
     def test_explicit_unseated_role_needs_both_verified_families(self):
         value = self.reading(role="observing", hero_seated=False)
@@ -101,6 +216,56 @@ class PartialTests(unittest.TestCase):
         self.assertEqual(snapshot["partial_observation"]["seats"][0]["displayed_stack"], 100)
         self.assertIsNone(snapshot["observation"])
         self.assertIsNone(snapshot["advice"])
+
+    def test_native_full_sibling_or_relabelled_partial_cannot_acquire_advice(self):
+        self.state.set_model("ready", calibrated=True, floors_loaded=True)
+        source = self.record(pot_size=None)
+        self.state.ingest(source)
+        for generation in (1, 2):
+            full = native_observation(self.clock, generation=generation, quality_approved=True)
+            full["observation"]["captured_at_ms"] = source["observation"]["captured_at_ms"]
+            self.health(generation)
+            self.state.ingest(full)
+            self.state.ingest(native_decision(full, quality_approved=True))
+            value = self.state.snapshot()
+            self.assertIsNone(value["advice"])
+            self.assertIsNone(value["observation"])
+            self.assertIsNone(value["partial_observation"]["pot_size"])
+            self.assertFalse(value["server"]["advice_ready"])
+
+    def test_new_partial_bundle_replaces_full_analysis_without_carrying_metrics(self):
+        self.state.set_model("ready")
+        full = native_observation(self.clock)
+        self.state.ingest(full)
+        self.state.ingest(native_decision(full))
+        self.assertIsNotNone(self.state.snapshot()["advice"])
+        self.clock.value += .1
+        self.health(2)
+        self.state.ingest(self.record(2, quality_approved=True))
+        self.state.ingest(native_decision(full))
+        value = self.state.snapshot()
+        self.assertEqual(value["partial_observation"]["pot_size"], 12345)
+        self.assertIsNone(value["observation"])
+        self.assertIsNone(value["advice"])
+        self.assertFalse(value["partial_observation"]["quality_approved"])
+
+    def test_automatic_receipt_downgrade_withholds_decisions_and_snapshot_stays_pure(self):
+        self.state.set_model("ready")
+        full = native_observation(self.clock)
+        self.state.ingest(full)
+        self.state.ingest(native_decision(full))
+        feed = dashboard.ManualSessionFeed(self.state, "b" * 32)
+        current = {"source_policy": "automatic-bounded", "activity_state": "verifying", "status": "capturing"}
+        with patch.object(dashboard.manual_capture, "public_snapshot", return_value=current), \
+                patch.object(dashboard.manual_capture, "stop_session", side_effect=AssertionError("GET stopped capture")), \
+                patch.object(dashboard.manual_capture, "fail_session", side_effect=AssertionError("GET changed runtime")):
+            value = feed.snapshot()
+        self.assertIsNone(value["advice"])
+        self.assertIsNone(value["observation"])
+        self.assertFalse(value["server"]["advice_ready"])
+        self.assertFalse(self.state.analysis_inputs)
+        self.state.ingest(native_decision(full))
+        self.assertIsNone(self.state.snapshot()["advice"])
 
     def test_untrained_asserted_seat_values_and_names_never_enter_public_or_sanitized_ledger(self):
         source = self.record()
@@ -293,6 +458,508 @@ class PartialTests(unittest.TestCase):
         self.assertIsNone(self.state.snapshot()["partial_observation"])
         self.state.ingest(newer)
         self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_scoped_invalidation_keeps_newer_health_eligible_and_replays_inert(self):
+        for recorded_utc in (False, True):
+            with self.subTest(recorded_utc=recorded_utc):
+                self.state.begin_stream()
+                self.health(2)
+                old = self.record(2, verified_fields=["pot_size"])
+                if recorded_utc:
+                    old["observation"]["captured_at_unix_ms"] = old["captured_at_unix_ms"]
+                self.state.ingest(old)
+                original_source = self.state.partial_source, self.state.partial_source_deadline
+                self.clock.value += .1
+                self.health(3)
+                health = self.state.snapshot()["capture"]
+                invalidation = self.scoped_invalidation(old)
+                self.state.ingest(invalidation)
+                cleared = self.state.snapshot()
+                self.assertIsNone(cleared["partial_observation"])
+                self.assertEqual(cleared["capture"], health)
+                self.assertEqual(self.state.version, (3, 1))
+                self.assertEqual(self.state.invalidated_version, (2, 1))
+                self.assertEqual((self.state.partial_source, self.state.partial_source_deadline), original_source)
+                self.assertEqual(cleared["field_statuses"]["pot_size"], {"status": "unavailable", "reason": "stale"})
+                for replay in (old, invalidation):
+                    self.state.ingest(replay)
+                self.assertIsNone(self.state.snapshot()["partial_observation"])
+                self.assertEqual(self.state.invalidated_version, (2, 1))
+
+                new = self.record(3, verified_fields=["seats.2.displayed_stack"])
+                if recorded_utc:
+                    new["observation"]["captured_at_unix_ms"] = new["captured_at_unix_ms"]
+                self.state.ingest(new)
+                before = self.state.snapshot()
+                reading = before["partial_observation"]
+                self.assertEqual((reading["generation"], reading["epoch"]), (3, 1))
+                self.assertEqual(reading["seats"][1]["displayed_stack"], 200)
+                self.assertIsNone(reading["pot_size"], "a newer bundle must not refill old Pot")
+                self.assertEqual(reading["expires_at_unix_ms"], new["expires_at_unix_ms"])
+                self.assertIsNone(before["observation"])
+                self.assertIsNone(before["advice"])
+                for replay in (invalidation, old, invalidation):
+                    self.state.ingest(replay)
+                    after = self.state.snapshot()
+                    after["event_seq"] = before["event_seq"]
+                    self.assertEqual(after, before)
+                    self.assertEqual(self.state.version, (3, 1))
+                    self.assertEqual(self.state.invalidated_version, (2, 1))
+
+    def test_scoped_invalidation_requires_exact_published_ticket_and_metadata(self):
+        self.health(2)
+        source = self.record(2)
+        source["observation"]["captured_at_unix_ms"] = source["captured_at_unix_ms"]
+        self.state.ingest(source)
+        valid = self.scoped_invalidation(source, fields=["seats.1.displayed_stack"])
+        ticket = valid["observation"]
+        foreign = {**IDENTITY, "hwnd": "0x2"}
+        cases = [{key: value} for key, values in (
+            ("schema_version", (None, 1, 2.0, "2")), ("generation", (None, True, 1, 3)),
+            ("epoch", (None, True, 0, 2)), ("reason", (None, [], "frame-changed")),
+            ("observation", (None, [], {})), ("identity", (None, [], foreign)),
+            ("captured_at_unix_ms", (None, True, source["captured_at_unix_ms"] + 1)),
+            ("emitted_at_unix_ms", (None, True, valid["emitted_at_unix_ms"] + 1,
+                                    source["captured_at_unix_ms"] - 1)),
+            ("valid_for_ms", (None, 1000)), ("expires_at_unix_ms", (None, valid["emitted_at_unix_ms"] + 1000)),
+            ("fields", (None, [], True, 1, "pot_size", {}, [None], [[]], [{}], [True],
+                        ["pot_size", "pot_size"], ["pot_size", "unknown"], ["seats.0.displayed_stack"],
+                        ["seats.7.displayed_stack"], ["seats.1.street_contribution"], ["board_slots.0"],
+                        ["board_slots.6"], ["pot_size"] * (len(dashboard.PARTIAL_FIELDS) + 1))))
+            for value in values]
+        cases += [{"observation": {**ticket, key: value}} for key, values in (
+            ("generation", (True, 3)), ("epoch", (True, 2)),
+            ("captured_at_ms", (None, True, -1, 1003)),
+            ("captured_at_unix_ms", (None, True, source["captured_at_unix_ms"] + 1)),
+            ("identity", (None, foreign, {**IDENTITY, "process_id": 43}, {**IDENTITY, "exe_name": "other.exe"})))
+            for value in values]
+        cases += [{"observation": {key: value for key, value in ticket.items() if key != "captured_at_unix_ms"}},
+                  {"identity": foreign, "observation": {**ticket, "identity": foreign}}]
+        records = [{**valid, **extra} for extra in cases]
+        records += [{key: value for key, value in valid.items() if key != missing}
+                    for missing in ("schema_version", "observation", "generation", "epoch", "identity",
+                                    "reason", "captured_at_unix_ms", "emitted_at_unix_ms")]
+        before = self.state.snapshot()
+        boundary = self.state.version, self.state.invalidated_version, self.state.status_deadline
+        for record in records:
+            with self.subTest(record=record):
+                self.state.ingest(record)
+                after = self.state.snapshot()
+                after["event_seq"] = before["event_seq"]
+                self.assertEqual(after, before)
+                self.assertEqual((self.state.version, self.state.invalidated_version, self.state.status_deadline), boundary)
+                self.assertIsNone(self.state.invalidated_partial_ticket)
+
+    def test_scoped_invalidation_cannot_clear_full_or_diagnostic_only_state(self):
+        source = self.record()
+        self.diagnostics([dict(field="pot_size", status="rejected", reason="below-floor")])
+        invalidation = self.scoped_invalidation(source)
+        before = self.state.snapshot()["field_statuses"]
+        deadline = self.state.status_deadline
+        self.state.ingest(invalidation)
+        self.assertEqual(self.state.snapshot()["field_statuses"], before)
+        self.assertEqual(self.state.status_deadline, deadline)
+        self.state.ingest({**source, "event": "observation", "game_phase": "preflop",
+                           "hero_cards": [], "board": [], "verified_fields": ["pot_size"]})
+        before = self.state.snapshot()["observation"]
+        self.assertIsNotNone(before)
+        self.state.ingest(invalidation)
+        self.assertEqual(self.state.snapshot()["observation"], before)
+        self.assertIsNone(self.state.invalidated_partial_ticket)
+
+    def test_field_invalidation_without_replacement_keeps_pot_and_original_clocks(self):
+        source = self.record(2, pot_size_text="123.45")
+        source["observation"]["captured_at_unix_ms"] = source["captured_at_unix_ms"]
+        source["seats"][0]["displayed_stack_text"] = "1.00"
+        self.state.ingest(source)
+        self.clock.value += .2
+        self.health(3)
+        before = self.state.snapshot()
+        clocks = (self.state.partial_ticket, self.state.partial_source, self.state.partial_deadline,
+                  self.state.partial_source_deadline, self.state.status_source,
+                  self.state.status_deadline, self.state.status_expires)
+        boundary = self.state.version, self.state.invalidated_version
+        invalidation = self.scoped_invalidation(source, fields=["seats.1.displayed_stack"])
+        self.state.ingest(invalidation)
+        after = self.state.snapshot()
+        expected = copy.deepcopy(before["partial_observation"])
+        expected["seats"][0].update(displayed_stack=None, displayed_stack_text=None)
+        expected["field_statuses"]["seats.1.displayed_stack"] = {"status": "unavailable", "reason": "stale"}
+        self.assertEqual(after["partial_observation"], expected)
+        self.assertEqual(after["field_statuses"], expected["field_statuses"])
+        self.assertEqual(after["capture"], before["capture"])
+        self.assertEqual((self.state.version, self.state.invalidated_version), boundary)
+        self.assertEqual((self.state.partial_ticket, self.state.partial_source, self.state.partial_deadline,
+                          self.state.partial_source_deadline, self.state.status_source,
+                          self.state.status_deadline, self.state.status_expires), clocks)
+        self.assertEqual(expected["pot_size"], 12345)
+        self.assertEqual(expected["role"], "uncertain")
+        # Replayed/relabelled values and diagnostics cannot refill or renew the same source.
+        for generation in (2, 3, 4):
+            replay = copy.deepcopy(source)
+            replay["observation"]["generation"] = generation
+            replay.update(valid_for_ms=3000, expires_at_unix_ms=int(self.clock.wall() * 1000) + 3000)
+            for event in ("partial_observation", "observation", "perception_diagnostics"):
+                self.state.ingest({**replay, "event": event, "game_phase": "preflop", "hero_cards": [], "board": [],
+                                   "frame_width": 800, "frame_height": 613, "passes": [],
+                                   "fields": [dict(field="displayed_stack", seat=1, status="rejected", reason="below-floor")],
+                                   "source_current": True, "admission": "source_current"})
+                self.assertEqual(self.state.snapshot()["partial_observation"], expected)
+                self.assertEqual(self.state.status_expires, clocks[-1])
+        gaps = self.state.history["gaps"]
+        self.state.ingest(invalidation)
+        self.assertEqual(self.state.history["gaps"], gaps)
+        self.clock.value += .801
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.state.ingest(source)
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_field_invalidation_clears_empty_board_and_role_without_erasing_numbers(self):
+        source = self.record(2, board_count=0, board_slots=[None] * 5, game_phase="preflop",
+                             role="observing", hero_seated=False)
+        self.state.ingest(source)
+        before = self.state.snapshot()["partial_observation"]
+        self.assertEqual(before["field_statuses"]["board"]["status"], "accepted")
+        fields = ["board_count", "game_phase", "role", "hero_seated"]
+        self.state.ingest(self.scoped_invalidation(source, fields=fields))
+        view = self.state.snapshot()["partial_observation"]
+        self.assertIsNone(view["board_count"])
+        self.assertIsNone(view["game_phase"])
+        self.assertEqual(view["role"], "uncertain")
+        self.assertIsNone(view["hero_seated"])
+        self.assertEqual(view["pot_size"], before["pot_size"])
+        self.assertEqual(view["seats"], before["seats"])
+        for field in [*fields, "board"]:
+            self.assertEqual(view["field_statuses"][field], {"status": "unavailable", "reason": "stale"})
+        self.assertEqual(view["captured_at_unix_ms"], before["captured_at_unix_ms"])
+        self.assertEqual(view["expires_at_unix_ms"], before["expires_at_unix_ms"])
+        # New lane publication is still full replacement, never accumulation.
+        self.clock.value += .1
+        self.health(3)
+        new = self.reading(generation=3, verified_fields=["seats.2.displayed_stack"])
+        self.assertEqual(new["seats"][1]["displayed_stack"], 200)
+        self.assertIsNone(new["pot_size"])
+        self.assertIsNone(new["seats"][0]["displayed_stack"])
+        self.state.ingest(self.scoped_invalidation(source, fields=["pot_size"]))
+        self.assertEqual(self.state.snapshot()["partial_observation"], new)
+
+    def test_field_invalidation_verifying_projection_ignores_hidden_native_role_not_changed_stack(self):
+        envelope = {"source_policy": "automatic-bounded", "activity_state": "verifying"}
+        source = self.record(2, role="observing", hero_seated=False, **envelope)
+        self.state.ingest(source)
+        before = self.state.snapshot()["partial_observation"]
+        self.assertEqual(before["role"], "uncertain")
+        gaps = self.state.history["gaps"]
+        self.state.ingest(self.scoped_invalidation(source, fields=["role", "hero_seated", "game_phase",
+                                                                  "seats.1.displayed_stack"], **envelope))
+        view = self.state.snapshot()["partial_observation"]
+        self.assertIsNone(view["seats"][0]["displayed_stack"])
+        self.assertEqual(view["field_statuses"]["seats.1.displayed_stack"]["reason"], "stale")
+        self.assertEqual(view["pot_size"], before["pot_size"])
+        self.assertEqual(view["expires_at_unix_ms"], before["expires_at_unix_ms"])
+        self.assertEqual(view["field_statuses"]["role"], before["field_statuses"]["role"])
+        self.assertEqual(self.state.history["gaps"], gaps)
+
+    def test_field_invalidation_preserves_five_second_cap_despite_newer_health(self):
+        now = int(self.clock.wall() * 1000)
+        source = self.record(2, valid_for_ms=4500, expires_at_unix_ms=now + 4500)
+        self.state.ingest(source)
+        self.clock.value += .5
+        self.health(3)
+        self.state.ingest(self.scoped_invalidation(source, fields=["seats.1.displayed_stack"]))
+        deadline = self.state.partial_deadline
+        for advance in (2, 1.998):
+            self.clock.value += advance
+            self.health(4)
+            self.assertEqual(self.state.snapshot()["partial_observation"]["pot_size"], 12345)
+            self.assertEqual(self.state.partial_deadline, deadline)
+        self.clock.value += .003
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_field_invalidation_updates_only_supported_card_wager_and_scene_fields(self):
+        source = self.record()
+        source["board_slots"][1] = {"rank": "king", "suit": "clubs"}
+        source["seats"][0].update(visible_wager=125, visible_wager_text="1.25", occupied=True, badge="check")
+        for item in source["capabilities"]:
+            if item["field"] in ("visible_wager", "occupied", "badge") and item["seat"] == 1:
+                item.update(training="read_only_approved", acceptance_floor=.999,
+                            held_out_approved=True, human_verified=True, provenance="observation-only-calibrated-pass")
+        self.state.ingest(source)
+        self.state.ingest(self.scoped_invalidation(source, fields=["board_slots.2", "board_count", "game_phase",
+                                                                  "seats.1.visible_wager", "seats.1.badge",
+                                                                  "seats.2.visible_wager"]))
+        view = self.state.snapshot()["partial_observation"]
+        self.assertIsNone(view["board_slots"][1])
+        self.assertIsNotNone(view["board_slots"][0])
+        self.assertIsNotNone(view["board_slots"][2])
+        self.assertIsNone(view["seats"][0]["visible_wager"])
+        self.assertIsNone(view["seats"][0]["visible_wager_text"])
+        self.assertEqual(view["seats"][0]["visible_wager_status"], "unknown")
+        self.assertEqual(view["seats"][0]["scene_fields"], ["occupied"])
+        self.assertEqual(view["field_statuses"]["scene"]["status"], "accepted")
+        for field in ("board", "board_slots.2", "board_count", "game_phase", "seats.1.visible_wager", "seats.1.badge", "wagers"):
+            self.assertEqual(view["field_statuses"][field], {"status": "unavailable", "reason": "stale"})
+        self.assertEqual(view["field_statuses"]["seats.2.visible_wager"]["reason"], "missing-capability")
+        self.state.ingest(self.scoped_invalidation(source, fields=["seats.1.occupied"]))
+        self.assertEqual(self.state.snapshot()["field_statuses"]["scene"], {"status": "unavailable", "reason": "stale"})
+        self.assertEqual(self.state.snapshot()["partial_observation"]["pot_size"], 12345)
+
+    def test_field_invalidation_with_no_survivors_fully_invalidates_original_ticket(self):
+        source = self.record(2, verified_fields=["pot_size"])
+        self.state.ingest(source)
+        self.health(3)
+        self.state.ingest(self.scoped_invalidation(source, fields=["pot_size"]))
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.assertEqual(self.state.version, (3, 1))
+        self.assertEqual(self.state.invalidated_version, (2, 1))
+        self.state.ingest(source)
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_field_invalidation_refuses_expired_packet_even_before_snapshot(self):
+        for clock in ("wall", "monotonic"):
+            with self.subTest(clock=clock):
+                self.state.begin_stream()
+                self.health()
+                source = self.record()
+                self.state.ingest(source)
+                invalidation = self.scoped_invalidation(source, fields=["seats.1.displayed_stack"])
+                deadline = self.state.partial_deadline
+                now = getattr(self.state, clock)()
+                with patch.object(self.state, clock, return_value=now + 1.001):
+                    self.state.ingest(invalidation)
+                    self.assertIsNone(self.state.invalidated_partial_ticket)
+                    self.assertEqual(self.state.partial_deadline, deadline)
+                    self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_partial_expiry_does_not_tombstone_independently_fresh_next_lane(self):
+        for poll_first in (False, True):
+            with self.subTest(poll_first=poll_first):
+                self.state.begin_stream()
+                self.health(2)
+                old = self.record(2, verified_fields=["pot_size"])
+                self.state.ingest(old)
+                self.clock.value += .5
+                self.health(3)
+                new = self.record(3, board_count=0, board_slots=[None] * 5, verified_fields=["board_count"])
+                self.clock.value += .501
+                if poll_first:
+                    self.assertIsNone(self.state.snapshot()["partial_observation"])
+                expired = self.scoped_invalidation(old, reason="observation-expired")
+                self.state.ingest(expired)
+                self.assertEqual(self.state.invalidated_version, (2, 1))
+                self.assertEqual(self.state.version, (3, 1))
+                self.assertIsNone(self.state.snapshot()["partial_observation"])
+                self.state.ingest(new)
+                view = self.state.snapshot()["partial_observation"]
+                self.assertEqual(view["board_count"], 0)
+                self.assertIsNone(view["pot_size"])
+                self.assertEqual(view["captured_at_unix_ms"], new["captured_at_unix_ms"])
+                self.assertEqual(view["expires_at_unix_ms"], new["expires_at_unix_ms"])
+                self.assertLessEqual(view["remaining_ms"], 500)
+                self.state.ingest(expired)
+                self.assertEqual(self.state.snapshot()["partial_observation"], view)
+                self.clock.value += .5
+                self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_partial_expiry_event_cannot_erase_unexpired_or_mismatched_packet(self):
+        source = self.record()
+        self.state.ingest(source)
+        before = self.state.snapshot()["partial_observation"]
+        for extra in ({}, {"fields": ["pot_size"]}):
+            self.state.ingest(self.scoped_invalidation(source, reason="observation-expired", **extra))
+            self.assertEqual(self.state.snapshot()["partial_observation"], before)
+            self.assertIsNone(self.state.invalidated_partial_ticket)
+
+    def test_scoped_invalidation_blocks_relabelled_capture_and_complete_sibling(self):
+        self.health(2)
+        source = self.record(2)
+        self.state.ingest(source)
+        self.health(3)
+        self.state.ingest(self.scoped_invalidation(source))
+        boundary = self.state.invalidated_version
+        status_source = self.state.status_source, self.state.status_deadline
+        for generation in (2, 3, 4):
+            replay = copy.deepcopy(source)
+            replay["observation"]["generation"] = generation
+            for event in ("partial_observation", "observation", "perception_diagnostics"):
+                self.state.ingest({**replay, "event": event, "game_phase": "preflop", "hero_cards": [], "board": [],
+                                   "frame_width": 800, "frame_height": 613, "passes": [],
+                                   "fields": [dict(field="pot_size", status="rejected", reason="below-floor")],
+                                   "source_current": True, "admission": "source_current"})
+                snapshot = self.state.snapshot()
+                self.assertIsNone(snapshot["partial_observation"])
+                self.assertIsNone(snapshot["observation"])
+                self.assertEqual(snapshot["field_statuses"]["pot_size"]["reason"], "stale")
+                self.assertEqual(self.state.invalidated_version, boundary)
+                self.assertEqual(self.state.version, (3, 1))
+                self.assertEqual((self.state.status_source, self.state.status_deadline), status_source)
+
+    def test_global_invalidation_still_vetoes_current_health_after_scoped_clear(self):
+        for generation in (2, 3):
+            with self.subTest(global_generation=generation):
+                self.state.begin_stream()
+                self.health(2)
+                old = self.record(2)
+                self.state.ingest(old)
+                self.health(3)
+                invalidation = self.scoped_invalidation(old)
+                self.state.ingest(invalidation)
+                self.state.ingest({"schema_version": 2, "event": "observation_invalidated",
+                                   "generation": generation, "epoch": 1, "reason": "frame-changed"})
+                self.state.ingest(invalidation)
+                self.assertEqual(self.state.invalidated_version, (3, 1))
+                self.assertIsNone(self.reading(generation=3))
+                self.health(4)
+                self.assertIsNotNone(self.reading(generation=4))
+
+    def test_scoped_invalidation_preserves_new_result_original_source_expiry(self):
+        self.health(2)
+        old = self.record(2)
+        self.state.ingest(old)
+        new = self.record(3)
+        new["observation"]["captured_at_unix_ms"] = new["captured_at_unix_ms"]
+        self.clock.value += .4
+        self.health(3)
+        self.state.ingest(self.scoped_invalidation(old))
+        self.state.ingest(new)
+        reading = self.state.snapshot()["partial_observation"]
+        self.assertEqual(reading["captured_at_unix_ms"], new["captured_at_unix_ms"])
+        self.assertEqual(reading["expires_at_unix_ms"], new["expires_at_unix_ms"])
+        self.assertLessEqual(reading["remaining_ms"], 600)
+        deadline = self.state.partial_source_deadline
+        self.clock.value += .5
+        rewritten = copy.deepcopy(new)
+        rewritten.update(emitted_at_unix_ms=int(self.clock.wall() * 1000), valid_for_ms=3000,
+                         expires_at_unix_ms=int(self.clock.wall() * 1000) + 3000)
+        self.state.ingest(self.scoped_invalidation(old))
+        self.state.ingest(rewritten)
+        self.assertEqual(self.state.partial_source_deadline, deadline)
+        self.assertEqual(self.state.snapshot()["partial_observation"]["expires_at_unix_ms"], new["expires_at_unix_ms"])
+        self.clock.value += .101
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.state.ingest(rewritten)
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_scoped_invalidation_does_not_rearm_expired_or_retired_session(self):
+        self.health(2)
+        source = self.record(2)
+        self.state.ingest(source)
+        self.clock.value += 1.001
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        deadline = self.state.partial_source_deadline
+        tombstone = self.state.invalidated_partial_ticket
+        invalidation = self.scoped_invalidation(source)
+        self.state.ingest(invalidation)
+        self.assertEqual(self.state.partial_source_deadline, deadline)
+        self.assertEqual(self.state.invalidated_partial_ticket, tombstone)
+        session = self.state.session_id
+        self.state.end_stream()
+        self.state.ingest(invalidation, session_id=session)
+        self.state.ingest(source, session_id=session)
+        self.assertEqual(self.state.snapshot()["capture"]["state"], "disconnected")
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.state.begin_stream()
+        self.health(2)
+        self.reading(generation=2)
+        before = self.state.snapshot()
+        self.state.ingest(invalidation, session_id=session)
+        self.assertEqual(self.state.snapshot(), before)
+
+    def test_scoped_invalidation_private_ledger_is_sanitized_without_public_ticket(self):
+        with tempfile.TemporaryDirectory(dir=dashboard.ROOT / ".local") as directory:
+            path = Path(directory) / "ledger.jsonl"
+            self.state.begin_stream(path)
+            self.health(2)
+            source = self.record(2)
+            source["observation"]["captured_at_unix_ms"] = source["captured_at_unix_ms"]
+            self.state.ingest(source)
+            keys = self.state.snapshot().keys()
+            self.health(3)
+            event = self.scoped_invalidation(source, raw_response="PRIVATE-RAW", pixels="PRIVATE-PIXELS",
+                                             field_statuses={"pot_size": {"status": "accepted", "reason": None}},
+                                             pot_size=999, quality_approved=True, advice={"action": "call"})
+            self.state.ingest(event)
+            snapshot = self.state.snapshot()
+            self.state.end_stream()
+            text = path.read_text()
+            saved = [json.loads(line) for line in text.splitlines()
+                     if json.loads(line)["event"] == "partial_observation_invalidated"]
+            self.assertEqual(len(saved), 1)
+            record = saved[0]
+            self.assertEqual(record["reason"], "source-region-changed")
+            self.assertEqual((record["generation"], record["epoch"]), (2, 1))
+            self.assertEqual(record["captured_at_ms"], source["observation"]["captured_at_ms"])
+            self.assertEqual(record["captured_at_unix_ms"], source["captured_at_unix_ms"])
+            self.assertEqual(record["emitted_at_unix_ms"], event["emitted_at_unix_ms"])
+            self.assertEqual(record["target_id"], self.state.target)
+            self.assertEqual(set(record), {"event", "sequence", "recorded_utc", "reason", "generation", "epoch",
+                                           "captured_at_ms", "captured_at_unix_ms", "emitted_at_unix_ms", "target_id"})
+            self.assertEqual(snapshot.keys(), keys)
+            self.assertIsNone(snapshot["partial_observation"])
+            self.assertIsNone(snapshot["observation"])
+            self.assertIsNone(snapshot["advice"])
+            self.assertTrue(all(status["status"] == "unavailable" for status in snapshot["field_statuses"].values()))
+            for private in ("PRIVATE", "exe_name", "process_id", "hwnd", "partial_ticket", "captured_at_ms"):
+                self.assertNotIn(private, json.dumps(snapshot))
+            for private in ("PRIVATE", "exe_name", "process_id", "hwnd", "raw_response", "pixels"):
+                self.assertNotIn(private, text)
+
+    def test_partial_original_ticket_utc_must_agree_with_lease_source(self):
+        for value in (None, True, -1, int(self.clock.wall() * 1000), "original"):
+            with self.subTest(value=value):
+                self.state.begin_stream()
+                self.health()
+                source = self.record()
+                source["observation"]["captured_at_unix_ms"] = value
+                self.state.ingest(source)
+                self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_scoped_tail_refuses_foreign_or_malformed_targets_without_ending_stream(self):
+        self.health(2)
+        source = self.record(2)
+        self.state.ingest(source)
+        self.health(3)
+        invalidation = self.scoped_invalidation(source)
+        foreign = copy.deepcopy(invalidation)
+        foreign["observation"]["identity"]["hwnd"] = "0x2"
+        before = self.state.snapshot()
+        feed = self.manual_tail([foreign, {**invalidation, "observation": ["malformed"]}])
+        self.assertFalse(feed.failed)
+        self.assertEqual(feed.stream_id, self.state.session_id)
+        self.assertEqual(self.state.snapshot()["partial_observation"], before["partial_observation"])
+        self.assertEqual(self.state.snapshot()["capture"], before["capture"])
+        feed = self.manual_tail([invalidation, self.record(3), invalidation])
+        self.assertFalse(feed.failed)
+        self.assertEqual(self.state.snapshot()["partial_observation"]["generation"], 3)
+        self.assertEqual(self.state.invalidated_version, (2, 1))
+
+    def test_scoped_tail_keeps_session_envelope_and_value_source_fail_closed(self):
+        for fault in ("instance", "policy", "foreign-values", "terminal", "deadline", "frame-cap"):
+            with self.subTest(fault=fault):
+                self.state.begin_stream()
+                self.health(2)
+                source = self.record(2)
+                self.state.ingest(source)
+                self.health(3)
+                record, current = self.scoped_invalidation(source), {}
+                if fault == "instance":
+                    record["service_instance_id"] = "c" * 32
+                elif fault == "policy":
+                    record["source_policy"] = "manual"
+                elif fault == "foreign-values":
+                    record = self.record(3)
+                    record["observation"]["identity"] = {**IDENTITY, "hwnd": "0x2"}
+                elif fault == "terminal":
+                    current["status"] = "stopped"
+                elif fault == "deadline":
+                    current["remaining_ms"] = 0
+                else:
+                    current["recorded_frames"] = 100
+                feed = self.manual_tail([record, self.record(3)], **current)
+                self.assertIsNone(feed.stream_id)
+                self.assertIsNone(self.state.snapshot()["partial_observation"])
+                self.assertIsNone(self.state.snapshot()["observation"])
+                self.assertFalse(self.state.snapshot()["capture"]["fresh_capture"])
 
     def test_bad_source_identity_order_or_age_clears_and_cannot_be_reactivated_by_old_source(self):
         now = int(self.clock.wall() * 1000)
@@ -557,20 +1224,20 @@ class PartialTests(unittest.TestCase):
 
 NODE_UI = r"""
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
-const input = JSON.parse(process.argv[1]), source = fs.readFileSync(input.app, 'utf8');
+const input = JSON.parse(fs.readFileSync(0, 'utf8')), source = fs.readFileSync(input.app, 'utf8');
 const html = fs.readFileSync(input.html, 'utf8');
 class Element {
   constructor(tag = 'div') { this.tagName = tag; this.childNodes = []; this.dataset = {}; this.attrs = {}; this.hidden = false;
-    this.value = ''; this.listeners = {}; this.classes = new Set(); this._text = '';
+    this.value = ''; this.listeners = {}; this.classes = new Set(); this._text = ''; this.mutations = 0;
     this.classList = { toggle: (name, on) => on ? this.classes.add(name) : this.classes.delete(name),
       add: (name) => this.classes.add(name), contains: (name) => this.classes.has(name) }; }
   set className(value) { this.classes = new Set(value.split(/\s+/)); } get className() { return [...this.classes].join(' '); }
-  set textContent(value) { this._text = String(value); this.childNodes = []; }
+  set textContent(value) { this.mutations += 1; this._text = String(value); this.childNodes = []; }
   get textContent() { return this._text + this.childNodes.map(x => x.textContent).join(''); }
   append(...items) { for (const item of items) item.tagName === '#fragment' ? this.append(...item.childNodes) : this.childNodes.push(item); }
   replaceChildren(...items) { this._text = ''; this.childNodes = []; this.append(...items); }
   setAttribute(name, value) { this.attrs[name] = String(value); } getAttribute(name) { return this.attrs[name]; }
-  addEventListener(name, callback) { this.listeners[name] = callback; } focus() {}
+  addEventListener(name, callback) { this.listeners[name] = callback; } focus() { document.activeElement = this; }
 }
 const nodes = new Map();
 for (const match of html.matchAll(/<([a-z0-9]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)) {
@@ -583,7 +1250,8 @@ let wall = input.snapshot.capture.last_heartbeat_unix_ms, mono = 0, timer = 0;
 class MockDate extends Date { static now() { return wall; } }
 const document = { hidden: false, getElementById: id => { assert(nodes.has(id), `missing DOM id ${id}`); return nodes.get(id); },
   querySelectorAll: () => [...nodes.values()].filter(x => x.attrs.role === 'tab'),
-  createElement: tag => new Element(tag), createDocumentFragment: () => new Element('#fragment'), addEventListener() {} };
+  createElement: tag => new Element(tag), createDocumentFragment: () => new Element('#fragment'),
+  activeElement: null, listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; } };
 const window = { setTimeout: () => ++timer, clearTimeout() {}, setInterval() {}, addEventListener() {} };
 const context = { document, window, Date: MockDate, performance: { now: () => mono }, Intl, URL, TextDecoder,
   AbortController, fetch: () => { throw Error('offline test: no network'); } };
@@ -594,7 +1262,7 @@ const accept = raw => { const normalized = value(raw); assert(normalized); test.
 const newer = (gen, seq) => { const raw = structuredClone(input.snapshot); raw.event_seq = seq;
   raw.capture.last_heartbeat_unix_ms = wall; const obs = raw.partial_observation || raw.observation;
   obs.generation = gen; obs.captured_at_unix_ms = wall - 500; obs.expires_at_unix_ms = wall + 1000; return raw; };
-const visible = () => !nodes.get('monitor-readings').hidden;
+const visible = () => nodes.get('monitor-readings').dataset.reading !== 'unknown';
 accept(input.snapshot);
 if (input.scenario === 'render') {
   assert(visible()); assert.equal(nodes.get('amount-pot').textContent, '123.45 chips');
@@ -602,7 +1270,8 @@ if (input.scenario === 'render') {
   assert.equal(seats.length, 6); assert.deepEqual(seats.map(s => s.dataset.seat), ['1','2','3','4','5','6']);
    for (const row of seats) for (const label of ['Stack', 'Wager']) assert(row.textContent.includes(label));
   assert(seats[3].textContent.includes('0.00 chips')); assert(!seats[2].textContent.includes('0.00 chips'));
-  assert.equal(nodes.get('board-cards').childNodes.length, 3);
+  assert.equal(nodes.get('board-cards').childNodes.length, 5);
+  assert(!nodes.get('monitor-readings').hidden);
   assert(nodes.get('metrics-readings').hidden); assert(nodes.get('controls-reading').hidden);
    assert(nodes.get('call-reading').hidden); assert(nodes.get('reading-limit').textContent.toLowerCase().includes('untrained'));
   assert(![...nodes.values()].some(node => node.textContent.includes('PRIVATE') || node.textContent.includes('999999.99 chips')));
@@ -628,9 +1297,19 @@ if (input.scenario === 'render') {
   assert(!nodes.get('call-reading').hidden);
 } else if (input.scenario === 'empty') {
   assert(!visible()); assert.equal(nodes.get('monitor-empty').textContent, 'Reading uncertain');
+  assert(!nodes.get('monitor-readings').hidden); assert.equal(nodes.get('seat-readings').childNodes.length, 6);
+  assert(nodes.get('seat-readings').childNodes.every(row => row.textContent.includes('Seat status pending')));
 } else if (input.scenario === 'capture-rewrite') {
   const rewritten = structuredClone(input.snapshot); rewritten.event_seq += 1;
   rewritten.partial_observation.captured_at_unix_ms += 1; accept(rewritten); assert(!visible());
+} else if (input.scenario === 'field-invalidation') {
+  mono = 200; wall += 200; accept(input.next_snapshot); assert(visible());
+  assert.equal(nodes.get('amount-pot').textContent, '123.45 chips');
+  assert.equal(nodes.get('amount-pot').dataset.reading, 'current');
+  const stack = nodes.get('seat-readings').childNodes[0].childNodes[1].childNodes[0].childNodes[1];
+  assert.equal(stack.dataset.reading, 'unknown');
+  assert.equal(value(input.next_snapshot).observation.seats[0].displayed_stack, null);
+  mono = 1001; wall += 801; test.refreshClocks(); assert(!visible());
 }
 console.log(`offline UI ${input.scenario}: PASS`);
 """
@@ -644,11 +1323,12 @@ class StaticUiTests(unittest.TestCase):
         fixture.reading()
         self.snapshot = fixture.state.snapshot()
 
-    def run_ui(self, scenario, snapshot=None):
+    def run_ui(self, scenario, snapshot=None, next_snapshot=None):
         payload = {"scenario": scenario, "snapshot": snapshot or self.snapshot,
+                   "next_snapshot": next_snapshot,
                    "app": str(dashboard.ROOT / "scripts/dashboard/app.js"),
                    "html": str(dashboard.ROOT / "scripts/dashboard/index.html")}
-        result = subprocess.run(["node", "-e", NODE_UI, json.dumps(payload)], text=True, encoding="utf-8",
+        result = subprocess.run(["node", "-e", NODE_UI], input=json.dumps(payload), text=True, encoding="utf-8",
                                 capture_output=True, timeout=20, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("PASS", result.stdout)
@@ -672,6 +1352,16 @@ class StaticUiTests(unittest.TestCase):
 
     def test_same_ticket_cannot_rewrite_its_original_capture_time(self):
         self.run_ui("capture-rewrite")
+
+    def test_same_ticket_field_removal_reaches_browser_without_renewing_pot(self):
+        fixture = PartialTests()
+        fixture.setUp()
+        source = fixture.record()
+        fixture.state.ingest(source)
+        before = fixture.state.snapshot()
+        fixture.clock.value += .2
+        fixture.state.ingest(fixture.scoped_invalidation(source, fields=["seats.1.displayed_stack"]))
+        self.run_ui("field-invalidation", before, fixture.state.snapshot())
 
     def test_all_unknown_partial_is_compact_not_a_wall_of_fake_values(self):
         raw = copy.deepcopy(self.snapshot)

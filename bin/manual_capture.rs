@@ -1,4 +1,4 @@
-//! One-shot manually approved capture. No model, worker, parser, or decision path.
+//! One-shot approval shared by capture-only and separately approved inference.
 
 use std::collections::hash_map::RandomState;
 use std::fs::{self, OpenOptions};
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ingest::capture::{CaptureSource, PlatformCapture, WindowInfo};
 use ingest::recorder::{CaptureStamp, PrivateRecorder, RecorderConfig, RecorderStatus};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::RunError;
@@ -17,32 +17,110 @@ use crate::RunError;
 const MAX_SECONDS: u64 = 600;
 const MAX_FRAMES: u64 = 1_200;
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SourcePolicy {
+    #[default]
+    Manual,
+    AutomaticBounded,
+    AutomaticSustained,
+}
+
+impl SourcePolicy {
+    pub(crate) fn is_automatic(self) -> bool {
+        matches!(self, Self::AutomaticBounded | Self::AutomaticSustained)
+    }
+
+    pub(crate) fn is_sustained(self) -> bool {
+        self == Self::AutomaticSustained
+    }
+
+    pub(crate) fn approval_version(self) -> u8 {
+        if self.is_sustained() {
+            2
+        } else {
+            1
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Approval {
+pub(crate) struct Approval {
     version: u8,
-    mode: String,
-    operator_assertion: String,
+    pub(crate) mode: String,
+    operator_assertion: Option<String>,
+    #[serde(default)]
+    pub(crate) source_policy: SourcePolicy,
+    automatic_assertion: Option<String>,
     confirmed_at_unix_ms: u64,
-    max_seconds: u64,
-    max_frames: u64,
-    source: WindowInfo,
+    pub(crate) max_seconds: u64,
+    pub(crate) max_frames: u64,
+    pub(crate) source: WindowInfo,
+    inference_assertion: Option<String>,
+    pub(crate) service_instance_id: Option<String>,
+    #[serde(default)]
+    pub(crate) experimental_bet_action: bool,
+    #[serde(default)]
+    pub(crate) cpu_visual_board: bool,
 }
 
 fn fail(code: &str) -> RunError {
     RunError::Message(code.into())
 }
 
-fn unix_ms() -> u64 {
+pub(crate) fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |time| time.as_millis().min(u128::from(u64::MAX)) as u64)
 }
 
 fn valid_approval(approval: &Approval, now: u64) -> bool {
-    approval.version == 1
-        && approval.mode == "capture-only"
-        && approval.operator_assertion == "I am seated and ready"
+    approval.version == approval.source_policy.approval_version()
+        && (!approval.cpu_visual_board
+            || approval.mode == "inference-enabled" && approval.source_policy.is_sustained())
+        && (!approval.experimental_bet_action
+            || approval.mode == "inference-enabled"
+                && approval.source_policy.is_automatic()
+                && !approval.source_policy.is_sustained())
+        && match approval.mode.as_str() {
+            "capture-only" => {
+                approval.inference_assertion.is_none() && approval.service_instance_id.is_none()
+            }
+            "inference-enabled" => {
+                approval.inference_assertion.as_deref()
+                    == Some("USE INSTALLED IT1 FOR THIS SESSION")
+                    && approval.service_instance_id.as_deref().is_some_and(|id| {
+                        id.len() == 32
+                            && id
+                                .bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    })
+            }
+            _ => false,
+        }
+        && match approval.source_policy {
+            SourcePolicy::Manual => {
+                // Older receipts may contain the seating assertion; new ones need none.
+                matches!(
+                    approval.operator_assertion.as_deref(),
+                    None | Some("I am seated and ready")
+                ) && approval.automatic_assertion.is_none()
+            }
+            SourcePolicy::AutomaticBounded => {
+                approval.mode == "inference-enabled"
+                    && approval.operator_assertion.is_none()
+                    && approval.automatic_assertion.as_deref()
+                        == Some("AUTHORIZE BOUNDED AUTOMATIC OBSERVATION")
+            }
+            SourcePolicy::AutomaticSustained => {
+                approval.mode == "inference-enabled"
+                    && !approval.experimental_bet_action
+                    && approval.operator_assertion.is_none()
+                    && approval.automatic_assertion.as_deref()
+                        == Some("AUTHORIZE SUSTAINED SAME-SOURCE OBSERVATION")
+            }
+        }
         && now
             .checked_sub(approval.confirmed_at_unix_ms)
             .is_some_and(|age| age <= 30_000)
@@ -64,7 +142,7 @@ fn valid_approval(approval: &Approval, now: u64) -> bool {
         && approval.source.height > 0
 }
 
-fn same_source(approved: &WindowInfo, current: &WindowInfo) -> bool {
+pub(crate) fn same_source(approved: &WindowInfo, current: &WindowInfo) -> bool {
     approved.hwnd == current.hwnd
         && approved.process_id == current.process_id
         && approved.exe_name.eq_ignore_ascii_case(&current.exe_name)
@@ -74,15 +152,29 @@ fn same_source(approved: &WindowInfo, current: &WindowInfo) -> bool {
         && current.height > 0
 }
 
-fn budget_reason(elapsed: u64, limit_ms: u64, status: RecorderStatus) -> Option<&'static str> {
+pub(crate) fn budget_reason(
+    elapsed: u64,
+    limit_ms: u64,
+    status: RecorderStatus,
+) -> Option<&'static str> {
     if elapsed >= limit_ms {
         return Some("duration-limit");
     }
     match status {
         RecorderStatus::Active => None,
+        RecorderStatus::DurationLimit => Some("duration-limit"),
         RecorderStatus::CountLimit => Some("frame-limit"),
         RecorderStatus::DiskLimit => Some("disk-limit"),
         _ => Some("recorder-failure"),
+    }
+}
+
+pub(crate) fn recording_end_reason(status: RecorderStatus) -> Option<&'static str> {
+    match status {
+        RecorderStatus::DurationLimit => Some("duration-limit"),
+        RecorderStatus::CountLimit => Some("frame-limit"),
+        RecorderStatus::DiskLimit => Some("disk-limit"),
+        _ => None,
     }
 }
 
@@ -95,6 +187,9 @@ fn emit_status(
     crate::live::emit(&json!({
         "event": "manual_capture", "version": 1, "mode": "capture-only",
         "elapsed_ms": elapsed_ms, "stop_reason": reason,
+        "recording_end_reason": reason.filter(|reason| matches!(*reason,
+            "duration-limit" | "frame-limit" | "disk-limit"))
+            .or_else(|| recording_end_reason(recorder.handle().snapshot().recording_status)),
         "recording": recorder.handle().snapshot(),
         "capture_failures": capture_failures,
         "capture_directory": recorder.session_path(),
@@ -251,13 +346,20 @@ fn capture_loop(
 }
 
 pub fn run(args: &[String]) -> Result<(), RunError> {
-    if args.len() != 3 || args[1] != "--approval-file" {
+    let experimental = args.len() == 4 && args[1] == "--experimental-bet-action";
+    let approval_index = if experimental { 2 } else { 1 };
+    if !matches!(args.len(), 3 | 4)
+        || args.len() == 4 && !experimental
+        || args[approval_index] != "--approval-file"
+        || !matches!(args[0].as_str(), "--capture-only" | "--manual-inference")
+        || experimental && args[0] != "--manual-inference"
+    {
         return Err(fail(
             "capture-only requires a fresh manual CLI approval file",
         ));
     }
     let root = std::env::current_dir()?;
-    let path = PathBuf::from(&args[2]);
+    let path = PathBuf::from(&args[approval_index + 1]);
     let base = root.join(".local/laya/manual-capture");
     let parent = path
         .parent()
@@ -290,7 +392,15 @@ pub fn run(args: &[String]) -> Result<(), RunError> {
     }
     let approval: Approval =
         serde_json::from_slice(&bytes).map_err(|_| fail("invalid-capture-approval"))?;
-    if !valid_approval(&approval, unix_ms()) {
+    let expected_mode = if args[0] == "--manual-inference" {
+        "inference-enabled"
+    } else {
+        "capture-only"
+    };
+    if approval.mode != expected_mode
+        || !valid_approval(&approval, unix_ms())
+        || approval.experimental_bet_action != experimental
+    {
         return Err(fail("invalid-or-expired-capture-approval"));
     }
     let mut claimed = OpenOptions::new()
@@ -299,6 +409,9 @@ pub fn run(args: &[String]) -> Result<(), RunError> {
         .open(parent.join("claimed"))?;
     writeln!(claimed, "{}", unix_ms())?;
     claimed.sync_all()?;
+    if approval.mode == "inference-enabled" {
+        return crate::manual_inference::run(approval, &root, &parent.join("STOP"), experimental);
+    }
     let started = Instant::now();
     capture_loop(
         &mut PlatformCapture::default(),
@@ -318,10 +431,16 @@ mod tests {
         Approval {
             version: 1,
             mode: "capture-only".into(),
-            operator_assertion: "I am seated and ready".into(),
+            operator_assertion: Some("I am seated and ready".into()),
+            source_policy: SourcePolicy::Manual,
+            automatic_assertion: None,
             confirmed_at_unix_ms: 1_000,
             max_seconds: 600,
             max_frames: 1_200,
+            inference_assertion: None,
+            service_instance_id: None,
+            experimental_bet_action: false,
+            cpu_visual_board: false,
             source: WindowInfo {
                 hwnd: 11,
                 process_id: 22,
@@ -346,8 +465,47 @@ mod tests {
         value.max_seconds = 601;
         assert!(!valid_approval(&value, 1_000));
         value.max_seconds = 600;
-        value.operator_assertion = "ready".into();
+        value.operator_assertion = None;
+        assert!(valid_approval(&value, 1_000));
+        value.operator_assertion = Some("ready".into());
         assert!(!valid_approval(&value, 1_000));
+    }
+
+    #[test]
+    fn experimental_approval_is_bounded_automatic_only_and_capture_flag_is_explicit() {
+        let mut value = approval();
+        value.experimental_bet_action = true;
+        assert!(!valid_approval(&value, 1_000));
+        value.mode = "inference-enabled".into();
+        value.inference_assertion = Some("USE INSTALLED IT1 FOR THIS SESSION".into());
+        value.service_instance_id = Some("a1".repeat(16));
+        assert!(!valid_approval(&value, 1_000));
+        value.source_policy = SourcePolicy::AutomaticBounded;
+        value.operator_assertion = None;
+        value.automatic_assertion = Some("AUTHORIZE BOUNDED AUTOMATIC OBSERVATION".into());
+        assert!(valid_approval(&value, 1_000));
+        assert!(!valid_approval(&value, 31_001));
+        for args in [
+            vec![
+                "--capture-only",
+                "--experimental-bet-action",
+                "--approval-file",
+                "approval.json",
+            ],
+            vec![
+                "--manual-inference",
+                "--approval-file",
+                "approval.json",
+                "--experimental-bet-action",
+            ],
+            vec![
+                "--manual-inference",
+                "--experimental-bet-action",
+                "approval.json",
+            ],
+        ] {
+            assert!(run(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
+        }
     }
 
     #[test]
@@ -367,6 +525,31 @@ mod tests {
     }
 
     #[test]
+    fn manual_inference_requires_separate_assertion_mode_and_service_instance() {
+        let mut value = approval();
+        value.mode = "inference-enabled".into();
+        assert!(!valid_approval(&value, 1_000));
+        value.inference_assertion = Some("USE INSTALLED IT1 FOR THIS SESSION".into());
+        assert!(!valid_approval(&value, 1_000));
+        value.service_instance_id = Some("a1".repeat(16));
+        assert!(valid_approval(&value, 1_000));
+        assert!(!valid_approval(&value, 31_001));
+        assert!(!valid_approval(&value, 999));
+        value.mode = "capture-only".into();
+        assert!(!valid_approval(&value, 1_000));
+        value.mode = "inference-enabled".into();
+        value.inference_assertion = Some("yes".into());
+        assert!(!valid_approval(&value, 1_000));
+        assert!(run(&[
+            "--manual-inference".into(),
+            "--approval-file".into(),
+            "approval.json".into()
+        ])
+        .is_err());
+        assert!(run(&["--manual-inference".into(), "--enable-inference".into()]).is_err());
+    }
+
+    #[test]
     fn manual_capture_budget_expiry_is_terminal_without_capture() {
         assert_eq!(
             budget_reason(600_000, 600_000, RecorderStatus::Active),
@@ -382,6 +565,118 @@ mod tests {
         );
         assert_eq!(budget_reason(0, 600_000, RecorderStatus::Active), None);
         assert!(run(&["--capture-only".into(), "--enable-inference".into()]).is_err());
+    }
+
+    #[test]
+    fn automatic_approval_requires_its_own_policy_and_never_a_seated_assertion() {
+        let mut value = approval();
+        value.mode = "inference-enabled".into();
+        value.source_policy = SourcePolicy::AutomaticBounded;
+        value.automatic_assertion = Some("AUTHORIZE BOUNDED AUTOMATIC OBSERVATION".into());
+        value.inference_assertion = Some("USE INSTALLED IT1 FOR THIS SESSION".into());
+        value.service_instance_id = Some("a1".repeat(16));
+        assert!(!valid_approval(&value, 1_000));
+        value.operator_assertion = None;
+        assert!(valid_approval(&value, 1_000));
+        assert!(!valid_approval(&value, 31_001));
+        value.mode = "capture-only".into();
+        assert!(!valid_approval(&value, 1_000));
+        value.mode = "inference-enabled".into();
+        value.source_policy = SourcePolicy::Manual;
+        assert!(!valid_approval(&value, 1_000));
+        value.source_policy = SourcePolicy::AutomaticBounded;
+        value.automatic_assertion = Some("yes".into());
+        assert!(!valid_approval(&value, 1_000));
+    }
+
+    #[test]
+    fn sustained_approval_version_consent_source_and_evidence_caps_are_strict() {
+        let mut value = approval();
+        value.mode = "inference-enabled".into();
+        value.operator_assertion = None;
+        value.inference_assertion = Some("USE INSTALLED IT1 FOR THIS SESSION".into());
+        value.service_instance_id = Some("a1".repeat(16));
+        value.source_policy = SourcePolicy::AutomaticSustained;
+        value.automatic_assertion = Some("AUTHORIZE SUSTAINED SAME-SOURCE OBSERVATION".into());
+        assert!(
+            !valid_approval(&value, 1_000),
+            "v1 must never authorize sustained"
+        );
+        value.version = 2;
+        assert!(valid_approval(&value, 31_000));
+        assert!(!valid_approval(&value, 31_001));
+        assert!(!valid_approval(&value, 999));
+        assert_eq!(
+            serde_json::to_value(value.source_policy).unwrap(),
+            "automatic-sustained"
+        );
+        assert!(value.source_policy.is_automatic());
+        for policy in [SourcePolicy::Manual, SourcePolicy::AutomaticBounded] {
+            value.source_policy = policy;
+            assert!(
+                !valid_approval(&value, 1_000),
+                "v2 only authorizes sustained"
+            );
+        }
+        value.source_policy = SourcePolicy::AutomaticSustained;
+        for assertion in [
+            None,
+            Some("yes"),
+            Some("AUTHORIZE BOUNDED AUTOMATIC OBSERVATION"),
+        ] {
+            value.automatic_assertion = assertion.map(String::from);
+            assert!(!valid_approval(&value, 1_000));
+        }
+        value.automatic_assertion = Some("AUTHORIZE SUSTAINED SAME-SOURCE OBSERVATION".into());
+        value.operator_assertion = Some("I am seated and ready".into());
+        assert!(!valid_approval(&value, 1_000));
+        value.operator_assertion = None;
+        value.experimental_bet_action = true;
+        assert!(!valid_approval(&value, 1_000));
+        value.experimental_bet_action = false;
+        value.mode = "capture-only".into();
+        assert!(!valid_approval(&value, 1_000));
+        value.mode = "inference-enabled".into();
+        value.service_instance_id = None;
+        assert!(!valid_approval(&value, 1_000));
+        value.service_instance_id = Some("a1".repeat(16));
+        value.inference_assertion = None;
+        assert!(!valid_approval(&value, 1_000));
+        value.inference_assertion = Some("USE INSTALLED IT1 FOR THIS SESSION".into());
+        for seconds in [0, 601] {
+            value.max_seconds = seconds;
+            assert!(!valid_approval(&value, 1_000));
+        }
+        value.max_seconds = 600;
+        for frames in [0, 1_201] {
+            value.max_frames = frames;
+            assert!(!valid_approval(&value, 1_000));
+        }
+        value.max_frames = 1_200;
+        let original = value.source.clone();
+        for field in [
+            "hwnd",
+            "pid",
+            "exe",
+            "title",
+            "minimized",
+            "width",
+            "height",
+        ] {
+            value.source = original.clone();
+            match field {
+                "hwnd" => value.source.hwnd = 0,
+                "pid" => value.source.process_id = 0,
+                "exe" => value.source.exe_name = "other.exe".into(),
+                "title" => value.source.title = None,
+                "minimized" => value.source.on_screen = false,
+                "width" => value.source.width = 0,
+                _ => value.source.height = 0,
+            }
+            assert!(!valid_approval(&value, 1_000), "{field}");
+        }
+        value.source = original;
+        assert!(valid_approval(&value, 1_000));
     }
 
     struct FakeSource {
@@ -429,7 +724,7 @@ mod tests {
         let base = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
-            .join(".local/laya/train/companion-20261011/capture/native-fixtures");
+            .join(".local/laya/train/manual-inference-20261012/native/capture-only-fixtures");
         for case in [
             "count",
             "resize",

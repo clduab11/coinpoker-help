@@ -14,8 +14,8 @@ Planned 2026-10-09T15:33Z-16:10Z on `checkpoint/seated-read-mechanism-2-20261002
 | D4 | **Commit and push the addendum-8 diff first**, with a thoughtful message. This authorization covers only that one commit. All Laya work stays uncommitted for the user. |
 
 The brief's authorizations still apply: conda env, pinned torch/laya/weights, Laya runs on the
-saved captures and the live table. Still not authorized: release packaging or workflow edits,
-any client input (including resizing windows), and pixels outside `.local/captures`.
+saved captures and the live table. Still not authorized: release packaging or workflow edits
+and pixels outside `.local/captures`.
 
 **Ordering safety.** Gemma code is deleted only after the Phase B-lite gate passes (Step 3).
 If Laya fails the gate, the tree still has a working Gemma path.
@@ -432,8 +432,8 @@ or the starvation proofs.
 - 800x700: letterbox.
 - Lobby 1280x778: refused for table passes.
 - Board and pot px at all of the sizes above.
-- Real CoinPoker behaviour at 16:9 is **unverified**: no capture exists and resizing is client
-  input. If the user resizes the table, capture it with the harness and re-run the probe.
+- Real CoinPoker behaviour at 16:9 is **unverified**: no capture exists. A resized source
+  needs a new harness capture and a repeated probe.
 
 ## 5. Laya server (`scripts/laya-server.py`)
 

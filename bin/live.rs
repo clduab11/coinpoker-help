@@ -64,7 +64,7 @@ fn analyze_frame(
     let output = backend
         .analyze_with_deadline(frame, &ingest::prompt::build_analysis_prompt(), deadline)
         .map_err(|error| InferenceFailure { code: error.code() })?;
-    finish_analysis(output, pipeline, deadline)
+    finish_analysis(output, Some(pipeline), deadline)
 }
 
 fn analyze_laya_frame(
@@ -76,12 +76,12 @@ fn analyze_laya_frame(
     let output = backend
         .analyze_observation_with_deadline(frame, deadline)
         .map_err(|error| InferenceFailure { code: error.code() })?;
-    finish_laya_analysis(output, pipeline, deadline)
+    finish_laya_analysis(output, Some(pipeline), deadline)
 }
 
-fn finish_laya_analysis(
+pub(crate) fn finish_laya_analysis(
     mut output: ingest::laya::LayaAnalysis,
-    pipeline: &Pipeline,
+    pipeline: Option<&Pipeline>,
     deadline: Instant,
 ) -> Result<Analysis<ui::widgets::DecisionView>, InferenceFailure> {
     let completed = if Instant::now() >= deadline {
@@ -130,7 +130,7 @@ fn finish_laya_analysis(
 
 fn finish_analysis(
     output: ingest::vlm::VlmOutput,
-    pipeline: &Pipeline,
+    pipeline: Option<&Pipeline>,
     deadline: Instant,
 ) -> Result<Analysis<ui::widgets::DecisionView>, InferenceFailure> {
     // Error codes are typed constants, never model payloads or parser messages.
@@ -145,7 +145,7 @@ fn finish_analysis(
         .state
         .as_ref()
         .filter(|s| s.action_required)
-        .and_then(|state| pipeline.decide(state).ok());
+        .and_then(|state| pipeline.and_then(|pipeline| pipeline.decide(state).ok()));
     if Instant::now() >= deadline {
         return Err(InferenceFailure {
             code: DECISION_DEADLINE_CODE,
@@ -198,12 +198,24 @@ fn leased_record(
     config: &RuntimeConfig,
 ) -> Option<serde_json::Value> {
     let age = now_ms.checked_sub(ticket.captured_at_ms)?;
-    let valid_for_ms = valid_for_ms.min(
+    let mut valid_for_ms = valid_for_ms.min(
         config
             .max_frame_age_ms
             .min(config.decision_budget_ms)
             .saturating_sub(age),
     );
+    let captured_at_unix_ms = ticket
+        .captured_at_unix_ms
+        .unwrap_or_else(|| emitted_at_unix_ms.saturating_sub(age));
+    if ticket.captured_at_unix_ms.is_some() {
+        let wall_age = emitted_at_unix_ms.checked_sub(captured_at_unix_ms)?;
+        valid_for_ms = valid_for_ms.min(
+            config
+                .max_frame_age_ms
+                .min(config.decision_budget_ms)
+                .saturating_sub(wall_age),
+        );
+    }
     if valid_for_ms == 0 {
         return None;
     }
@@ -213,10 +225,7 @@ fn leased_record(
     fields.insert("schema_version".into(), json!(2));
     fields.insert("event".into(), json!(event));
     fields.insert("observation".into(), json!(ticket));
-    fields.insert(
-        "captured_at_unix_ms".into(),
-        json!(emitted_at_unix_ms.saturating_sub(age)),
-    );
+    fields.insert("captured_at_unix_ms".into(), json!(captured_at_unix_ms));
     fields.insert("valid_for_ms".into(), json!(valid_for_ms));
     fields.insert("emitted_at_unix_ms".into(), json!(emitted_at_unix_ms));
     fields.insert(
@@ -226,7 +235,7 @@ fn leased_record(
     Some(record)
 }
 
-fn event_record(
+pub(crate) fn event_record(
     event: LiveEvent<ui::widgets::DecisionView>,
     now_ms: u64,
     emitted_at_unix_ms: u64,
@@ -311,10 +320,16 @@ fn event_record(
             let mut record =
                 serde_json::to_value(value).map_err(|e| RunError::Message(e.to_string()))?;
             // Private telemetry survives late/obsolete admission. It is never an
-            // observation, never extends a lease, and never enters browser state.
+            // observation and never extends a lease. Explicit experimental candidates
+            // may have a separate sanitized, source-leased diagnostic projection.
             let age = now_ms.checked_sub(ticket.captured_at_ms);
             let limit = config.max_frame_age_ms.min(config.decision_budget_ms);
-            let captured = age.map(|age| emitted_at_unix_ms.saturating_sub(age));
+            let captured = ticket
+                .captured_at_unix_ms
+                .or_else(|| age.map(|age| emitted_at_unix_ms.saturating_sub(age)));
+            let wall_remaining = captured
+                .and_then(|source| emitted_at_unix_ms.checked_sub(source))
+                .map_or(0, |age| limit.saturating_sub(age));
             let fields = record
                 .as_object_mut()
                 .expect("typed private diagnostics object");
@@ -330,12 +345,27 @@ fn event_record(
             );
             fields.insert(
                 "valid_for_ms".into(),
-                json!(valid_for_ms.min(age.map_or(0, |age| limit.saturating_sub(age)))),
+                json!(valid_for_ms
+                    .min(age.map_or(0, |age| limit.saturating_sub(age)))
+                    .min(wall_remaining)),
             );
-            if age.is_none_or(|age| age >= limit) {
+            if age.is_none_or(|age| age >= limit) || wall_remaining == 0 {
                 fields.insert("source_current".into(), json!(false));
             }
             return Ok(Some(record));
+        }
+        LiveEvent::PartialObservationInvalidated {
+            ticket,
+            reason,
+            fields,
+        } => {
+            let mut record = json!({"schema_version":2,"event":"partial_observation_invalidated","reason":reason,
+                "generation":ticket.generation,"epoch":ticket.epoch,"identity":ticket.identity,
+                "captured_at_unix_ms":ticket.captured_at_unix_ms,"observation":ticket});
+            if let Some(fields) = fields {
+                record["fields"] = json!(fields);
+            }
+            record
         }
         LiveEvent::ObservationInvalidated {
             reason,
@@ -388,7 +418,7 @@ fn event_record(
 }
 
 /// Source-current snapshots do not grant unvalidated action or seat evidence trust.
-struct AdmittedHistory {
+pub(crate) struct AdmittedHistory {
     observer: Observer,
     partial: ObservingTracker,
     ids: RandomState,
@@ -402,7 +432,7 @@ struct AdmittedHistory {
 }
 
 impl AdmittedHistory {
-    fn new() -> Result<Self, RunError> {
+    pub(crate) fn new() -> Result<Self, RunError> {
         let ids = RandomState::new();
         let session_id = Id(ids.hash_one((std::process::id(), unix_ms()?)).max(1));
         Ok(Self {
@@ -610,7 +640,7 @@ fn history_record(observer: &Observer, emitted_at_unix_ms: u64) -> serde_json::V
         "emitted_at_unix_ms":emitted_at_unix_ms})
 }
 
-fn emit_with_history(
+pub(crate) fn emit_with_history(
     record: &serde_json::Value,
     ticket: Option<&Ticket>,
     partial: Option<&PartialObservationView>,
@@ -621,7 +651,7 @@ fn emit_with_history(
 ) -> Result<(), RunError> {
     sink(record)?;
     match record["event"].as_str() {
-        Some("observation_invalidated") => {
+        Some("observation_invalidated" | "partial_observation_invalidated") => {
             if let (Some(generation), Some(epoch)) =
                 (record["generation"].as_u64(), record["epoch"].as_u64())
             {
@@ -765,6 +795,7 @@ pub fn run(options: Options) -> Result<(), RunError> {
                     generation: *generation,
                     epoch: *epoch,
                     captured_at_ms: *captured_at_ms,
+                    captured_at_unix_ms: None,
                 }),
                 _ => None,
             };
@@ -1145,6 +1176,7 @@ mod tests {
                 generation: 2,
                 epoch: 3,
                 captured_at_ms: 100,
+                captured_at_unix_ms: None,
             },
             value: ingest::runtime::ObservationView::from_accepted_state(&state),
             valid_for_ms: 4_900,
@@ -1304,6 +1336,31 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn recorded_source_utc_is_not_rebased_and_clock_jumps_cannot_extend_a_lease() {
+        let config = RuntimeConfig::default();
+        let mut event = observation_event(false);
+        if let LiveEvent::Observation { ticket, .. } = &mut event {
+            ticket.captured_at_unix_ms = Some(10_000);
+        }
+        let record = event_record(event.clone(), 200, 10_250, &config)
+            .unwrap()
+            .unwrap();
+        assert_eq!(record["captured_at_unix_ms"], 10_000);
+        assert_eq!(record["observation"]["captured_at_unix_ms"], 10_000);
+        assert_eq!(record["expires_at_unix_ms"], 15_000);
+        assert_eq!(record["valid_for_ms"], 4_750);
+        assert!(event_record(event.clone(), 200, 9_999, &config)
+            .unwrap()
+            .is_none());
+        assert!(event_record(event.clone(), 200, 15_000, &config)
+            .unwrap()
+            .is_none());
+        assert!(event_record(event, 5_100, 10_250, &config)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1827,6 +1884,83 @@ mod tests {
     }
 
     #[test]
+    fn scoped_partial_invalidation_serializes_only_original_source_and_no_lease() {
+        let (mut ticket, _) = history_source();
+        ticket.captured_at_unix_ms = Some(9_900);
+        let record = event_record(
+            LiveEvent::<ui::widgets::DecisionView>::PartialObservationInvalidated {
+                ticket: ticket.clone(),
+                reason: "source-region-changed",
+                fields: None,
+            },
+            200,
+            10_000,
+            &RuntimeConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(record["event"], "partial_observation_invalidated");
+        assert_eq!(record["observation"], json!(ticket));
+        assert_eq!(record["generation"], ticket.generation);
+        assert_eq!(record["epoch"], ticket.epoch);
+        assert_eq!(record["identity"], json!(ticket.identity));
+        assert_eq!(record["captured_at_unix_ms"], 9900);
+        assert_eq!(record["emitted_at_unix_ms"], 10_000);
+        for key in [
+            "fields",
+            "expires_at_unix_ms",
+            "valid_for_ms",
+            "pot_size",
+            "seats",
+            "decision",
+        ] {
+            assert!(
+                record.get(key).is_none(),
+                "an invalidation cannot grant {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn field_invalidation_serializes_exact_allowlist_without_reissuing_lease() {
+        use ingest::partial::VerifiedField;
+        let (mut ticket, _) = history_source();
+        ticket.captured_at_unix_ms = Some(9_900);
+        let record = event_record(
+            LiveEvent::<ui::widgets::DecisionView>::PartialObservationInvalidated {
+                ticket: ticket.clone(),
+                reason: "source-region-changed",
+                fields: Some(vec![VerifiedField::Stack1, VerifiedField::BoardCount]),
+            },
+            400,
+            10_200,
+            &RuntimeConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            record["fields"],
+            json!(["seats.1.displayed_stack", "board_count"])
+        );
+        assert_eq!(record["observation"], json!(ticket));
+        assert_eq!(record["captured_at_unix_ms"], 9_900);
+        assert_eq!(record["emitted_at_unix_ms"], 10_200);
+        assert_eq!(record.as_object().unwrap().len(), 10);
+        for key in [
+            "valid_for_ms",
+            "expires_at_unix_ms",
+            "pot_size",
+            "seats",
+            "quality_approved",
+        ] {
+            assert!(
+                record.get(key).is_none(),
+                "an invalidation cannot grant {key}"
+            );
+        }
+    }
+
+    #[test]
     fn partial_publication_keeps_six_stacks_and_pot_without_cards_or_phase() {
         let (ticket, _) = history_source();
         let config = RuntimeConfig::default();
@@ -1993,7 +2127,7 @@ mod tests {
                 partial: None,
                 diagnostics: ingest::partial::PerceptionDiagnostics::default(),
             },
-            &Pipeline::new(),
+            Some(&Pipeline::new()),
             Instant::now() - std::time::Duration::from_millis(1),
         )
         .unwrap();

@@ -1136,10 +1136,7 @@ never disguises source age. New untrained passes are shadow-only. Proposed
 
 Gate F remains historical FAIL, human verification UNVERIFIED, suggestions OFF,
 six-max visual scope only. Stage 2 requires approval; live observing, seated
-collection, human verification and GPU training have separate gates. CoinPoker's
-published tools policy prohibits gameplay-connected tracking/RTA; no practice/
-observing exemption is established. Resolve that separate live-use risk before
-a new live acceptance session.
+collection, human verification and GPU training have separate gates.
 
 Final private checks ended `2026-10-10T18:06:32.399907Z` (diagnostic/checklist,
 exit 0) and `18:06:33.410952Z` (pinned packages/files, exit 0), both empty stderr.
@@ -1163,8 +1160,8 @@ regression retains pot+3/5/5stacks withstrictnull; no new model/live quality cla
 NEWprivateobserving-v2-staging index has72hash-checked existingframes, all labels/
 splits pending, training/calibration/activation disabled. ExistingB/it1 preserved;
 helper not restarted, binaries isolated, noGPU/newcapture/gameinput/uploads/commits.
-Stop afterstage2. Real quality, warmtotalp95, actualhand/convention and human/data/
-provider-policy gates remain; GateF FAIL, humanUNVERIFIED, no full live acceptance.
+Stop afterstage2. Real quality, warmtotalp95, actualhand/convention and human/data
+gates remain; GateF FAIL, humanUNVERIFIED, no full live acceptance.
 
 ### Addendum 12 continuation: offline draft data readiness (2026-10-10)
 
@@ -1194,10 +1191,7 @@ positive seated controls EACH for held-out and late, with separate train/calib
 and per-seat/size/sequence requirements, capped at80 segments/2400 review frames.
 Missing quotas stay blocked; none is automatic quality or collection approval.
 
-Official tools policy rechecked (maxAge0/HTTP200, updated25June2026): no established
-practice/observing/anonymity exemption for gameplay-connected tracking/assistance.
-Offline existing/provider-approved data only; provider clarification plus separate
-user permission gate any later live route. No new capture, input, restart,
+No new capture, input, restart,
 inference, training, fitting or activation. Private UTC/command/exit/stdout/stderr
 receipts: `.local/laya/train/data-readiness-20261010T2054Z/`; failures and initial
 unclocked read-only preflight limits disclosed. Artifact integrity checks are not
@@ -1232,8 +1226,9 @@ lobby refusal. No new model call. Positive physical-seat1 wagers exist, but p6/p
 remain disabled without required qualification. Actual seated hero/control evidence
 is not established; board cycles do not establish betting/accounting sequences.
 
-Manual capture uses the existing PlatformCapture/PrivateRecorder via a one-shot
-`laya_capture.py` flow: fresh exact PID/HWND challenge, literal seated-ready assertion,
+At this checkpoint, manual capture used PlatformCapture/PrivateRecorder via a one-shot
+`laya_capture.py` flow: fresh exact PID/HWND challenge and a then-required seating assertion
+(removed by Addendum 16),
 600s or1200frames whicheverfirst, terminal replacement/failure, explicit stop,
 private hash/source-time/gap receipts and DRAFT markers. Target20 means distinct
 operator-marked opportunities; unmet target stops anyway and is reported. Normal
@@ -1256,3 +1251,102 @@ The first-session runbook and capability matrix are `docs/SEATED_DIAGNOSTIC.md`.
 No requirement to complete the future full training corpus blocks this implemented
 UI/capture workflow; recognition acceptance and real stop/latency measurements remain
 separate, unrun gates.
+
+## Addendum 14: Manual Capture to Inference to Monitor (2026-10-12)
+
+At this checkpoint, the integrated observation-only mode was added alongside capture-only.
+The Python CLI separately approved installed-it1 inference and verified service
+readiness before a fresh source challenge and the then-required seating assertion
+(removed by Addendum 16), and owned one bounded
+native process. The native approved-source wrapper records the exact original
+frame, then feeds existing LiveRuntime/Laya crops/passes/field admission. Its typed
+JSONL is consumed by a bounded private ManualSessionFeed into existing DashboardState
+and the compact Monitor. No new dashboard, auto-attachment or HTTP control route.
+
+Manual single/batch model calls bind the approved service and session; stopped,
+expired or replaced calls are refused and in-flight results are discarded. Original
+source UTC/monotonic clocks and absolute expiry survive recording/transport. The
+600-second /1200-saved-frame first limit applies to the whole session; resizing the
+same approved identity revalidates geometry without renewal. Browser session budget
+leases only shorten. Capture-only performs no model load, readiness probe or call.
+
+Evidence is private under `.local/laya/train/manual-inference-20261012/`: full Rust
+workspace521pass/1deliberatelyignored live-capture smoke, Python/Node282pass, native
+build/lint/format and production synthetic native-to-private-feed-to-renderer proof.
+Independent review found and owners fixed request binding, retired-source cleanup,
+terminal-I/O cleanup, atomic GET/session pairing and browser budget expiry defects;
+100focusedtests and7independent corrected regressions passed. Earlier failed attempts
+are retained, including a parallel local-mock timeout and transient Windows rename.
+
+Saved real-source regression rechecks4PNG hashes/dimensions and28crop geometries,
+unchanged saved answers, upper Pot and3/5/5stack candidates, below-floor board and
+strictnull. Historical sources remain expired, not rebased. Physical-seat1 wager
+positives exist; p6/p7 remain disabled. Seated hero/control positives remain
+unestablished. No labels, model assets, floors or human-review decisions changed.
+
+Status: **IMPLEMENTATION VERIFIED OFFLINE; REAL RUNTIME TEST PENDING.** No new
+capture, model load/warm/fresh inference, client operation or helper replacement was
+performed. The canonical dashboard-only listener was inspected, not restarted.
+Source confirmation and separate model-use approval are still required for the one
+bounded real test. Exact commands/capability matrix: `docs/SEATED_DIAGNOSTIC.md`.
+No commit/push. The incoming untracked runtime-refresh plan remains untouched.
+
+## Addendum 15: Authorized Automatic Observer Trials (2026-10-12)
+
+The operator subsequently approved installed-it1 use and bounded automatic startup
+when one table has qualified visible activity, regardless of seating. Explicit
+`-EnableInference -AutomaticInference` and an existing private source profile are
+required. No seated assertion is fabricated. Metadata search, a 30-second activity
+probe, and active observation are distinct; probe time/frames count toward the same
+600-second/1200-frame limits. No automatic rearm or old supervisor is restored.
+
+The first actual run saved 9 frames but submitted no model jobs. Windows receipt
+sharing and capture-cadence submission defects were corrected offline. A separately
+approved new run saved 25 hash-verified frames, executed 21 supported pass-answer
+records, and transported three typed diagnostics and three rejections into existing
+DashboardState. Source ages 5426/5990ms exceeded the unchanged 5000ms deadline; the
+third result was obsolete at1892ms. Stack batches alone took4496.6/6071.3ms. Board
+answers remained below the unchanged1.0floor. The Monitor cleared readings and showed
+the30-second probe stop, saved count,13gaps/16estimated missed samples and deficit20.
+
+Final offline regression:525Rust workspace tests passed,2deliberately ignored
+(real-window smoke and separately invoked private replay);304Python/Node tests
+passed. Explicit private-frame scheduling replay passed without predictions. Native
+build, lint/format, synthetic native-to-renderer transport and real-source hash/crop
+audits passed. Receipts: `.local/laya/train/automatic-inference-20261012/`, especially
+`HANDOFF.md` and `retry-1/audit.json`. First-run/failing experiment receipts preserved.
+
+**Integration and real rejection transport are exercised; usable live recognition
+is NOT verified.** No current fields or table activity were admitted. Latency-budgeted
+pass execution while preserving field/source freshness remains the concrete blocker;
+do not relax floors or revive stale results to make a display look populated. The
+latest one-shot session is stopped, the single canonical service remains model-ready
+and idle, and no further test is armed. Direct manual/seated accuracy remains unrun.
+Suggestions OFF, R17 strict, Gate F historical FAIL, labels DRAFT/review PENDING.
+No client actions, training, downloads, model/floor replacement, commit or push.
+
+## Addendum 16: Local Control and Experimental Analysis (2026-10-13)
+
+Manual confirmation now uses only the exact fresh PID/HWND/nonce challenge,
+source identity recheck and 30-second deadline. New manual receipts store
+`operator_assertion:null`; the known old seated string remains readable only for
+receipt compatibility, not hero identity. Explicit inference/resource opt-in remains.
+
+Monitor's **Stop capture** sends exact `session_id`/`service_instance_id` JSON to
+the same-origin `POST /api/capture/stop`. A fresh capturing receipt and current
+service/session binding are required. HTTP 200 acknowledges the stop request;
+409 rejects stale/unavailable/mismatched sessions. No model/GPU work is needed.
+GET polling stays passive; HTTP start/mark and poker-input routes are not implemented.
+
+The native manual path now uses the existing decision Pipeline instead of blanket
+Recommendation/Table suppression. Weak unleased `table` events are not full-state
+or advice authority. A genuine current full native observation and matching legal
+decision can project **EXPERIMENTAL** analysis with `quality_approved:false`.
+Metrics must pass finite/range and supporting-field checks. Partial, stale,
+source/lease-mismatched or illegal input still rejects. R17, parser/source/deadline
+validation, failed model grade and actual untrained hero/control limits remain.
+
+Earlier counts, clocks and receipts above describe their original checkpoints,
+not this integration. These source changes do not establish new live seated
+recognition, human verification or quality certification. Current wire and workflow
+details are in `docs/EVENTS_V2.md` and `docs/SEATED_DIAGNOSTIC.md`.

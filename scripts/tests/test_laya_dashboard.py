@@ -1,4 +1,5 @@
 import concurrent.futures
+import copy
 import importlib.util
 import io
 import json
@@ -33,6 +34,36 @@ class Clock:
 IDENTITY = {"process_id": 42, "hwnd": "0x100000001", "exe_name": "PRIVATE-NAME.exe"}
 
 
+def native_observation(clock, generation=1, epoch=1, **extra):
+    """Full ObservationView + leased_record envelope, not a partial capability grant."""
+    now = int(clock.wall() * 1000)
+    controls = dashboard.unknown_controls()
+    for control in controls:
+        if control["action"] in ("fold", "call", "raise"):
+            control.update(presence="present", enabled="enabled")
+    return {"schema_version": 2, "event": "observation",
+            "observation": {"identity": IDENTITY, "generation": generation, "epoch": epoch,
+                            "captured_at_ms": 1000 + generation, "captured_at_unix_ms": now - 500},
+            "emitted_at_unix_ms": now, "captured_at_unix_ms": now - 500,
+            "expires_at_unix_ms": now + 1000, "valid_for_ms": 1000,
+            "game_phase": "flop", "hero_cards": [{"rank": "A", "suit": "hearts"}, {"rank": "K", "suit": "hearts"}],
+            "board": [{"rank": "Q", "suit": "hearts"}, {"rank": "7", "suit": "clubs"}, {"rank": "2", "suit": "hearts"}],
+            "pot_size": 150, "to_call": 50, "hero_chips": 1000, "min_raise_to": 100, "max_raise_to": 1000,
+            "role": "your_turn", "hero_seated": True, "action_required": True,
+            "available_actions": ["fold", "call", "raise"], "controls": controls,
+            "acting_seat": None, "acting_to_call": None, "wagers": [],
+            "metrics": dict.fromkeys(dashboard.METRIC_FIELDS),
+            "verified_fields": ["pot_size", "hero_seated", "action_required", "hero_chips", "controls", "to_call",
+                                "min_raise_to", "max_raise_to"], "quality_approved": False, **extra}
+
+
+def native_decision(source, **extra):
+    return {key: copy.deepcopy(source[key]) for key in ("schema_version", "observation", "captured_at_unix_ms",
+            "emitted_at_unix_ms", "expires_at_unix_ms", "valid_for_ms")} | {
+                "event": "decision", "action": "call", "amount": 50, "ev": 70.0, "equity": .6,
+                "pot_odds": .25, "break_even": .25, "opponent": "unknown", "confidence": None, **extra}
+
+
 class StateTests(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
@@ -51,7 +82,7 @@ class StateTests(unittest.TestCase):
         now = int(self.clock.wall() * 1000)
         record = {"schema_version": 2, "event": "observation",
                   "observation": {"identity": IDENTITY, "generation": generation, "epoch": epoch,
-                                  "captured_at_ms": 123},
+                                  "captured_at_ms": 123 + generation},
                   "emitted_at_unix_ms": now, "captured_at_unix_ms": now - 500,
                   "expires_at_unix_ms": now + 1000, "valid_for_ms": 1000,
                    "game_phase": "flop", "hero_cards": [],
@@ -657,6 +688,244 @@ class StateTests(unittest.TestCase):
             for invalid in ({"client_width": 800}, {"lobby_size": "0x778"}, {"pid": True}):
                 with self.assertRaises(ValueError):
                     dashboard.capture_argv({"exe_name": "SyntheticClient.exe", **invalid})
+
+
+class NativeProjectionTests(unittest.TestCase):
+    health = StateTests.health
+
+    def setUp(self):
+        self.clock = Clock()
+        self.state = dashboard.DashboardState("synthetic", monotonic=self.clock.mono, wall=self.clock.wall)
+
+    def fresh(self, **extra):
+        self.state.set_model("ready", calibrated=True, floors_loaded=True)
+        self.state.begin_stream()
+        self.health()
+        source = native_observation(self.clock, **extra)
+        self.state.ingest(source)
+        return source
+
+    def test_native_full_observation_and_decision_project_without_claiming_model_certification(self):
+        metrics = {"hand_rank": "High Card", "pot_odds": {"seat": None, "required_equity_pct": 25},
+                   "draw": {"outs": 9, "next_card_pct": 9 / 47 * 100, "by_river_pct": (1 - 38 / 47 * 37 / 46) * 100},
+                   "equity_pct": 60}
+        source = self.fresh(metrics=metrics)
+        self.state.ingest(native_decision(source, opponent="PRIVATE-NAME", raw_response="PRIVATE-TEXT"))
+        with patch.object(dashboard.subprocess, "Popen", side_effect=AssertionError("snapshot spawned a process")), \
+                patch.object(dashboard.manual_capture, "stop_session", side_effect=AssertionError("snapshot stopped capture")):
+            value = self.state.snapshot()
+        view, advice = value["observation"], value["advice"]
+        self.assertEqual(view["metrics"], metrics)
+        self.assertEqual((advice["action"], advice["amount"], advice["ev"]), ("call", 50, 70))
+        self.assertEqual((advice["equity_pct"], advice["pot_odds_pct"], advice["break_even_pct"]), (60, 25, 25))
+        self.assertTrue(value["server"]["advice_ready"])
+        self.assertEqual(value["server"]["quality_gate"], "failed")
+        for projection in (view, advice):
+            self.assertFalse(projection["quality_approved"])
+            self.assertTrue(projection["experimental"])
+            self.assertEqual(projection["session_id"], value["session_id"])
+            self.assertEqual(projection["source_id"], value["capture"]["source_id"])
+            self.assertEqual(projection["generation"], value["capture"]["generation"])
+            self.assertEqual(projection["expires_at_unix_ms"], source["expires_at_unix_ms"])
+        self.assertNotIn("PRIVATE", json.dumps(value))
+        self.assertNotIn("verified_fields", json.dumps(value))
+
+    def test_each_supported_native_action_requires_exact_offered_control_and_amount(self):
+        for action, amount in (("fold", 0), ("call", 50), ("raise", 250), ("check", 0), ("allin", 40)):
+            with self.subTest(action=action):
+                source = native_observation(self.clock)
+                if action == "check":
+                    source.update(to_call=0, available_actions=["check", "raise"])
+                elif action == "allin":
+                    source.update(hero_chips=40, available_actions=["fold", "allin"], min_raise_to=None, max_raise_to=None)
+                    source["verified_fields"] = source["verified_fields"][:-2]
+                for control in source["controls"]:
+                    offered = ("allin" if control["action"] == "all_in" else control["action"]) in source["available_actions"]
+                    control.update(presence="present" if offered else "unknown", enabled="enabled" if offered else "unknown")
+                source = self.fresh(**source)
+                cost = min(source["to_call"], source["hero_chips"])
+                odds = cost / (150 + cost) if cost else None
+                self.state.ingest(native_decision(source, action=action, amount=amount, pot_odds=odds, break_even=odds))
+                self.assertEqual(self.state.snapshot()["advice"]["action"], "all_in" if action == "allin" else action)
+
+    def test_quality_flag_cannot_upgrade_legacy_partial_missing_or_contradictory_evidence(self):
+        cases = [{"available_actions": None}, {"available_actions": ["call"]}, {"available_actions": ["call", "call"]},
+                 {"available_actions": ["fold", "call", "bet"]}, {"controls": None},
+                 {"pot_size": 0}, {"hero_chips": 0}, {"hero_chips": 0x100000000}, {"to_call": None},
+                 {"verified_fields": ["pot_size"]}, {"verified_fields": "controls"},
+                 {"hero_seated": None}, {"action_required": False}, {"role": "observing"},
+                 {"acting_seat": "3"}, {"acting_seat": True}, {"wagers": None}, {"wagers": [{"seat": 1, "amount": 50}]},
+                 {"capabilities": [{"training": "trained_unapproved"}]}, {"board_slots": [None] * 5},
+                 {"metrics": {}}, {"experimental": {"diagnostic_only": True}}]
+        for extra in cases:
+            with self.subTest(extra=extra):
+                source = self.fresh(quality_approved=True, **extra)
+                self.state.ingest(native_decision(source, quality_approved=True))
+                value = self.state.snapshot()
+                self.assertIsNone(value["advice"])
+                self.assertFalse(value["server"]["advice_ready"])
+                if value["observation"] is not None:
+                    self.assertFalse(value["observation"]["quality_approved"])
+                    self.assertEqual(value["observation"]["metrics"], dict.fromkeys(dashboard.METRIC_FIELDS))
+
+
+    def test_observing_and_waiting_can_have_independent_metrics_but_no_hero_advice(self):
+        for role in ("observing", "seated_waiting"):
+            observing = role == "observing"
+            source = self.fresh(role=role, hero_seated=not observing, action_required=False,
+                                hero_cards=[] if observing else native_observation(self.clock)["hero_cards"],
+                                controls=dashboard.unknown_controls(), available_actions=None, to_call=None,
+                                hero_chips=None if observing else 1000, min_raise_to=None, max_raise_to=None,
+                                acting_seat=3, acting_to_call=50, verified_fields=list(dashboard.VERIFIED_FIELDS),
+                                metrics={"hand_rank": "High Card", "draw": None, "equity_pct": 60,
+                                         "pot_odds": {"seat": 3, "required_equity_pct": 25}})
+            self.state.ingest(native_decision(source))
+            view = self.state.snapshot()
+            self.assertIsNone(view["advice"])
+            metrics = view["observation"]["metrics"]
+            self.assertEqual(metrics["hand_rank"], None if observing else "High Card")
+            self.assertEqual(metrics["equity_pct"], None if observing else 60)
+            self.assertEqual(metrics["pot_odds"], {"seat": 3, "required_equity_pct": 25} if observing else None)
+
+    def test_decision_types_ranges_and_action_amounts_are_closed(self):
+        invalid = [{field: value} for field in ("equity", "pot_odds", "break_even", "confidence")
+                   for value in (True, -1, "0.6", 1.01, float("nan"), float("inf"), 10 ** 1000)]
+        invalid += [{"amount": value} for value in (None, True, -1, 50.0, "50", 0x100000000)]
+        invalid += [{"ev": value} for value in (None, True, "70", float("inf"), float("nan"), 10 ** 1000)]
+        invalid += [{"action": value} for value in (None, {}, [], "CALL", "bet", "all_in", "PRIVATE")]
+        invalid += [{"action": "check", "amount": 0}, {"action": "fold", "amount": 1},
+                    {"action": "call", "amount": 0}, {"action": "raise", "amount": 99},
+                    {"action": "raise", "amount": 1001}, {"pot_odds": .5}, {"break_even": None}]
+        source = self.fresh()
+        for extra in invalid:
+            with self.subTest(extra=extra):
+                self.state.ingest(native_decision(source, **extra))
+                self.assertIsNone(self.state.snapshot()["advice"])
+                self.assertFalse(self.state.snapshot()["server"]["advice_ready"])
+        self.state.ingest(native_decision(source))
+        self.assertIsNotNone(self.state.snapshot()["advice"])
+
+    def test_metric_types_bounds_and_dependencies_do_not_leak_untrusted_strings(self):
+        invalid = (True, -1, 101, "PRIVATE", float("nan"), float("inf"), 10 ** 1000, {}, [])
+        for value in invalid:
+            source = self.fresh(metrics={"hand_rank": value, "pot_odds": {"seat": None, "required_equity_pct": value},
+                                         "draw": {"outs": value, "next_card_pct": value, "by_river_pct": value}, "equity_pct": value})
+            self.assertEqual(self.state.snapshot()["observation"]["metrics"], dict.fromkeys(dashboard.METRIC_FIELDS))
+            self.state.ingest(native_decision(source))
+            self.assertIsNotNone(self.state.snapshot()["advice"])
+        for odds, draw in (({"seat": 1, "required_equity_pct": 25}, {"outs": 48, "next_card_pct": 25, "by_river_pct": 50}),
+                           ({"seat": None, "required_equity_pct": 50}, {"outs": 9, "next_card_pct": 40, "by_river_pct": 30})):
+            self.fresh(metrics={"hand_rank": None, "equity_pct": None, "pot_odds": odds, "draw": draw})
+            self.assertEqual(self.state.snapshot()["observation"]["metrics"], dict.fromkeys(dashboard.METRIC_FIELDS))
+
+    def test_exact_ticket_clocks_table_epoch_generation_and_session_binding(self):
+        source = self.fresh()
+        base = native_decision(source)
+        tickets = [{**base["observation"], key: value} for key, value in (
+            ("generation", 2), ("generation", True), ("epoch", 2), ("captured_at_ms", 1002),
+            ("captured_at_unix_ms", source["captured_at_unix_ms"] + 1),
+            ("identity", {**IDENTITY, "hwnd": "0x2"}), ("identity", {**IDENTITY, "process_id": 43}),
+            ("identity", {**IDENTITY, "exe_name": "other.exe"}))]
+        for ticket in tickets:
+            self.state.ingest({**base, "observation": ticket})
+            self.assertIsNone(self.state.snapshot()["advice"])
+        for extra in ({"captured_at_unix_ms": source["captured_at_unix_ms"] + 1},
+                      {"expires_at_unix_ms": source["captured_at_unix_ms"] + 5001, "valid_for_ms": 5000},
+                      {"emitted_at_unix_ms": int(self.clock.wall() * 1000) + 1},
+                      {"expires_at_unix_ms": int(self.clock.wall() * 1000)}, {"valid_for_ms": True}):
+            self.state.ingest({**base, **extra})
+            self.assertIsNone(self.state.snapshot()["advice"])
+        self.state.ingest(base, session_id="retired-session")
+        self.assertIsNone(self.state.snapshot()["advice"])
+        self.state.ingest(base, session_id=self.state.session_id)
+        self.assertIsNotNone(self.state.snapshot()["advice"])
+
+
+    def test_poll_replay_and_relabelled_generation_cannot_extend_original_lease(self):
+        source = self.fresh()
+        self.state.ingest(native_decision(source, expires_at_unix_ms=source["emitted_at_unix_ms"] + 750, valid_for_ms=750))
+        original = self.state.snapshot()["advice"]["expires_at_unix_ms"]
+        self.clock.value += .5
+        self.state.ingest(native_decision(source))
+        advice = self.state.snapshot()["advice"]
+        self.assertEqual(advice["expires_at_unix_ms"], original)
+        self.assertLessEqual(advice["remaining_ms"], 250)
+        self.clock.value += .251
+        self.assertIsNone(self.state.snapshot()["advice"])
+        self.state.ingest(native_decision(source))
+        self.assertIsNone(self.state.snapshot()["advice"])
+        replay = copy.deepcopy(source)
+        replay["observation"]["generation"] = 2
+        replay.update(emitted_at_unix_ms=int(self.clock.wall() * 1000), valid_for_ms=3000,
+                      expires_at_unix_ms=int(self.clock.wall() * 1000) + 3000, quality_approved=True)
+        self.health(2)
+        self.state.ingest(replay)
+        self.state.ingest(native_decision(replay))
+        self.assertIsNone(self.state.snapshot()["advice"])
+        self.clock.value += .25
+        self.assertIsNone(self.state.snapshot()["observation"])
+        self.state.ingest(replay)
+        self.assertIsNone(self.state.snapshot()["observation"])
+
+    def test_source_loss_new_generation_and_model_loss_clear_without_rearming_old_data(self):
+        for change in (lambda: self.health(2), lambda: self.health(2, 2), lambda: self.health(2, identity={**IDENTITY, "hwnd": "0x2"}),
+                       lambda: self.health(fresh_capture=False), lambda: self.state.end_stream(),
+                       lambda: self.state.set_model("failed"),
+                       lambda: self.state.ingest({"schema_version": 2, "event": "clear", "generation": 1, "reason": "action-not-required"})):
+            source = self.fresh(metrics={"hand_rank": "High Card", "equity_pct": 60, "draw": None, "pot_odds": None})
+            self.state.ingest(native_decision(source))
+            self.assertIsNotNone(self.state.snapshot()["advice"])
+            change()
+            self.assertIsNone(self.state.snapshot()["advice"])
+            self.state.ingest(source)
+            self.state.ingest(native_decision(source))
+            self.assertIsNone(self.state.snapshot()["advice"])
+
+    def test_independent_monotonic_and_wall_expiry_remove_advice_and_metrics(self):
+        for clock in ("monotonic", "wall"):
+            source = self.fresh(metrics={"hand_rank": None, "equity_pct": 60, "draw": None, "pot_odds": None})
+            self.state.ingest(native_decision(source))
+            now = getattr(self.state, clock)()
+            with patch.object(self.state, clock, return_value=now + 1.001):
+                self.assertIsNone(self.state.snapshot()["advice"])
+                self.assertIsNone(self.state.snapshot()["observation"])
+            self.state.ingest(source)
+            self.assertIsNone(self.state.snapshot()["observation"])
+
+    def test_model_readiness_and_quality_assertions_cannot_requalify_an_old_observation(self):
+        self.state.begin_stream()
+        self.health()
+        source = native_observation(self.clock, quality_approved=True)
+        self.state.ingest(source)
+        self.state.set_model("ready", calibrated=True, floors_loaded=True)
+        self.state.ingest(source)
+        self.state.ingest(native_decision(source, quality_approved=True))
+        self.assertIsNone(self.state.snapshot()["advice"])
+        self.clock.value += .1
+        self.health(2)
+        fresh = native_observation(self.clock, generation=2)
+        self.state.ingest(fresh)
+        self.state.ingest(native_decision(fresh))
+        self.assertIsNotNone(self.state.snapshot()["advice"])
+        self.assertFalse(self.state.snapshot()["observation"]["quality_approved"])
+
+    def test_heartbeat_loss_and_unprovable_all_in_raise_do_not_publish_advice(self):
+        source = self.fresh(valid_for_ms=4500, expires_at_unix_ms=int(self.clock.wall() * 1000) + 4500)
+        self.state.ingest(native_decision(source))
+        self.assertIsNotNone(self.state.snapshot()["advice"])
+        self.clock.value += 2.501
+        value = self.state.snapshot()
+        self.assertIsNone(value["advice"])
+        self.assertIsNone(value["observation"])
+        self.assertIsNone(value["capture"]["source_id"])
+        self.assertFalse(value["server"]["advice_ready"])
+        source = native_observation(self.clock, available_actions=["fold", "call", "raise", "allin"])
+        source["controls"][-1].update(presence="present", enabled="enabled")
+        source = self.fresh(**source)
+        self.state.ingest(native_decision(source, action="allin", amount=1000))
+        self.assertIsNone(self.state.snapshot()["advice"], "no hero contribution/all-in raise-to proof in ObservationView")
+        self.state.ingest(native_decision(source, action="raise", amount=1000))
+        self.assertEqual(self.state.snapshot()["advice"]["action"], "raise")
 
 
 class CaptureTests(unittest.TestCase):

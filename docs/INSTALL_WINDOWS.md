@@ -71,7 +71,7 @@ matching runtime is a separate missing setup step; do not silently substitute
 the base or run training. Dashboard-only use is distinct from model readiness,
 and clean-account acceptance is still unrun.
 
-## 3. Open the read-only local dashboard
+## 3. Open the local dashboard
 
 **2026-10-11 companion checkpoint:** use [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md)
 for the current first-session workflow. Both default launch and `-DashboardOnly`
@@ -94,6 +94,9 @@ Choose one mode, not two concurrent servers. Open **`http://127.0.0.1:18090/`**.
 The same loopback listener exposes `/v1/models` and `/v1/laya/predict`; the
 read-only state view is `/api/state`. Predict must stay unavailable until pin
 verification/loading succeeds, while the page reports loading or failure.
+Monitor also exposes **Stop capture** through the same-origin, current-session/service
+bound `POST /api/capture/stop`. Stopping does not require a loaded model or GPU;
+`GET /api/state` remains passive. See [the contract](EVENTS_V2.md).
 Neither mode starts live capture automatically. Keep the owning terminal open;
 shutdown should stop only owned processes. If 18090 is occupied, report the
 conflict rather than kill an unowned process or fall back to `18080`/`8080`.
@@ -169,8 +172,8 @@ The native feed currently supplies health only: `recording_enabled:false`,
 the next checkpoint; retained `.local/laya/dataset/capture_loop.py` is later-session
 tooling, never automatically launched by the UI or this first phase.
 Capture and any new pixels stay local, with pixels under `.local/captures/`.
-The user alone selects a seat and plays; the page has no capture/training or
-poker-client input controls.
+The current page has an explicit **Stop capture** control. HTTP start/mark,
+training and poker-client input controls are not implemented.
 
 Native output is JSON lines; see [EVENTS_V2.md](EVENTS_V2.md). Honor clearing,
 absolute expiry, stream reset/EOF and capture health. Legacy table events/raw

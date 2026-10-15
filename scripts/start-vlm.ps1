@@ -1,14 +1,23 @@
 <#
 .SYNOPSIS
-Starts the read-only Laya dashboard without capture or model loading by default.
+Starts the Laya Monitor with configurable model loading and capture.
 .DESCRIPTION
 Normal launch and -DashboardOnly load no model and never attach or record.
--EnableInference requires separate operator approval and only loads the pinned
-model. It does not start capture. Manual capture-only sessions use the separate
-scripts/laya_capture.py CLI with exact source confirmation and seated assertion.
-Suggestions remain OFF; model loading is not quality or advice approval.
+-EnableInference loads the pinned model. Alone it does not start capture. -AutomaticInference
+arms one bounded source-profile discovery and independently admitted readout session,
+whether observing or seated. Activity qualifies history, not Pot/stack/card readout.
+All frames/time count against 600s/1200 frames unless -ContinuousObservation is
+selected. That mode observes the same source until stop/loss; its
+evidence recording still ends at 600s/1200 frames/1 GiB.
+Manual sessions use scripts/laya_capture.py
+with exact source confirmation. Its --mode inference-enabled
+also requires separate session inference consent; default mode is capture-only.
+Analysis requires valid current inputs; model loading does not establish accuracy.
 .PARAMETER PracticeConfig
-Legacy selector parameter. Supplying it is refused, never automatically followed.
+Private source selector for -AutomaticInference; it does not start capture by itself.
+.PARAMETER ExperimentalBetAction
+Explicit unvalidated p6/p7 diagnostics only, bound to the approved automatic source.
+No wager/scene accuracy approval, action history or recommendations are enabled.
 .PARAMETER LiveConfig
 Legacy automatic attachment parameter; refused.
 #>
@@ -16,6 +25,10 @@ param(
     [string]$AnswersLog = '',
     [switch]$DashboardOnly,
     [switch]$EnableInference,
+    [switch]$AutomaticInference,
+    [switch]$ContinuousObservation,
+    [switch]$ManualStart,
+    [switch]$ExperimentalBetAction,
     [string]$LiveConfig = '',
     [switch]$NoAutoAttach,
     [string]$PracticeConfig = '.local/practice-table.json'
@@ -32,11 +45,23 @@ $root = Split-Path -Parent $PSScriptRoot
 $pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'laya-pins.json') -Raw | ConvertFrom-Json
 if ($pins.format -ne 1) { throw 'Unsupported Laya pin format.' }
 if ($pins.server.port -ne 18090) { throw 'Laya requires port 18090; no alternate-port fallback.' }
-if ($LiveConfig -or $PSBoundParameters.ContainsKey('PracticeConfig')) {
-    throw 'Automatic attachment is disabled. Use scripts/laya_capture.py for a confirmed capture-only session.'
+if ($LiveConfig -or ($PSBoundParameters.ContainsKey('PracticeConfig') -and -not $AutomaticInference)) {
+    throw 'Use -PracticeConfig with -AutomaticInference; -LiveConfig is unsupported.'
+}
+if ($AutomaticInference -and (-not $EnableInference -or $NoAutoAttach -or $DashboardOnly)) {
+    throw 'Automatic observation needs both -EnableInference and -AutomaticInference, without -NoAutoAttach/-DashboardOnly.'
 }
 if ($DashboardOnly -and $EnableInference) {
-    throw 'Choose -DashboardOnly or separately approved -EnableInference, not both.'
+    throw 'Choose -DashboardOnly or -EnableInference, not both.'
+}
+if ($ExperimentalBetAction -and -not $AutomaticInference) {
+    throw 'Experimental bet/action diagnostics require separately approved -EnableInference and -AutomaticInference.'
+}
+if ($ContinuousObservation -and (-not $EnableInference -or -not $AutomaticInference -or $ExperimentalBetAction)) {
+    throw 'Continuous observation requires -EnableInference and -AutomaticInference, without -ExperimentalBetAction.'
+}
+if ($ManualStart -and -not $AutomaticInference) {
+    throw 'Manual start requires -EnableInference and -AutomaticInference to configure the source selector.'
 }
 # Check before any Python/model start. Do not kill an unowned listener or restart it.
 try {
@@ -69,11 +94,20 @@ if ($EnableInference) {
 } else {
     $serverArgs += '--dashboard-only'
 }
-Write-Output "Starting the read-only dashboard at http://127.0.0.1:$($pins.server.port)/. Inference opt-in: $EnableInference. No automatic capture or recording."
+if ($AutomaticInference) { $serverArgs += @('--automatic-inference', '--practice-config', $PracticeConfig) }
+if ($ContinuousObservation) { $serverArgs += '--continuous-observation' }
+if ($ManualStart) { $serverArgs += '--manual-start' }
+if ($ExperimentalBetAction) { $serverArgs += '--experimental-bet-action' }
+Write-Output "Starting the Monitor at http://127.0.0.1:$($pins.server.port)/. Inference: $EnableInference. Automatic observation: $AutomaticInference. Sustained same-source observation: $ContinuousObservation."
 # Keep diagnostics locally; the server never logs requests or images.
 $errorDir = Join-Path $root '.local/laya/train'
 [void](New-Item -ItemType Directory -Force -Path $errorDir)
 $errorFile = Join-Path $errorDir ("server-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')).stderr.txt")
 Write-Output "Private diagnostics: $errorFile"
-& $python @serverArgs 2>$errorFile
+if ($ContinuousObservation) {
+    $serverArgs += @('--stderr-log', $errorFile)
+    & $python @serverArgs
+} else {
+    & $python @serverArgs 2>$errorFile
+}
 if ($LASTEXITCODE -ne 0) { throw "Laya server exited with code $LASTEXITCODE" }

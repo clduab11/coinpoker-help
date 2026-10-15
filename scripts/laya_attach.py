@@ -1,7 +1,7 @@
 """Metadata-only attachment to the user's declared CoinPoker NLH game window.
 
-The built-in rule declares practice-six-max scope; titles do not prove practice,
-cash status, seating, six seats, or calibrated perception. No lobby image, pixel
+The built-in rule declares a six-seat layout; titles do not prove game type,
+seating, six seats, or calibrated perception. No lobby image, pixel
 classification, fixed resolution, or ROI is used. Capture owns current bounds.
 An explicitly confirmed private profile can select the exact OS title CoinPoker
 when the visible NLH caption is drawn inside that game window. This is not a
@@ -19,7 +19,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROFILE = ".local/practice-table.json"
-USER_SCOPE = "practice-six-max"
+USER_SCOPE = "six-max-table"
 SELECTOR_EXE = "CoinPoker.exe"
 SELECTOR_TITLE_REGEX = r"^NLH\s*[0-9]+"
 _NLH_TITLE = re.compile(SELECTOR_TITLE_REGEX)
@@ -35,7 +35,7 @@ MAX_DIAGNOSTIC_CANDIDATES = 32
 RECORDING = {"record_dir": ".local/captures", "record_max_frames": 7200,
              "record_max_bytes": 1073741824, "record_interval_ms": 500}
 MESSAGES = {
-    "ready": "Game window selected under user-declared practice-six-max scope; suggestions remain off.",
+    "ready": "Game window selected using the user-declared source rule; recognition is evaluated separately.",
     "practice-profile-invalid": "Automatic attachment is blocked: the optional private selector rule is invalid.",
     "practice-profile-confirmation-required": "Saving an optional selector rule requires explicit operator confirmation.",
     "practice-profile-mismatch": "The optional selector rule does not identify one visible game window.",
@@ -165,19 +165,24 @@ def validate_profile(value):
             or type(value["format"]) is not int or value["format"] != 1
             or type(value["version"]) is not int or value["version"] != 1):
         raise AttachError("practice-profile-invalid")
+    # Existing private selectors retain their exact matching behavior.
+    if value.get("user_scope") == "practice-six-max":
+        value = {**value, "user_scope": USER_SCOPE}
     for rule in (BUILTIN_RULE, CONFIRMED_GAME_WINDOW_RULE):
         if value == rule.document():
             return rule
     raise AttachError("practice-profile-invalid")
 
 
-def load_profile(path=DEFAULT_PROFILE, *, root=ROOT):
+def load_profile(path=DEFAULT_PROFILE, *, root=ROOT, required=False):
     """Missing optional file uses the user-provided built-in rule, without writes."""
     path = _private_path(path, root)
     try:
         with path.open("rb") as stream:
             raw = stream.read(MAX_PROFILE_BYTES + 1)
     except FileNotFoundError:
+        if required:
+            raise AttachError("practice-profile-invalid") from None
         return BUILTIN_RULE
     except OSError:
         raise AttachError("practice-profile-invalid") from None
@@ -379,14 +384,15 @@ class AttachResult:
 class PracticeAttachment:
     """Selection only; a supervisor owns the sole LiveFeed and retry/backoff policy."""
 
-    def __init__(self, path=DEFAULT_PROFILE, *, root=ROOT):
+    def __init__(self, path=DEFAULT_PROFILE, *, root=ROOT, require_profile=False):
         self.path, self.root = path, Path(root).resolve()
+        self.require_profile = require_profile
 
     def select(self, listing=None):
         candidates = listing.windows[:MAX_DIAGNOSTIC_CANDIDATES] if isinstance(listing, WindowListing) else ()
         try:
             # Revalidate the rule and current metadata, never pixels or seating.
-            rule = load_profile(self.path, root=self.root)
+            rule = load_profile(self.path, root=self.root, required=self.require_profile)
             binary = resolve_binary(self.root)
             if listing is None:
                 listing = list_windows(root=self.root)

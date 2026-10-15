@@ -1,7 +1,7 @@
 //! `coinpoker` — binary entrypoint.
 //!
 //! Wires the ingestion, decision, mimicry, modeling, and UI crates into a
-//! single read-only, human-controlled decision-support process.
+//! single decision-support process.
 //!
 //! Modes:
 //! - `coinpoker`            — headless capture pipeline (Windows): capture →
@@ -9,7 +9,7 @@
 //! - `coinpoker --stdin`    — read `GameState` JSON lines from stdin and run
 //!   the decision pipeline (works on any host; used by tests and replay).
 //! - `coinpoker --ui`       - reserved native UI; exits 2. The separately launched
-//!   read-only browser dashboard uses http://127.0.0.1:18090/.
+//!   browser dashboard uses http://127.0.0.1:18090/.
 //! - `coinpoker --list-windows` — list capture candidates for calibration.
 
 use std::fmt;
@@ -25,6 +25,7 @@ mod config;
 mod evaluation;
 mod live;
 mod manual_capture;
+mod manual_inference;
 use config::{Mode, USAGE};
 use opponent_model::classifier::Archetype;
 use opponent_model::exploit::ExploitEngine;
@@ -53,7 +54,10 @@ impl From<io::Error> for RunError {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|arg| arg == "--capture-only") {
+    if args
+        .first()
+        .is_some_and(|arg| matches!(arg.as_str(), "--capture-only" | "--manual-inference"))
+    {
         return match manual_capture::run(&args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

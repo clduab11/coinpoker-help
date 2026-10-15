@@ -21,7 +21,7 @@ TITLE = "NLH 123456 - synthetic table"
 
 
 def profile():
-    return {"format": 1, "version": 1, "user_scope": "practice-six-max",
+    return {"format": 1, "version": 1, "user_scope": "six-max-table",
             "selector_exe": EXE, "selector_title_regex": r"^NLH\s*[0-9]+"}
 
 
@@ -90,6 +90,14 @@ class AttachTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.key, ("coinpoker.exe", 11, "0x11"))
         self.assertFalse(self.path.exists())
+
+    def test_legacy_scope_name_does_not_restrict_game_type_or_change_the_selector(self):
+        legacy = {**profile(), "user_scope": "practice-six-max"}
+        selected = attach.validate_profile(legacy)
+        self.assertEqual(selected.document(), profile())
+        self.assertEqual(legacy["user_scope"], "practice-six-max")
+        for title in ("NLH 123 - Cash", "NLH 123 - Practice"):
+            self.assertTrue(selected.matches(listing(window(title)).windows[0]))
 
     def test_constructor_alone_has_no_discovery_or_feed_side_effect(self):
         with patch.object(attach, "list_windows") as discover, patch.object(attach.subprocess, "Popen") as process:
@@ -458,7 +466,9 @@ class AttachTests(unittest.TestCase):
         self.assertIn("[switch]$EnableInference", source)
         self.assertNotIn("'--auto-attach'", source)
         self.assertNotIn("'--live-config'", source)
-        self.assertIn("if ($LiveConfig -or $PSBoundParameters.ContainsKey('PracticeConfig'))", source)
+        self.assertIn("if ($LiveConfig -or ($PSBoundParameters.ContainsKey('PracticeConfig') -and -not $AutomaticInference))", source)
+        self.assertIn("[switch]$AutomaticInference", source)
+        self.assertIn("if ($AutomaticInference -and (-not $EnableInference -or $NoAutoAttach -or $DashboardOnly))", source)
         self.assertLess(source.index("GetActiveTcpListeners()"), source.index("& $python"))
         self.assertLess(source.index("Port 18090 is already occupied"), source.index("$python ="))
         self.assertIn("Normal launch and -DashboardOnly load no model and never attach or record", source)

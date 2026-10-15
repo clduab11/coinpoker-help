@@ -1,24 +1,23 @@
 # coinpoker-help
 
-Experimental, human-controlled poker observation and decision-support development.
-The active follow-on targets actual CoinPoker **Practice Games with practice
-chips**, not real-money deployment or acceptance. Native capture targets Windows
-10 version 1903 or later. Structured JSON replay and poker libraries also run on Linux.
-The helper never sends mouse or keyboard input, reads client memory, or intercepts
-client network traffic.
+Local bug-bounty proof of concept for poker observation and decision support.
+Native capture targets Windows 10 version 1903 or later. Structured JSON replay
+and poker libraries also run on Linux.
+The current helper has no mouse/keyboard input path, client-memory reader, or
+client-network interception.
 
 **Status:** engineering candidate, version `0.1.0`; Laya iteration-1 Gate F
-**FAIL**, human verification **UNVERIFIED**, no seated advice. A build,
+**FAIL**, human verification **UNVERIFIED**, no validated live seated advice. A build,
 synthetic evaluation or loaded model is not real-table acceptance. Physical
 Windows, model, real-image and clean-account evidence is recorded in
 [the Windows report](docs/WINDOWS_ACCEPTANCE_V1.md); unrun gates stay `UNRUN`.
 Practice and cash use this same repo, representation and validation mechanism,
-without a practice-only bypass. This plan provides no real-money acceptance.
+without a practice-only bypass. No real-money acceptance has been established.
 
 ## Start here
 
 - [First manual seated diagnostic: launch, confirm, stop and checklist](docs/SEATED_DIAGNOSTIC.md)
-- [Windows setup and read-only dashboard](docs/INSTALL_WINDOWS.md)
+- [Windows setup and local dashboard](docs/INSTALL_WINDOWS.md)
 - [VLM compatibility and provenance](docs/VLM_COMPATIBILITY.md)
 - [Live JSON-lines contract](docs/EVENTS_V2.md)
 - [Visual evaluation contract](docs/VISUAL_EVALUATION_V2.md)
@@ -41,17 +40,23 @@ alternate endpoints or fallbacks.
 The browser has exactly two views, **Monitor** and **Reference** in a compact
 landscape companion. Monitor shows source/role/freshness, independent readings,
 six physical seats and a separate recorder status; history and diagnostics are
-collapsible. Suggestions are **OFF**. Reference uses a searchable topic list and
-selected content, with the existing bundled education and citations unchanged.
+collapsible. A genuine current full native observation and matching decision can
+display **EXPERIMENTAL** analysis with `quality_approved:false`; partial readouts
+cannot supply it. The pinned model's R17 and untrained hero/control limitations
+remain, and no live seated capability or quality certification is claimed.
+Reference uses a searchable topic list and selected content, with the existing
+bundled education and citations unchanged.
 It makes no runtime content requests and does not copy the root charts.
 
-Open `http://127.0.0.1:18090/` beside the practice table. There are no connect,
-seating, betting or process controls in the page. For development startup, choose
+Open `http://127.0.0.1:18090/` beside the selected table. **Stop capture** requests
+termination of the current source session through the service-bound local
+`POST /api/capture/stop`; it does not need a loaded model. There are currently no
+HTTP start/mark, seating or betting controls. For development startup, choose
 one mode below, not two concurrent servers; inspect the existing 18090 listener
 before starting anything. Reuse an already running service.
 
 ```powershell
-# Read-only dashboard without loading a model or using the GPU.
+# Dashboard-only startup without loading a model or using the GPU.
 pwsh -File scripts/start-vlm.ps1 -DashboardOnly
 ```
 
@@ -69,13 +74,32 @@ of unavailable fields. Expiry, heartbeat loss, hidden/resumed tabs and disconnec
 clear current readings without renewing their leases. Runtime/lease/ledger details
 and synthetic fixtures stay behind the scenes, not in extra app views.
 
-Normal startup no longer follows a saved selector. `-LiveConfig`, an explicitly
-supplied `-PracticeConfig`, and server `--auto-attach` are refused. A fresh manual
-session requires exact PID/HWND confirmation and `I am seated and ready` via
-`scripts/laya_capture.py`; replacement requires new approval. Default first-session
+Normal startup no longer follows a saved selector. `-LiveConfig`, a supplied
+`-PracticeConfig` without explicit automatic inference, and server `--auto-attach` are refused. A fresh manual
+session requires the fresh exact PID/HWND/nonce challenge via
+`scripts/laya_capture.py`, with identity rechecked within 30 seconds. No seating
+assertion is required; replacement requires new source confirmation. Default first-session
 limits are **600 seconds or 1,200 saved frames**, whichever comes first. Model
 loading requires separately approved `-EnableInference`; it never starts capture.
 See the [manual runbook](docs/SEATED_DIAGNOSTIC.md) for commands and draft markers.
+
+For explicitly approved observation of one confirmed table window until it closes,
+use the sustained mode after verifying/stopping only the owned existing service:
+
+```powershell
+pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ContinuousObservation
+```
+
+All three flags are required. This reuses the confirmed private source profile;
+it never follows a replacement or changes the poker client. Evidence recording
+still stops at 600 seconds, 1,200 saved frames, or 1 GiB, but newly acquired live
+frames continue through bounded in-memory transport. Monitor labels that distinction
+and puts stop reasons in its main view. Field confidence floors and five-second
+reading leases are unchanged; unknown role/activity does not hide independent
+admitted numeric fields. Page refresh starts nothing. Source/visibility/owner/model
+failure or an explicit stop ends observation without automatic resume. This mode
+does not run experimental p6/p7 diagnostics, strategy, or timer recognition.
+Synthetic sustained tests are not real-window recognition acceptance.
 
 Some client windows draw the CoinPoker logo and `NLH` number inside their frame
 but expose only `CoinPoker` as the OS title. A confirmed private selector can
@@ -83,6 +107,12 @@ use that exact OS title. This is **not** an automatic lobby fallback: it require
 explicit user confirmation and still fails on multiple visible matches. Source
 identity, current dimensions and perception-quality gates stay independent;
 transition/loading/lobby captures are not positive table labels.
+
+Current profile metadata uses `user_scope:"six-max-table"`, not a practice/cash
+mode restriction. Legacy `practice-six-max` profiles load with the identical
+exact selector, without rewriting the source file or broadening its matches.
+`.local/practice-table.json` and `-PracticeConfig` remain compatibility names;
+neither names nor window titles prove the actual game mode or layout.
 
 The native recorder saves only private PNGs and a durable SHA-256 manifest under
 `.local/captures/<UTC>-practice/`. The historical generic recorder defaults were
@@ -152,15 +182,10 @@ historical diagnostic candidates are not Monitor reads or human acceptance.
 Proposed repair separates calibrated source-leased **partial read-only
 observations** from fully validated actionable `GameState`, with explicit six
 physical slots, distinct stacks/wagers/street contributions, hand positions and
-betting gaps. R17 and suggestions OFF remain. No warm total capture-to-Monitor
+betting gaps. R17 remains; partial data cannot enable experimental decisions. No warm total capture-to-Monitor
 latency/live recognition gate has passed. [Vision section 7](docs/LAYA_VISION_PHASE_A.md)
 records outcomes and later gates; private receipts and a pending 72-frame human
 checklist remain local.
-
-[CoinPoker's tools policy](https://coinpoker.com/third-party-tools) prohibits
-gameplay-connected HUD/tracking/opponent analysis and real-time assistance. An
-observing/practice/anonymity exemption has not been established; provider
-clarification is a separate risk/gate before a live use/session.
 
 `screenshot-1.png`, `screenshot-2.png` and `poker-info-sheet.pdf` are odds,
 six-handed raise-first-in and rules references, respectively. They remain
@@ -193,8 +218,8 @@ real-image gate remains necessary.
 
 The workspace crates are `ingest` (capture and vision), `core-engine` (poker math),
 `ghost-layer` (unwired timing primitives), `opponent-model`, `ui` (unwired native
-desktop panel), and `bin` (CLI, replay, diagnostics and evaluation). The follow-on
-browser is a read-only local dashboard, not an input execution layer. Observed
+desktop panel), and `bin` (CLI, replay, diagnostics and evaluation). The current
+browser is a local observation dashboard with no input execution layer. Observed
 controls, history, calculated metrics and eventual recommendations stay separate;
 legacy table events and raw model answers are not trusted current hero actions.
 
@@ -232,8 +257,9 @@ $env:COINPOKER_LOBBY_TITLE = '<observed lobby title fragment>'
 cargo run --release --locked --bin coinpoker
 ```
 
-This is not the dashboard-only first-phase startup. All seating and play remain
-manual, and capture does not enable advice. The old candidate binary invocation is:
+This is not the dashboard-only first-phase startup. With the current helper,
+seating and play are manual; capture alone does not establish analysis eligibility.
+The old candidate binary invocation is:
 
 ```powershell
 & .\coinpoker.exe

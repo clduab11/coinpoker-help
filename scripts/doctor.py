@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Windows diagnostics for the Laya Vision runtime. Only generated color PNGs go to loopback.
+"""Windows diagnostics for the Laya Vision runtime. Only generated color PNGs go to loopback.
 
 --list-windows reads metadata only. Local SHA256 checks need no network.
 --offline skips HTTP; no image or report is saved by default.

@@ -50,6 +50,8 @@ pub struct LayaClient {
     model: String,
     agent: ureq::Agent,
     timeout: Duration,
+    manual_session: Option<(String, String)>,
+    experimental_session: Option<(String, String)>,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +99,8 @@ impl LayaClient {
             model: config.model.clone(),
             agent: http_agent(config.timeout_secs),
             timeout: Duration::from_secs(config.timeout_secs),
+            manual_session: None,
+            experimental_session: None,
         })
     }
 
@@ -105,6 +109,54 @@ impl LayaClient {
     }
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    /// Optional manual-owner binding. Old diagnostic callers remain unbound.
+    pub fn with_manual_session(mut self, session: &str, service: &str) -> Result<Self, VlmError> {
+        if [session, service].iter().any(|id| {
+            id.len() != 32
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }) {
+            return Err(VlmError::Unavailable(
+                "invalid-manual-session-binding".into(),
+            ));
+        }
+        self.manual_session = Some((session.into(), service.into()));
+        self.experimental_session = None;
+        Ok(self)
+    }
+
+    /// Explicit opt-in belongs to this exact manual-owner binding, never an environment value.
+    pub(super) fn with_experimental_bet_action(mut self, enabled: bool) -> Result<Self, VlmError> {
+        self.experimental_session = if enabled {
+            if self.model != VlmConfig::default().model {
+                return Err(VlmError::Unavailable(
+                    "experimental-model-not-installed-it1".into(),
+                ));
+            }
+            Some(self.manual_session.clone().ok_or_else(|| {
+                VlmError::Unavailable("experimental-session-binding-required".into())
+            })?)
+        } else {
+            None
+        };
+        Ok(self)
+    }
+
+    pub(super) fn experimental_enabled(&self) -> bool {
+        self.experimental_session.is_some() && self.experimental_session == self.manual_session
+    }
+
+    fn request(&self, endpoint: &str, timeout: Duration) -> ureq::Request {
+        let mut request = self.agent.post(endpoint).timeout(timeout);
+        if let Some((session, service)) = &self.manual_session {
+            request = request
+                .set("X-Coinpoker-Session", session)
+                .set("X-Coinpoker-Service", service);
+        }
+        request
     }
 
     fn request_body(&self, pass: &Pass, images: &[Vec<u8>]) -> Value {
@@ -218,6 +270,82 @@ impl LayaClient {
         )
     }
 
+    pub(super) fn predict_experimental_with_deadline(
+        &self,
+        descriptor: &super::experimental::ExperimentalDescriptor,
+        images: Vec<Vec<u8>>,
+        deadline: Instant,
+    ) -> Result<(PassAnswers, super::experimental::ExperimentalProvenance), VlmError> {
+        if !self.experimental_enabled() {
+            return Err(VlmError::Unavailable(
+                "experimental-session-opt-in-required".into(),
+            ));
+        }
+        let pass = descriptor.pass_descriptor()?;
+        if images.len() != 1 {
+            return Err(schema());
+        }
+        self.request_timeout(Some(deadline), Instant::now())?;
+        let mut body = self.request_body(&pass, &images);
+        let expected = serde_json::to_value(descriptor).map_err(|_| schema())?;
+        body["experimental_descriptor"] = expected.clone();
+        drop(images);
+        let text = self.send_body(body, Some(deadline))?;
+        let wire: Value = serde_json::from_str(&text).map_err(|_| schema())?;
+        if wire["model"].as_str() != Some(&self.model)
+            || wire["pass"].as_str() != Some(&pass.id)
+            || wire.get("experimental_descriptor") != Some(&expected)
+            || wire.get("acceptance_floor") != Some(&Value::Null)
+            || wire.get("wager_capability").is_some()
+            || wire.get("scene_capability").is_some()
+        {
+            return Err(schema());
+        }
+        let provenance_keys = [
+            "diagnostic_only",
+            "training",
+            "geometry_status",
+            "human_review",
+            "donor_pass",
+            "inherited_cutoff",
+        ];
+        let raw_provenance = wire["experimental_diagnostics"]
+            .as_object()
+            .ok_or_else(schema)?;
+        if raw_provenance.len() != provenance_keys.len()
+            || provenance_keys
+                .iter()
+                .any(|key| !raw_provenance.contains_key(*key))
+        {
+            return Err(schema());
+        }
+        let provenance: super::experimental::ExperimentalProvenance =
+            serde_json::from_value(wire["experimental_diagnostics"].clone())
+                .map_err(|_| schema())?;
+        provenance.validate(descriptor)?;
+        let raw = wire["answers"].as_object().ok_or_else(schema)?;
+        if raw.keys().any(|id| pass.question(id).is_none()) {
+            return Err(schema());
+        }
+        let segments = if descriptor.is_wager() {
+            wire.get("segments")
+                .map(|s| serde_json::from_value::<Segments>(s.clone()).map_err(|_| schema()))
+                .transpose()?
+        } else {
+            if wire.get("segments").is_some_and(|s| !s.is_null()) {
+                return Err(schema());
+            }
+            None
+        };
+        let answers = PassAnswers {
+            answers: self.parse_choice_answers(&pass, raw),
+            segments,
+            acceptance_floor: None,
+        };
+        remaining_budget(deadline, Instant::now())?;
+        Ok((answers, provenance))
+    }
+
     /// Each trained stack pass retains its own prompts, images, segmentation and floor.
     /// Unsupported old helpers return 404; the caller alone may choose serial fallback.
     pub fn predict_batch_with_deadline(
@@ -231,7 +359,10 @@ impl LayaClient {
         }
         for (i, (pass, images)) in passes.iter().enumerate() {
             if pass.layout != Layout::Glyphs
-                || pass.calibration == Calibration::UntrainedProvisional
+                || !matches!(
+                    pass.calibration,
+                    Calibration::Trained | Calibration::Calibrated
+                )
                 || !(1..=6).any(|seat| pass.id == format!("p5_seat_{seat}_stack"))
                 || pass.glyph_style != passes[0].0.glyph_style
                 || images.len() != pass.regions.len()
@@ -240,14 +371,87 @@ impl LayaClient {
                 return Err(schema());
             }
         }
+        self.send_batch(passes, deadline, None)
+    }
+
+    /// Mixed readouts keep their own questions, images and fitted floors in one admission.
+    pub(super) fn predict_readout_batch_with_deadline(
+        &self,
+        passes: &[(&Pass, Vec<Vec<u8>>)],
+        deadline: Instant,
+    ) -> Result<Vec<Result<PassAnswers, VlmError>>, VlmError> {
+        self.request_timeout(Some(deadline), Instant::now())?;
+        let ids: Vec<_> = passes.iter().map(|(pass, _)| pass.id.as_str()).collect();
+        if !matches!(
+            ids.as_slice(),
+            ["p0_full", "p2_board"]
+                | ["p0_full", "p3_pot", "p5_seat_1_stack", "p5_seat_2_stack"]
+                | ["p0_full", "p3_pot", "p5_seat_3_stack", "p5_seat_4_stack"]
+                | ["p0_full", "p3_pot", "p5_seat_5_stack", "p5_seat_6_stack"]
+        ) || passes.iter().any(|(pass, images)| {
+            !matches!(
+                pass.calibration,
+                Calibration::Trained | Calibration::Calibrated
+            ) || images.len()
+                != if pass.layout == Layout::Full {
+                    1
+                } else {
+                    pass.regions.len()
+                }
+        }) {
+            return Err(schema());
+        }
+        self.send_batch(passes, deadline, Some("readout"))
+    }
+
+    fn send_batch(
+        &self,
+        passes: &[(&Pass, Vec<Vec<u8>>)],
+        deadline: Instant,
+        kind: Option<&str>,
+    ) -> Result<Vec<Result<PassAnswers, VlmError>>, VlmError> {
         let endpoint = self.endpoint.strip_suffix("/predict").ok_or_else(schema)?;
-        let body = json!({"model": self.model, "batch": passes.iter()
-            .map(|(pass, images)| self.request_body(pass, images)).collect::<Vec<_>>()});
+        let mut requests: Vec<_> = passes
+            .iter()
+            .map(|(pass, images)| self.request_body(pass, images))
+            .collect();
+        if kind == Some("readout") {
+            // Only ask the unchanged core questions required by this field group.
+            // Missing role/control answers remain unknown, never inferred defaults.
+            let core: &[&str] = if passes[1].0.id == "p2_board" {
+                &[
+                    "screen_kind",
+                    "ev_table_layout",
+                    "ev_readable",
+                    "ev_board_area",
+                    "game_phase",
+                ]
+            } else {
+                &["screen_kind", "ev_table_layout", "ev_readable", "ev_pot"]
+            };
+            requests[0]["questions"]
+                .as_object_mut()
+                .ok_or_else(schema)?
+                .retain(|id, _| core.contains(&id.as_str()));
+        }
+        let allowed_answers: Vec<Vec<String>> = requests
+            .iter()
+            .map(|request| {
+                request["questions"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect()
+            })
+            .collect();
+        let mut body = json!({"model": self.model, "batch": requests});
+        if let Some(kind) = kind {
+            body["batch_kind"] = json!(kind);
+        }
         let timeout = self.request_timeout(Some(deadline), Instant::now())?;
         let response = match self
-            .agent
-            .post(&format!("{endpoint}/predict-batch"))
-            .timeout(timeout)
+            .request(&format!("{endpoint}/predict-batch"), timeout)
             .send_json(body)
         {
             Ok(response) => response,
@@ -284,7 +488,17 @@ impl LayaClient {
         let parsed = passes
             .iter()
             .zip(results)
-            .map(|((pass, _), result)| self.parse_response(pass, &result.to_string()))
+            .zip(allowed_answers)
+            .map(|(((pass, _), result), allowed)| {
+                let answers = result
+                    .get("answers")
+                    .and_then(Value::as_object)
+                    .ok_or_else(schema)?;
+                if answers.keys().any(|id| !allowed.contains(id)) {
+                    return Err(schema());
+                }
+                self.parse_response(pass, &result.to_string())
+            })
             .collect();
         remaining_budget(deadline, Instant::now())?;
         Ok(parsed)
@@ -308,23 +522,63 @@ impl LayaClient {
         deadline: Option<Instant>,
         capability: Option<(&str, Value)>,
     ) -> Result<PassAnswers, VlmError> {
+        if pass.calibration == Calibration::Uncalibrated {
+            return Err(VlmError::Unavailable(
+                "experimental-session-opt-in-required".into(),
+            ));
+        }
         self.request_timeout(deadline, Instant::now())?;
         let mut body = self.request_body(pass, &images);
         if let Some((key, expected)) = &capability {
             body[*key] = expected.clone();
         }
         drop(images);
+        let text = self.send_body(body, deadline)?;
+        if let Some((key, expected)) = &capability {
+            let wire: Value = serde_json::from_str(&text).map_err(|_| schema())?;
+            let family = if *key == "scene_capability" {
+                "scene"
+            } else {
+                "wager"
+            };
+            if wire.get(*key) != Some(expected) {
+                return Err(VlmError::Unavailable(format!(
+                    "{family}-capability-identity-mismatch"
+                )));
+            }
+            if !wire
+                .get("acceptance_floor")
+                .and_then(Value::as_f64)
+                .is_some_and(|f| {
+                    f.is_finite() && f <= 1.0 && f >= expected["fitted_floor"].as_f64().unwrap()
+                })
+            {
+                return Err(VlmError::Unavailable(format!(
+                    "{family}-fitted-floor-mismatch"
+                )));
+            }
+        }
+        let result = if capability
+            .as_ref()
+            .is_some_and(|(key, _)| *key == "scene_capability")
+        {
+            self.parse_scene_response(pass, &text)
+        } else {
+            self.parse_response(pass, &text)
+        };
+        if let Some(deadline) = deadline {
+            remaining_budget(deadline, Instant::now())?;
+        }
+        result
+    }
+
+    fn send_body(&self, body: Value, deadline: Option<Instant>) -> Result<String, VlmError> {
         let timeout = self.request_timeout(deadline, Instant::now())?;
         // Servers can echo requests (including screenshots) in error bodies:
         // never retain them, and never follow redirects.
         // ureq 2.12 Request::timeout overrides the agent's overall timeout,
         // including reading the response body, not just the connection phase.
-        let response = match self
-            .agent
-            .post(&self.endpoint)
-            .timeout(timeout)
-            .send_json(body)
-        {
+        let response = match self.request(&self.endpoint, timeout).send_json(body) {
             Ok(response) => response,
             Err(ureq::Error::Status(status, _)) => {
                 return Err(VlmError::Server {
@@ -354,44 +608,7 @@ impl LayaClient {
             remaining_budget(deadline, Instant::now())?;
         }
         let bytes = bytes?;
-        let text =
-            std::str::from_utf8(&bytes).map_err(|_| VlmError::Parse(VlmResponseError::Encoding))?;
-        if let Some((key, expected)) = &capability {
-            let wire: Value = serde_json::from_str(text).map_err(|_| schema())?;
-            let family = if *key == "scene_capability" {
-                "scene"
-            } else {
-                "wager"
-            };
-            if wire.get(*key) != Some(expected) {
-                return Err(VlmError::Unavailable(format!(
-                    "{family}-capability-identity-mismatch"
-                )));
-            }
-            if !wire
-                .get("acceptance_floor")
-                .and_then(Value::as_f64)
-                .is_some_and(|f| {
-                    f.is_finite() && f <= 1.0 && f >= expected["fitted_floor"].as_f64().unwrap()
-                })
-            {
-                return Err(VlmError::Unavailable(format!(
-                    "{family}-fitted-floor-mismatch"
-                )));
-            }
-        }
-        let result = if capability
-            .as_ref()
-            .is_some_and(|(key, _)| *key == "scene_capability")
-        {
-            self.parse_scene_response(pass, text)
-        } else {
-            self.parse_response(pass, text)
-        };
-        if let Some(deadline) = deadline {
-            remaining_budget(deadline, Instant::now())?;
-        }
-        result
+        String::from_utf8(bytes).map_err(|_| VlmError::Parse(VlmResponseError::Encoding))
     }
 
     // A malformed scene answer rejects that question only, never adjacent seat evidence.
@@ -402,6 +619,18 @@ impl LayaClient {
         }
         let floor = probability(wire["acceptance_floor"].as_f64().ok_or_else(schema)?)?;
         let raw = wire["answers"].as_object().ok_or_else(schema)?;
+        Ok(PassAnswers {
+            answers: self.parse_choice_answers(pass, raw),
+            segments: None,
+            acceptance_floor: Some(floor),
+        })
+    }
+
+    fn parse_choice_answers(
+        &self,
+        pass: &Pass,
+        raw: &Map<String, Value>,
+    ) -> HashMap<String, Answer> {
         let mut answers = HashMap::new();
         for question in &pass.questions {
             let Some(value) = raw.get(&question.id) else {
@@ -440,11 +669,7 @@ impl LayaClient {
                 }),
             );
         }
-        Ok(PassAnswers {
-            answers,
-            segments: None,
-            acceptance_floor: Some(floor),
-        })
+        answers
     }
 
     fn parse_response(&self, pass: &Pass, text: &str) -> Result<PassAnswers, VlmError> {
@@ -511,6 +736,173 @@ pub(crate) mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn experimental_transport_is_explicit_session_bound_and_has_no_unbounded_shortcut() {
+        let descriptor = crate::laya::experimental::ExperimentalDescriptor::wager(1).unwrap();
+        let session = "a1".repeat(16);
+        let service = "b2".repeat(16);
+        assert!(client(0, 5).with_experimental_bet_action(true).is_err());
+        let bound = client(0, 5)
+            .with_manual_session(&session, &service)
+            .unwrap();
+        assert!(bound
+            .predict_experimental_with_deadline(
+                &descriptor,
+                vec![png()],
+                Instant::now() + Duration::from_secs(5)
+            )
+            .is_err());
+        let disabled = client(0, 5)
+            .with_manual_session(&session, &service)
+            .unwrap()
+            .with_experimental_bet_action(false)
+            .unwrap();
+        assert!(!disabled.experimental_enabled());
+        let enabled = client(0, 5)
+            .with_manual_session(&session, &service)
+            .unwrap()
+            .with_experimental_bet_action(true)
+            .unwrap();
+        assert!(enabled.experimental_enabled());
+        let pass = descriptor.pass_descriptor().unwrap();
+        assert!(enabled.predict(&pass, vec![png()]).is_err());
+        assert!(enabled
+            .predict_with_deadline(&pass, vec![png()], Instant::now() + Duration::from_secs(5))
+            .is_err());
+        assert!(matches!(
+            enabled.predict_experimental_with_deadline(&descriptor, vec![png()], Instant::now()),
+            Err(VlmError::Deadline)
+        ));
+        let rebound = enabled.with_manual_session(&session, &service).unwrap();
+        assert!(
+            !rebound.experimental_enabled(),
+            "rebinding must require fresh explicit opt-in"
+        );
+        let wrong_model = VlmConfig {
+            model: "other-candidate".into(),
+            ..VlmConfig::default()
+        };
+        assert!(LayaClient::new(&wrong_model)
+            .unwrap()
+            .with_manual_session(&session, &service)
+            .unwrap()
+            .with_experimental_bet_action(true)
+            .is_err());
+    }
+
+    #[test]
+    fn experimental_reply_requires_exact_draft_echo_null_floor_and_honest_donor_provenance() {
+        use crate::laya::experimental::{tests::provenance, ExperimentalDescriptor};
+        for wager in [true, false] {
+            let descriptor = if wager {
+                ExperimentalDescriptor::wager(3)
+            } else {
+                ExperimentalDescriptor::scene(3)
+            }
+            .unwrap();
+            let pass = descriptor.pass_descriptor().unwrap();
+            for cause in [
+                "valid",
+                "wrong-model",
+                "wrong-pass",
+                "wrong-crop",
+                "missing-echo",
+                "floor",
+                "missing-floor",
+                "trained",
+                "proof",
+                "donor",
+                "cutoff",
+                "capability",
+                "extra-question",
+                "missing-provenance-key",
+            ] {
+                let mut response = json!({"model":"coinpoker-laya-vision", "pass":pass.id,
+                    "experimental_descriptor":descriptor, "acceptance_floor":null,
+                    "experimental_diagnostics":provenance(wager),
+                    "answers":if wager { json!({"g1":{"type":"choice","choice":"7","probabilities":{"7":0.91},"truncated":false}}) }
+                        else { json!({"badge":{"type":"choice","choice":"call","probabilities":{"call":0.91},"truncated":false}}) }});
+                if wager {
+                    response["segments"] = json!({"n":1,"overflow":false});
+                }
+                match cause {
+                    "wrong-model" => response["model"] = json!("other-candidate"),
+                    "wrong-pass" => response["pass"] = json!("p3_pot"),
+                    "wrong-crop" => {
+                        response["experimental_descriptor"]["region"]["bounds"][0] = json!(1)
+                    }
+                    "missing-echo" => {
+                        response
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("experimental_descriptor");
+                    }
+                    "floor" => response["acceptance_floor"] = json!(0.8),
+                    "missing-floor" => {
+                        response.as_object_mut().unwrap().remove("acceptance_floor");
+                    }
+                    "trained" => {
+                        response["experimental_diagnostics"]["training"] = json!("trained")
+                    }
+                    "proof" => {
+                        response["experimental_diagnostics"]["held_out_approved"] = json!(true)
+                    }
+                    "donor" => response["experimental_diagnostics"]["donor_pass"] = json!("p3_pot"),
+                    "cutoff" => {
+                        response["experimental_diagnostics"]["inherited_cutoff"] = json!(0.79999)
+                    }
+                    "capability" => response["wager_capability"] = json!({}),
+                    "extra-question" => response["answers"]["PRIVATE-NAME"] = json!({}),
+                    "missing-provenance-key" => {
+                        response["experimental_diagnostics"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("donor_pass");
+                    }
+                    _ => {}
+                }
+                let (port, sent) = mock_server("200 OK", response.to_string());
+                let result = client(port, 5)
+                    .with_manual_session(&"a1".repeat(16), &"b2".repeat(16))
+                    .unwrap()
+                    .with_experimental_bet_action(true)
+                    .unwrap()
+                    .predict_experimental_with_deadline(
+                        &descriptor,
+                        vec![png()],
+                        Instant::now() + Duration::from_secs(5),
+                    );
+                assert_eq!(result.is_ok(), cause == "valid", "wager={wager}/{cause}");
+                if let Ok((answers, returned)) = result {
+                    assert!(answers.acceptance_floor.is_none());
+                    assert_eq!(returned, provenance(wager));
+                }
+                let request: Value =
+                    serde_json::from_slice(&sent.recv_timeout(Duration::from_secs(5)).unwrap())
+                        .unwrap();
+                assert_eq!(
+                    request["experimental_descriptor"],
+                    serde_json::to_value(&descriptor).unwrap()
+                );
+                assert_eq!(request["note"], pass.note);
+                assert_eq!(
+                    request["questions"].as_object().unwrap().len(),
+                    pass.questions.len()
+                );
+                assert!(
+                    request.get("wager_capability").is_none()
+                        && request.get("scene_capability").is_none()
+                );
+                for question in &pass.questions {
+                    assert_eq!(
+                        request["questions"][&question.id]["criteria"],
+                        question.wire_criteria().unwrap()
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -694,6 +1086,103 @@ pub(crate) mod tests {
             ..VlmConfig::default()
         })
         .expect("loopback endpoint")
+    }
+
+    #[test]
+    fn manual_binding_reaches_every_single_and_batch_request_and_is_opt_in() {
+        use std::io::{BufRead, BufReader};
+        let session = "a1".repeat(16);
+        let service = "b2".repeat(16);
+        for bound in [false, true] {
+            for batch in [0, 1, 2] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let (tx, rx) = mpsc::channel();
+                thread::spawn(move || {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(&mut stream);
+                    let mut headers = String::new();
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        assert!(reader.read_line(&mut line).unwrap() > 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) =
+                            line.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            length = value.trim().parse::<usize>().unwrap();
+                        }
+                        headers.push_str(&line);
+                    }
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    drop(reader);
+                    tx.send(headers).unwrap();
+                    stream.write_all(b"HTTP/1.1 409 Conflict\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                });
+                let mut client = client(port, 5);
+                if bound {
+                    client = client.with_manual_session(&session, &service).unwrap();
+                }
+                let result = if batch == 2 {
+                    client
+                        .predict_readout_batch_with_deadline(
+                            &[
+                                (pass("p0_full").unwrap(), vec![png()]),
+                                (pass("p2_board").unwrap(), vec![png(); 5]),
+                            ],
+                            Instant::now() + Duration::from_secs(5),
+                        )
+                        .map(|_| ())
+                } else if batch == 1 {
+                    client
+                        .predict_batch_with_deadline(
+                            &stack_batch(),
+                            Instant::now() + Duration::from_secs(5),
+                        )
+                        .map(|_| ())
+                } else {
+                    client
+                        .predict(pass("p0_full").unwrap(), vec![png()])
+                        .map(|_| ())
+                };
+                assert!(matches!(result, Err(VlmError::Server { status: 409, .. })));
+                let headers = rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .to_ascii_lowercase();
+                assert!(headers.starts_with(if batch != 0 {
+                    "post /v1/laya/predict-batch "
+                } else {
+                    "post /v1/laya/predict "
+                }));
+                for (header, value) in [
+                    ("x-coinpoker-session", &session),
+                    ("x-coinpoker-service", &service),
+                ] {
+                    assert_eq!(headers.contains(&format!("{header}: {value}\r\n")), bound);
+                }
+            }
+        }
+        for invalid in [
+            "".to_string(),
+            "x".repeat(32),
+            "A".repeat(32),
+            "a".repeat(33),
+            "\r\n".repeat(16),
+        ] {
+            assert!(client(0, 5)
+                .with_manual_session(&invalid, &service)
+                .is_err());
+            assert!(client(0, 5)
+                .with_manual_session(&session, &invalid)
+                .is_err());
+        }
     }
 
     fn png() -> Vec<u8> {

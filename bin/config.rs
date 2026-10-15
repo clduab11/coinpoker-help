@@ -8,9 +8,12 @@ pub const USAGE: &str = "Usage: coinpoker [OPTION] [CONFIGURATION]\n\n\
   (no option)        Run the Windows capture pipeline\n\
   --stdin            Read legacy GameState JSON lines (all platforms)\n\
   --list-windows     Print application/window identity JSON lines; no pixels\n\
+  --capture-only --approval-file PATH     Bounded manually approved recording only\n\
+  --manual-inference --approval-file PATH Bounded recording with separately approved installed-it1 inference\n\
+  --experimental-bet-action  Explicit unvalidated diagnostics, only with matching bounded automatic inference approval/service\n\
   --doctor           Run local installation/model/capture diagnostics\n\
   --evaluate PATH    Evaluate a version-2 local visual fixture manifest\n\
-  --ui               Rejected: use the read-only browser dashboard (exit 2)\n\
+  --ui               Unavailable: native UI is not implemented (exit 2)\n\
   -h, --help         Print this help\n\n\
 Configuration (CLI > nonempty environment > defaults):\n\
   --exe-name NAME             COINPOKER_EXE_NAME (exact; calibrate first)\n\
@@ -109,9 +112,10 @@ pub fn parse(
         let next_mode = match arg.as_str() {
             "--stdin" => Some(Mode::Stdin), "--list-windows" => Some(Mode::ListWindows),
             "--doctor" => Some(Mode::Doctor),
+            "--experimental-bet-action" => return Err("--experimental-bet-action requires the separately approved --manual-inference bounded automatic route; legacy capture and ambient activation are refused".into()),
             "--help" | "-h" => Some(Mode::Help),
             "--evaluate" => Some(Mode::Evaluate(args.next().ok_or("--evaluate requires a manifest path")?)),
-            "--ui" => return Err("--ui is unavailable: no native interactive UI; open the separately launched read-only dashboard at http://127.0.0.1:18090/ or use --stdin for legacy JSON-lines output".into()),
+            "--ui" => return Err("--ui is unavailable: no native interactive UI; open the separately launched browser dashboard at http://127.0.0.1:18090/ or use --stdin for legacy JSON-lines output".into()),
             _ => {
                 if let Some(flag) = FLAGS.iter().map(|(flag, _)| *flag)
                     .chain(RECORD_FLAGS.iter().copied()).chain(["--wager-registry", "--scene-registry"]).find(|flag| *flag == arg) {
@@ -316,6 +320,26 @@ pub fn validate_vlm_endpoint(endpoint: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experimental_flag_cannot_enable_legacy_capture_or_ambient_configuration() {
+        assert!(USAGE.contains("--experimental-bet-action"));
+        assert!(
+            parse([], |name| (name == "COINPOKER_EXPERIMENTAL_BET_ACTION")
+                .then(|| "true".into()))
+            .is_ok()
+        );
+        for args in [
+            vec!["--experimental-bet-action"],
+            vec!["--stdin", "--experimental-bet-action"],
+            vec!["--doctor", "--experimental-bet-action"],
+            vec!["--experimental-bet-action", "false"],
+            vec!["--experimental-bet-action=true"],
+            vec!["--experimental-bet-action", "--experimental-bet-action"],
+        ] {
+            assert!(parse(args.into_iter().map(String::from), |_| None).is_err());
+        }
+    }
 
     #[test]
     fn wager_registry_is_explicit_private_capture_only_and_not_an_environment_activation() {

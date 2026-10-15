@@ -1,4 +1,4 @@
-//! Read-only field evidence, deliberately separate from actionable GameState.
+//! Field evidence, kept separate from GameState until its required inputs are valid.
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -422,6 +422,8 @@ pub struct PartialObservationView {
     pub verified_fields: Vec<VerifiedField>,
     pub capabilities: Vec<Capability>,
     pub quality_approved: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_capture: Option<crate::capture::OriginalCapture>,
 }
 impl Default for PartialObservationView {
     fn default() -> Self {
@@ -437,6 +439,7 @@ impl Default for PartialObservationView {
             verified_fields: Vec::new(),
             capabilities: capabilities(),
             quality_approved: false,
+            original_capture: None,
         }
     }
 }
@@ -571,6 +574,35 @@ pub enum SourceWitnessError {
     AlreadyBound,
 }
 
+/// Opaque in-memory evidence of visible board/pot/stack content, not poker actions.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TableContentWitness {
+    dimensions: (u32, u32),
+    regions: Vec<Option<RegionWitness>>,
+}
+
+impl TableContentWitness {
+    pub fn same_geometry(&self, other: &Self) -> bool {
+        self.dimensions == other.dimensions && self.regions.len() == other.regions.len()
+    }
+
+    pub fn has_current_region(&self, index: usize) -> bool {
+        self.regions.get(index).is_some_and(Option::is_some)
+    }
+
+    pub fn same_region(&self, other: &Self, index: usize) -> bool {
+        self.same_geometry(other)
+            && self.has_current_region(index)
+            && self.regions.get(index) == other.regions.get(index)
+    }
+}
+
+impl std::fmt::Debug for TableContentWitness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TableContentWitness(<in-memory>)")
+    }
+}
+
 // No Serialize implementation, pixels, names, frame clones or persisted identifiers.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SourceRegionWitnesses {
@@ -590,6 +622,7 @@ impl std::fmt::Debug for SourceRegionWitnesses {
 struct RegionWitness {
     bounds: [u32; 4],
     digest: [u8; 32],
+    readable: bool,
 }
 
 fn region_digest(frame: &Frame, bounds: [u32; 4]) -> Option<[u8; 32]> {
@@ -616,6 +649,7 @@ fn region_witness(frame: &Frame, bounds: [u32; 4]) -> Option<RegionWitness> {
     Some(RegionWitness {
         bounds,
         digest: region_digest(frame, bounds)?,
+        readable: frame.region_readable(bounds),
     })
 }
 fn trained_region_witness(frame: &Frame, name: &str) -> Option<RegionWitness> {
@@ -624,6 +658,11 @@ fn trained_region_witness(frame: &Frame, name: &str) -> Option<RegionWitness> {
 }
 fn region_matches(frame: &Frame, witness: Option<&RegionWitness>) -> Result<(), DiagnosticReason> {
     let witness = witness.ok_or(DiagnosticReason::MissingSourceWitness)?;
+    // Equality of covered pixels cannot witness the underlying field, even if
+    // a stationary panel produced identical pixels on both acquisitions.
+    if !witness.readable || !frame.region_readable(witness.bounds) {
+        return Err(DiagnosticReason::Occluded);
+    }
     if region_digest(frame, witness.bounds) == Some(witness.digest) {
         Ok(())
     } else {
@@ -634,6 +673,37 @@ fn region_matches(frame: &Frame, witness: Option<&RegionWitness>) -> Result<(), 
 impl PartialObservation {
     pub fn core_accepted(&self) -> bool {
         self.core_accepted
+    }
+
+    /// A fresh qualified table sample carries only exact-current original readout crops.
+    /// Cosmetic pixels outside those crops cannot veto visible-content activity.
+    /// Role/phase retain their separate whole-frame proof. No digest enters a DTO.
+    pub fn table_content_witness(&self, latest: &Frame) -> Option<TableContentWitness> {
+        let proof = self.source_witness.as_ref()?;
+        if !self.core_accepted
+            || (latest.width, latest.height) != (self.frame_width, self.frame_height)
+        {
+            return None;
+        }
+        let regions: Vec<_> = proof
+            .board
+            .iter()
+            .chain(std::iter::once(&proof.pot))
+            .chain(proof.stacks.iter())
+            .map(|region| {
+                region
+                    .as_ref()
+                    .filter(|region| region_matches(latest, Some(region)).is_ok())
+                    .cloned()
+            })
+            .collect();
+        if regions.iter().all(Option::is_none) {
+            return None;
+        }
+        Some(TableContentWitness {
+            dimensions: (self.frame_width, self.frame_height),
+            regions,
+        })
     }
 
     /// Bind exactly once to the original analyzed Frame; offline score candidates are unbound.
@@ -670,6 +740,7 @@ impl PartialObservation {
                     .and_then(|bounds| region_witness(frame, bounds))
             }),
         });
+        self.view.original_capture = frame.original_capture.clone();
         Ok(())
     }
 
@@ -938,6 +1009,8 @@ pub struct PerceptionDiagnostics {
     pub passes: Vec<PassDiagnostic>,
     pub fields: Vec<FieldEvidence>,
     pub timing: PerceptionTiming,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experimental: Option<crate::laya::experimental::ExperimentalDiagnostics>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -1071,15 +1144,41 @@ mod tests {
             suit: "spades".into(),
         });
         let mut previous = current.clone();
+        current.view.original_capture = Some(crate::capture::OriginalCapture {
+            schema_version: 1,
+            timestamp_basis: "capture_call_start",
+            frame_index: 12,
+            recording_session_id: "synthetic-recorder".into(),
+            capture_session_id: Some("synthetic-capture".into()),
+            native_source_id: Some("18446744073709551615".into()),
+            source_utc_unix_ms: 10_000,
+            captured_at_monotonic_ms: 200,
+            width: 800,
+            height: 613,
+            sha256: "a".repeat(64),
+            pixel_source: crate::capture::PixelSource::Unspecified,
+            readability: crate::capture::FrameReadability::Full,
+            occluded_regions: Vec::new(),
+        });
+        previous.view.original_capture = current.view.original_capture.clone();
+        previous.view.original_capture.as_mut().unwrap().frame_index = 11;
+        previous
+            .view
+            .original_capture
+            .as_mut()
+            .unwrap()
+            .captured_at_monotonic_ms = 100;
         previous.view.game_phase = Some(GamePhase::Flop);
         previous.view.board_count = Some(3);
         let view = current.consensus(&previous);
+        assert_eq!(view.original_capture, current.view.original_capture);
         assert_eq!(view.pot_size_text.as_deref(), Some("10.5"));
         assert_eq!(view.seats[0].displayed_stack_text.as_deref(), Some("0"));
         assert!(view.board_slots[0].is_some() && view.game_phase.is_none());
         previous.view.pot_size = None;
         previous.view.seats[0].displayed_stack = Some(1);
         let view = current.consensus(&previous);
+        assert_eq!(view.original_capture, current.view.original_capture);
         assert!(view.pot_size.is_none() && view.pot_size_text.is_none());
         assert!(
             view.seats[0].displayed_stack.is_none() && view.seats[0].displayed_stack_text.is_none()

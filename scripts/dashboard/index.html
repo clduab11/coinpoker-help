@@ -25,36 +25,57 @@
         <button type="button" id="tab-monitor" role="tab" aria-selected="true" aria-controls="panel-monitor" tabindex="0">Monitor</button>
         <button type="button" id="tab-reference" role="tab" aria-selected="false" aria-controls="panel-reference" tabindex="-1">Reference</button>
       </div>
-      <span id="view-label" class="view-label">Experimental readings / suggestions off</span>
+      <span id="view-label" class="view-label">Experimental readings and analysis</span>
     </div>
-      <div class="mode-label"><span class="badge" data-tone="warning">Suggestions OFF</span></div>
+      <div class="mode-label"><span id="analysis-status" class="badge" data-tone="warning">Analysis unavailable</span></div>
     </header>
 
     <main id="main" tabindex="-1">
       <section id="panel-monitor" role="tabpanel" aria-labelledby="tab-monitor" tabindex="0">
         <div class="source-strip" aria-label="Source and observation status">
-          <span id="source-status">Connecting</span><span id="source-role">Role unknown</span><span id="source-freshness">No current reading</span>
+          <span id="source-status">Connecting</span><span id="source-role">Role unknown</span><span id="capture-freshness">No current capture</span>
         </div>
-        <div class="recorder-strip" aria-label="Recorder status"><span id="recorder-status">Recorder status unavailable</span><span id="inference-status">Inference status unknown</span></div>
-        <p id="monitor-empty" class="monitor-empty" role="status">Waiting for a table reading.</p>
+        <div class="recorder-strip" aria-label="Monitor controls, evidence recording and inference status">
+          <div class="monitor-controls" role="group" aria-label="Manual monitor controls"><button type="button" id="start-capture" aria-describedby="start-capture-status" disabled>Start monitor</button><button type="button" id="stop-capture" aria-describedby="stop-capture-status" disabled>Stop monitor</button></div>
+          <span id="start-capture-status" role="status">Manual start not configured.</span><span id="stop-capture-status" role="status"></span>
+        </div>
+        <p id="monitor-empty" class="monitor-empty sr-only" role="status">Waiting for a table reading.</p>
         <div id="monitor-grid" class="monitor-grid no-reading no-history">
           <section id="suggested-action" class="panel action-panel" aria-labelledby="action-title" data-role="uncertain" hidden>
             <header class="action-heading"><h2 id="action-title" class="eyebrow">Observation status</h2><span id="role-status" class="badge" hidden></span></header>
             <div class="action-choice"><p id="action-move" class="action-move">Reading uncertain</p><div id="action-amount-wrap" class="action-amount" hidden><span class="eyebrow">Amount</span><strong id="action-amount">-</strong></div></div>
-            <p id="action-reason" class="action-reason" hidden>Baseline gate FAILED.</p>
+            <p id="action-reason" class="action-reason" hidden>No current source-qualified analysis.</p>
           </section>
 
-          <section id="monitor-readings" class="panel readings-panel" aria-labelledby="observation-title" hidden>
-            <header class="panel-heading"><h2 id="observation-title">Current readings</h2><dl class="table-meta"><div><dt class="sr-only">Phase</dt><dd id="game-phase">-</dd></div><div id="actor-reading"><dt class="sr-only">Acting seat</dt><dd id="acting-seat">-</dd></div></dl><span class="badge" data-tone="warning">Experimental</span></header>
-            <div class="table-summary">
-            <div class="card-deck"><div class="card-group board-group"><h3>Board</h3><div id="board-cards" class="cards" aria-label="Experimental board cards"></div><p id="board-reason" class="field-reason"></p></div><div id="hero-card-group" class="card-group"><h3 id="hero-label">Hero</h3><div id="hero-cards" class="cards" aria-label="Experimental hero cards"></div><p id="hero-reason" class="field-reason"></p></div></div>
+          <section id="monitor-readings" class="panel readings-panel" aria-labelledby="observation-title" data-reading="unknown">
+            <header class="panel-heading"><h2>Table</h2><span id="observation-title" class="sr-only">Current readings</span><dl class="table-meta"><div><dt class="sr-only">Phase</dt><dd id="game-phase">-</dd></div><div id="actor-reading"><dt class="sr-only">Acting seat</dt><dd id="acting-seat">-</dd></div></dl><span class="badge" data-tone="warning">Experimental</span></header>
+            <p id="occupancy-summary" class="table-occupancy">Occupancy uncertain</p>
+            <div class="table-diagram">
+              <svg class="table-outline" viewBox="0 0 600 360" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect x="3" y="3" width="594" height="354" rx="170"/><rect x="15" y="15" width="570" height="330" rx="158"/></svg>
+              <div class="table-summary">
+                <dl class="table-pot"><div><dt>Upper Pot</dt><dd id="amount-pot">-</dd><dd id="pot-reason" class="field-reason"></dd></div></dl>
+                <div class="card-group board-group"><h3>Board</h3><div id="board-cards" class="cards" aria-label="Five fixed community-card slots"></div><p id="board-reason" class="field-reason"></p></div>
+              </div>
+              <section id="seats-reading" class="physical-seats" aria-labelledby="seats-title"><h3 id="seats-title" class="sr-only">Six physical seats / top clockwise</h3><ol id="seat-readings" class="spatial-seats" aria-label="Six physical seats; select one for Monitor details"></ol></section>
+            </div>
+            <section id="player-details" class="player-details" aria-labelledby="player-title" hidden>
+              <header class="panel-heading"><h3 id="player-title" tabindex="-1">Selected player</h3><button type="button" id="close-player-details">Close details</button></header>
+              <p id="player-association" class="small"></p>
+              <dl id="player-fields" class="player-field-details" aria-label="Selected seat field provenance"></dl>
+              <h4>Client-displayed profile stats</h4>
+              <p id="player-stats-status" class="small muted">Unknown / no owner-bound profile observed</p>
+              <dl id="player-stats" class="profile-metrics" aria-label="Last observed client profile percentages"></dl>
+              <p id="player-stats-scope" class="small muted">Sample size unknown / scope unknown</p>
+              <details class="player-provenance"><summary>Original capture and evidence</summary><p id="player-stats-source" class="small muted"></p><a id="player-evidence" hidden>View original profile evidence</a></details>
+              <p class="footnote">Client-displayed, not locally calculated or verified population truth. Local observed activity counts remain separate. Selecting a seat only opens Monitor details.</p>
+            </section>
+            <div class="own-readings">
+            <div id="hero-card-group" class="card-group"><h3 id="hero-label">Hero</h3><div id="hero-cards" class="cards" aria-label="Experimental hero cards"></div><p id="hero-reason" class="field-reason"></p></div>
             <dl class="amount-grid">
-              <div><dt>Upper Pot</dt><dd id="amount-pot">-</dd><dd id="pot-reason" class="field-reason"></dd></div>
               <div id="call-reading"><dt id="call-label">Call</dt><dd id="amount-call">-</dd></div>
               <div id="hero-stack-reading"><dt>Hero stack</dt><dd id="amount-stack">-</dd><dd id="stack-reason" class="field-reason"></dd></div>
             </dl>
             </div>
-            <section id="seats-reading" class="reading-row" aria-labelledby="seats-title"><h3 id="seats-title">Six physical seats / top clockwise</h3><ol id="seat-readings" class="seat-grid" aria-label="Seat-by-seat displayed stacks, wagers and street contributions"></ol></section>
             <section id="wagers-reading" class="reading-row" aria-labelledby="wagers-title"><h3 id="wagers-title">Visible wagers</h3><ul id="visible-wagers" class="wager-list"></ul></section>
             <section id="controls-reading" class="reading-row" aria-labelledby="controls-title"><h3 id="controls-title">Observed control labels / not recommendations</h3><ul id="control-states" class="control-list" aria-label="Observed labels, not action buttons"></ul></section>
             <dl id="raise-bounds" class="raise-bounds"><div><dt>Min raise to</dt><dd id="amount-min">-</dd></div><div><dt>Max raise to</dt><dd id="amount-max">-</dd></div></dl>
@@ -64,10 +85,23 @@
               <div class="draw-reading"><dt>Draw completion</dt><dd><dl class="draw-metrics"><div><dt>Outs</dt><dd id="metric-draw-outs">-</dd></div><div><dt>Next card</dt><dd id="metric-draw-next">-</dd></div><div><dt>By river</dt><dd id="metric-draw-river">-</dd></div></dl></dd></div>
               <div><dt>Win equity</dt><dd id="metric-equity">-</dd></div>
             </dl>
-            <p id="reading-limit" class="footnote">A dash is unknown. Metrics and suggestions off.</p>
           </section>
 
         </div>
+        <details id="visual-panel" class="panel readings-panel visual-diagnostics" aria-labelledby="visual-title" hidden>
+          <summary>Provisional visual diagnostics</summary>
+          <header class="panel-heading"><h2 id="visual-title">Fast visual observations</h2><span class="badge" data-tone="warning">Provisional templates</span></header>
+          <p class="footnote">Agent-generated templates / not human-reviewed / not strategy inputs or a complete betting history.</p>
+          <div class="card-group board-group"><h3>Provisional board</h3><div id="visual-board" class="cards"></div><p id="visual-board-reason" class="field-reason"></p></div>
+          <h3>Literal badges and visible wagers</h3><ol id="visual-seats" class="seat-grid"></ol>
+          <details><summary>Capture provenance and recent badge sightings</summary><p id="visual-source" class="small muted"></p><ol id="visual-sightings" class="event-list"></ol><p class="footnote">Capture order only. Retained badges are deduplicated. Unknown reads and simultaneous badges leave action order and street association unknown; stacks never create actions.</p></details>
+        </details>
+        <section id="experimental-panel" class="panel experimental-panel" aria-labelledby="experimental-title" hidden>
+          <header class="panel-heading"><h2 id="experimental-title">Experimental bet/action candidates</h2><span class="badge" data-tone="warning">Diagnostic only</span></header>
+          <p class="experimental-warning">UNVALIDATED / DRAFT geometry / human review PENDING. No fitted p6/p7 floor or target evaluation data. These are guesses, not admitted wagers, action occurrences, actor identities, action order, or recommendations.</p>
+          <p id="experimental-age" class="small muted"></p>
+          <div id="experimental-candidates"></div>
+        </section>
         <div class="secondary-grid">
           <details id="history-panel" class="panel history-panel" hidden>
             <summary><span id="history-title">Recent table activity</span><span id="history-status" class="badge" data-tone="warning">Partial</span></summary>
@@ -75,14 +109,21 @@
             <div class="history-toolbar"><p id="history-coverage" class="small muted">Partial history; gaps may hide actions.</p><label class="filter-label" for="history-filter">Show <select id="history-filter"><option value="all">All activity</option><option value="action">Actions</option><option value="gap">Gaps</option><option value="boundary">Hand / table changes</option></select></label></div>
             <ol id="history-events" class="event-list" aria-label="Recent observed activity, newest first"></ol>
             <p id="history-empty" class="empty-state">No actions recorded in this partial history.</p>
-            <p class="footnote">Counts are observed lower bounds, not rates. A 3-bet or 4-bet needs known prior action order.</p>
+            <p class="footnote">Local observed lower-bound counts, not imported client profile rates. A 3-bet or 4-bet needs known prior action order.</p>
           </details>
         <details id="diagnostics-panel" class="panel diagnostics-panel">
           <summary>Diagnostics and manual test</summary>
-          <p class="footnote">Gate F historical FAIL / human review PENDING / suggestions OFF.</p>
-          <dl class="diagnostic-meta"><div><dt>Model</dt><dd id="model-status">Unknown</dd></div><div><dt>Recorder budget</dt><dd id="recorder-budget">Not started</dd></div><div><dt>Loss / gaps</dt><dd id="recorder-loss">Unknown</dd></div><div><dt>Distinct control opportunities</dt><dd id="opportunity-status">Not collected</dd></div></dl>
-          <p id="recorder-stop" class="footnote">Use the manual capture terminal to confirm the source and start. Opening this page never starts capture or inference.</p>
-          <p class="footnote">Stop: Ctrl+C in the capture terminal, or <code>python scripts/laya_capture.py stop --session SESSION_ID</code>. Mark incorrect or missing readings there for later review; markers are DRAFT, not corrections.</p>
+          <p id="source-freshness">No current reading</p><p id="recorder-status">Recorder status unavailable</p><p id="inference-status">Inference status unknown</p>
+          <div id="monitor-lifecycle" class="monitor-lifecycle" role="status" hidden>
+            <p id="monitor-stop"></p>
+            <p id="monitor-recovery" class="footnote">Use Start monitor above when available to request a new source-validated session. Stopping the monitor leaves the model warm. Opening or refreshing this page never starts capture or inference.</p>
+            <code id="monitor-launch" hidden></code>
+          </div>
+          <p id="reading-limit" class="footnote">A dash is unknown. Any analysis is experimental / quality_approved: false.</p>
+          <p class="footnote">Gate F historical FAIL / human review PENDING. Experimental analysis does not change model quality.</p>
+          <dl class="diagnostic-meta"><div><dt>Model</dt><dd id="model-status">Unknown</dd></div><div><dt>Source ages / session time</dt><dd id="diagnostic-timing">Unavailable</dd></div><div><dt>Recorder budget</dt><dd id="recorder-budget">Not started</dd></div><div><dt>Loss / gaps</dt><dd id="recorder-loss">Unknown</dd></div><div><dt>Distinct control opportunities</dt><dd id="opportunity-status">Not collected</dd></div></dl>
+           <p id="recorder-stop" class="footnote">Start monitor requests source validation; Stop monitor stops collection, not the warm model. Opening this page never starts capture or inference.</p>
+           <p class="footnote">Stop monitor above, use Ctrl+C in the capture terminal, or <code>python scripts/laya_capture.py stop --session SESSION_ID</code>. This stops collection, not a poker action. Mark incorrect or missing readings in the terminal for later review; markers are DRAFT, not corrections.</p>
           <dl id="field-diagnostics" class="field-diagnostics" aria-label="Unavailable field reasons"></dl>
           <p class="footnote">Visible wagers are not street contributions. Lower center-chip text, hand boundaries, action order and pot conventions require separate evidence. Physical seat 4 is not automatically hero. No strategy is calculated from partial readings.</p>
         </details>
@@ -106,7 +147,7 @@
 
     <footer class="console-footer"><span>Local diagnostic companion</span><span>No automated poker actions</span></footer>
     <p id="announce" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-    <noscript><p class="notice">JavaScript is disabled. Monitoring is paused and suggestions remain off.</p></noscript>
+    <noscript><p class="notice">JavaScript is disabled. Monitoring and analysis are unavailable.</p></noscript>
   </div>
 </body>
 </html>

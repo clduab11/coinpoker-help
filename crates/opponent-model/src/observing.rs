@@ -1,4 +1,4 @@
-//! Pure, anonymous, read-only partial observations. No game input or advice.
+//! Pure, anonymous partial-observation accounting; this module has no client side effects.
 //! Field calibration/human approval and current-pixel validation are independent
 //! assertions supplied by the adapter, never inferred from a model-wide flag.
 

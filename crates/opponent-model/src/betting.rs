@@ -1,4 +1,4 @@
-//! Read-only chip accounting. Integer units must be validated by the caller.
+//! Chip accounting. Integer units must be validated by the caller.
 //! Visible wagers, stacks, dead money and total contributions are not live credit.
 
 use serde::{Deserialize, Serialize};

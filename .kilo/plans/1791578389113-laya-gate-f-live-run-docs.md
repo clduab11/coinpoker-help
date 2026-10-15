@@ -7,7 +7,7 @@ Planned 2026-10-09T20:40-21:05Z from the handoff prompt and a read of the repo. 
 - Repo `C:\Users\cld-main\Desktop\github-projects\coinpoker-help`, branch `checkpoint/seated-read-mechanism-2-20261002`, HEAD `4ccad18`. Everything is uncommitted; keep it. The user commits.
 - Windows PowerShell 5.1: `>` writes UTF-16, so write files from Python; no heredocs. The bash tool in these sessions denies `;`, `|`, `>`, `&`; run long/compound commands through `desktop-commander_start_process` (one command per call) or a small Python helper under `.local/`.
 - Python env `.local\laya-runtime\env\python.exe` (call it `$PY` below). `evaluate.py` sets `HF_HOME`/`HF_HUB_OFFLINE` itself; `start-vlm.ps1` sets them for the server. For anything else set `HF_HOME=models\laya-vision\hf`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_VERBOSITY=error`; capture stderr to a file.
-- Not authorized: commits, pushes, uploads, release/workflow changes, client input, new `.ps1` files in the repo, pixels outside `.local/captures`.
+- Not authorized: commits, pushes, uploads, release/workflow changes, new `.ps1` files in the repo, pixels outside `.local/captures`.
 - Gemma server PID 24812 stays stopped. Do not restart it.
 - Gate rule: never reach a gate by lowering thresholds, relaxing assembly rules or repairing answers.
 - Read first: `.local/laya/research/RESEARCH.md` §6, `.local/laya/rust-spec.md`, `.local/laya/question-set.json` → `assembly_rules` R1-R19.
@@ -90,8 +90,8 @@ Checkpoint `CK = models/laya-vision/finetuned/20261009T190322Z-it1`.
 3. `cargo build --release --locked` (needed anyway if T5 touched tests).
 4. `$PY scripts\doctor.py` with the server up → exit 0; `$PY scripts\doctor.py --offline` → exit 0 (`vlm_models`/`multimodal_api` blocked). Save both reports under `.local/acceptance/<UTC>-laya/doctor-{online,offline}.json`.
 
-### T7. Step 8 — live run (90 s, unseated table, read-only)
-Precondition (user action; the agent never sends input to the client): CoinPoker open at a six-max table at a trained size (1015x770 or 800x613), hero **not seated**, for the whole 90 s; the lobby window at its usual 1280x778 may be open. State this to the user before starting and wait for the go-ahead.
+### T7. Step 8 — live run (90 s, unseated table observation)
+Precondition: CoinPoker open at a six-max table at a trained size (1015x770 or 800x613), hero **not seated**, for the whole 90 s; the lobby window at its usual 1280x778 may be open. State this to the user before starting and wait for the go-ahead.
 1. `RUN = .local/acceptance/<yyyyMMddTHHmmssZ>-laya/`; `Copy-Item` `run-timed.ps1` from the starvation dir into `RUN`; edit lines 21-22 (from Python) to `'--vlm-endpoint', 'http://127.0.0.1:18090/v1/laya/predict', '--vlm-model', 'coinpoker-laya-vision'`; keep `--exe-name CoinPoker.exe --lobby-title CoinPoker --lobby-size 1280x778`.
 2. Restart the server with the answers log: `powershell -NoProfile -File scripts\start-vlm.ps1 -AnswersLog <RUN>\answers.jsonl`; wait for `ready`.
 3. `pwsh -NoProfile -File <RUN>\run-timed.ps1 -Label laya-unseated -Seconds 90` (+ `-ExtraArgs @('--laya-threshold','<T>')` on the unverified branch, D-E).
@@ -116,7 +116,7 @@ All edits must reflect the actual branch outcome (PASS / UNVERIFIED / FAIL) and 
 ## 4. Must be stated plainly in the final report (gaps; do not build)
 
 - **Seated play gives no advice yet — practice or cash alike.** Both run through the same mechanism; the only difference is the currency displayed. The seated passes (p1 hero cards, p3_to_call, p3_hero_chips, p4 raise bounds, seat bets) have no training data, their regions are provisional, no seated capture exists, and they are never run. A seated frame always yields `readable:false, state:null` (R17), with no action guidance even after `calibrated:true`.
-- Enabling seated advice needs a separate, user-approved session: seated harness captures (the user sits; no agent input), seated region measurement, auto-labels and training for those passes, and its own Gate F. It is not a separate mode of the tool.
+- Enabling seated advice needs a separate, user-approved session: seated harness captures, seated region measurement, auto-labels and training for those passes, and its own Gate F. It is not a separate mode of the tool.
 - Release packaging does not ship the Laya server (`laya-server.py`, `laya_prep.py`, `laya-pins.json` are not in the release allowlist; workflow changes not authorized).
 - Six-max only. Lobby eval rests on one user frame (train lobby = 1 harness capture + 24 augmentations). The cursor is composited into frames (WGC session at `windows.rs:449-458` never disables cursor capture). Deterministic template matching (the auto-labeler) would be faster and exact at known window sizes — the user's call.
 - Fine-tuned weights are local and not distributable; a fresh install cannot obtain them. Live precision was not separately measured (D-I). `scripts/vlm-pins.json` is orphaned but kept.

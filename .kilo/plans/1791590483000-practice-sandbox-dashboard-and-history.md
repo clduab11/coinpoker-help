@@ -1,6 +1,25 @@
 # Practice-Sandbox Dashboard, Observed History, and Seated Data
 
-## Latest Outcome: Manual Seated Diagnostic Readiness (2026-10-11)
+## Current Integration (2026-10-13)
+
+Manual confirmation now requires only the fresh exact PID/HWND/nonce challenge,
+identity recheck and 30-second deadline. New manual `operator_assertion` is null;
+old seated values are accepted only for persisted-receipt compatibility. Explicit
+inference/resource opt-in remains. Monitor's **Stop capture** uses the current
+session/service-bound `POST /api/capture/stop`, without model/GPU use or GET side effects.
+HTTP start/mark and poker-input routes are not implemented.
+Current profile metadata is `six-max-table`; legacy `practice-six-max` profiles
+keep identical selectors. The old path/flag names remain compatible, not mode gates.
+
+Genuine current full native observations and matching legal decisions can project
+experimental analysis with `quality_approved:false`; partials, unleased tables and
+stale/mismatched input cannot. The failed model grade, R17, source/freshness and
+actual untrained capabilities remain unchanged. This supersedes older blanket
+advice-null and seating-assertion instructions below, not their test results.
+The dated records remain historical, not tests or live acceptance of this change.
+Current details: `docs/EVENTS_V2.md` and `docs/SEATED_DIAGNOSTIC.md`.
+
+## Historical Outcome: Manual Seated Diagnostic Readiness (2026-10-11)
 
 **READY FOR MANUAL SEATED DIAGNOSTIC/CAPTURE**, not trusted live recognition.
 The explicit desktop-companion implementation request supersedes the prior UI
@@ -23,8 +42,8 @@ occluded; explicit Hero stack is independent of uncertain turn controls. Hero se
 is never guessed. Amount text and diagnostic statuses traverse the existing native
 typed view/feed and Python projection; R17, thresholds and disabled p6/p7 unchanged.
 
-`scripts/laya_capture.py` adds explicit exact-window challenge + seated-ready
-assertion, one-shot capture-only supervision,600s/1200-frame first-limit stop,
+At this checkpoint, `scripts/laya_capture.py` added an exact-window challenge plus
+a seating assertion (removed by the 2026-10-13 integration), one-shot capture-only supervision,600s/1200-frame first-limit stop,
 Ctrl+C/session stop, private hashes/sourceUTC/gaps and append-only DRAFT review
 markers. Source replacement stops, same-identity resize retains original budget.
 Target20 counts distinct operator-marked opportunities, not repeated frames; end
@@ -121,18 +140,13 @@ and late validation, separate train/calibration groups, and per-seat/size/field/
 sequence quotas. Proposed next-pack cap: 80 complete segments / 2400 selected
 review frames; unmet quotas stay blocked. Quotas do not prove statistical quality.
 
-Official CoinPoker policy was rechecked with maxAge0/HTTP200, updated 25 June 2026:
-gameplay-connected tracking/assistance is prohibited, with no established practice,
-observing or anonymity exemption. Keep testing offline on existing or provider-
-supplied/explicitly approved genuine UI data. Any later live route needs written
-provider clarification and separate user authorization. Synthetic contract tests
-never establish recognition accuracy.
+Synthetic contract tests never establish recognition accuracy.
 
 Actual UTC/commands/exits/stdout/stderr are private under
 `.local/laya/train/data-readiness-20261010T2054Z/`. Integrity/assets ran
 21:00:42.932596Z..21:01:52.776394Z; assembly ran
 21:14:51.942221Z..21:15:11.856718Z, both exit0. Initial field-name mismatch and
-direct-policy HTTP rejection are retained, not passes. Unclocked initial read-only
+failed HTTP lookup are retained, not passes. Unclocked initial read-only
 preflight limitations are disclosed, not fabricated. Final artifact verification
 is not recognition QA or a fresh score for historical it1 tests.
 
@@ -273,7 +287,7 @@ Structural diagnosis:
 
 1. Return typed `PartialObservation` alongside strict `ScreenObservation` and
    actionable `GameState`, not a fabricated player list. Table/layout/readability
-   and each field's calibrated dependencies/floor determine read-only eligibility.
+    and each field's calibrated dependencies/floor determine readout eligibility.
    Unknown hero role/cards must not erase independent pot/stack evidence; role
    remains unknown. Semantic contradiction still rejects dependent fields.
 2. Keep a per-capability registry for training/calibration/held-out/human status
@@ -372,11 +386,7 @@ data, human labels and one sequential GPU candidate from it1 each need separate
 approval. At that gate create a NEW versioned private dataset; split by labelled
 hand/session/time, separate calibration/held-out/late, preserve old it1 unchanged.
 
-[CoinPoker's tools policy](https://coinpoker.com/third-party-tools), updated
-2026-06-25, prohibits gameplay-connected HUD/tracking/opponent analysis and RTA
-while the client is open. No practice/observing/anonymity exemption is established.
-Provider clarification is a separate live-use risk/gate, not supplied by agent
-review or implementation approval. Stop here for explicit stage 2 approval.
+Stop here for explicit stage 2 approval.
 
 ## Plan Adjustment: Role-Aware Monitor + Reference (2026-10-10)
 
@@ -454,9 +464,9 @@ below. Historical results and the original Gate F FAIL remain unchanged.
   turn"; highlight suggestions only on the user's current turn. Uncertainty is
   one short "Reading uncertain" line. Sitting down does not restart monitoring
   or discard observing history. Disconnected/empty Monitor is one compact message.
-- No connect controls: calibrate the practice executable/title once using local
+- Calibrate the practice executable/title once using local
   `--list-windows`, asking only if ambiguous, then attach automatically through
-  the existing launcher. Never seat, click, type, or play for the user.
+  the existing launcher.
 - Research a concise locally bundled, searchable/collapsible Reference from
   several reputable education sources: rankings; pot odds/required equity; outs,
   rule of 2/4 versus exact odds; six-max positions/opening ranges; facing raises,
@@ -465,9 +475,10 @@ below. Historical results and the original Gate F FAIL remain unchanged.
 - Warm capture-to-Monitor p95 must be <5000 ms across all measured stages; late
   results are withheld. Optimize measured bottlenecks without relaxing freshness
   or fitted thresholds. Reuse the pinned it1 checkpoint; never duplicate GPU work.
-- Practice Games/practice chips are the target. Practice and cash share the same
-  repo/mechanism; this is not real-money acceptance. Suggestions remain OFF until
-  explicitly verified positive seated data and all quality/performance gates pass.
+- The 2026-10-10 plan targeted Practice Games/practice chips through the same
+  repo/mechanism as cash, without real-money acceptance. That plan withheld
+  suggestions pending positive seated data and quality/performance gates; the
+  current experimental projection is separately described above, not quality certification.
 - Preserve every uncommitted change and it1 dataset/weights. No commits, pushes,
   uploads, release/workflow edits or new `.ps1` files; extend existing scripts.
   Root `lobby-screengrab.png` is for the user to delete, not the agent.
@@ -527,10 +538,9 @@ Inspect the actual branch/worktree before implementation; preserve every existin
 - Pixel source: the actual CoinPoker client using Practice Games and practice chips, as confirmed by the user. This is development/testing, not a real-money deployment or acceptance claim.
 - One repo, representation, and mechanism for table states. Do not create a separate practice-mode model or repo, or a practice-only bypass of validation.
 - Canonical service and browser address: `http://127.0.0.1:18090/`. No production `8080`/`18080` endpoints or automatic alternate-port fallback.
-- Browser controls are read-only. Existing scripts/CLI launch and stop processes. Do not implement HTTP Start/Pause/Stop, seating, betting, or poker-client input controls.
+- The current browser exposes Monitor/Reference and explicit session-bound Stop capture; existing scripts/CLI launch processes. HTTP start/mark and poker-client input controls are not implemented.
 - History: private, bounded per-session ledger under `.local/`, with opaque session/table/seat-occupant identities. No public player names, uploads, or cross-session identity merging by guessed OCR names or seat numbers.
 - The user's later practice-sandbox clarification supersedes the earlier offline-only selection. This plan targets actual Practice Games development, not real-money/public deployment or a production-readiness claim.
-- No automated poker actions, hotkeys, client clicks/keystrokes, financial operations, concealment, or evasion. The user alone seats, plays, and leaves.
 - A first seated session is conditional on a tested recorder and a separate explicit go-ahead. The initial collector-first question was dismissed, not approved. Do not interpret willingness to play later as permission to start a capture or training job now.
 - Proposed performance requirement: warm capture-to-display p95 <5000 ms, with a hard 5000 ms end-to-end deadline. This is an upper bound, not an intentional delay. Accuracy, confidence, and freshness safeguards are not relaxed.
 - Implement UI/docs/history infrastructure first. Actual seated collection, paid/GPU training work, and advice activation each have later checkpoints below. No automatic it2/it3 or retraining of completed work.
@@ -563,7 +573,7 @@ The current full benchmark makes nine serial HTTP passes: p0, board, pot, and si
 
 1. Inspect OS processes and persisted logs before any model start; never duplicate a GPU instance. Preserve old checkpoints, datasets, labels, scores, and the failed-gate receipt.
 2. Correct `README.md` and `MODEL_LICENSES.md` first. Cross-check active instructions in `INSTALL_WINDOWS.md`, `VLM_COMPATIBILITY.md`, `CONTRIBUTING.md`, `SECURITY.md`, `EVENTS_V2.md`, and current sections of `LAYA_VISION_PHASE_A.md`, `WINDOWS_ACCEPTANCE_V1.md`, and `WINDOWS_VALIDATION.md`. Historical evidence rows remain historical.
-3. Document the actual Laya alias, predict API, local runtime, verified checkpoint, temperature calibration versus quality approval, and the new read-only dashboard. Remove the obsolete remote opt-in instructions.
+3. Document the actual Laya alias, predict API, local runtime, verified checkpoint, temperature calibration versus quality approval, and the new local dashboard. Remove the obsolete remote opt-in instructions.
 4. Make every active default, launcher, doctor probe, new example, and browser/feed target use 18090. Reject an explicit retired product endpoint with a useful configuration error rather than connecting to another application on 8080. Do not kill an unowned process if 18090 is occupied.
 5. Do not globally replace historical port numbers, immutable run logs, deliberately hostile URL tests, or third-party dependencies. Mark retained Gemma evidence as historical. `scripts/vlm-pins.json` remains an orphaned historical manifest until the separately restricted release packaging is addressed.
 6. Keep current provenance truthful: source MIT, Laya code/backbone licenses, CC-BY-NC-SA-4.0 base/derivative weights, private captures, local-only weights. A fresh install cannot download this user's fine-tuned derivative.
@@ -571,7 +581,7 @@ The current full benchmark makes nine serial HTTP passes: p0, board, pot, and si
 
 Root `lobby-screengrab.png` remains for user deletion; its eval-only copy stays intact. Do not delete the two reference PNGs or PDF, or import them into the vision dataset.
 
-## 5. P1: Read-Only Browser Dashboard on the Same Port
+## 5. P1: Browser Dashboard on the Same Port
 
 Use local HTML/CSS/vanilla JS, not a new framework/backend or native desktop workstream. Suggested files: a small `scripts/dashboard/` static asset set plus a narrow service/state helper used by `laya-server.py`.
 
@@ -637,13 +647,13 @@ Provide an operator checklist in the dashboard/docs:
 2. See the baseline model/quality status and exercise explicitly marked replay cases; confirm clearing/disconnect/busy behavior.
 3. Open/select the Practice Games table manually. Verify six-max and a measured capture size/profile; record exact app/window identity rather than guessing a table from its title.
 4. Start the explicitly configured passive capture from the existing launcher/CLI. Confirm counter/timestamp progress before changing the game state.
-5. Only after a separate user go-ahead, start the seated-data session. The user uses the client's Find Seat/empty-seat/Join Wait List UI and all buy-in/play controls themselves. Do not promise that a full table immediately has an available seat.
+5. Only after a separate user go-ahead, start the seated-data session. The current companion has no seating or buy-in controls. Do not promise that a full table immediately has an available seat.
 
 If the user does not want to make independent plays before advice exists, stop at dashboard/replay/watching infrastructure and await genuine UI examples. The dismissed planning question is not authorization to proceed.
 
 ## 8. P4: Positive Seated Data, New Versioned Dataset
 
-This is a separately authorized session in this repo. No client input is automated, and advice remains blocked during initial collection.
+This is a separately authorized session in this repo. The existing companion has no client-input implementation, and advice remains blocked during initial collection.
 
 - Capture genuine hero cards, hero turn/waiting states, and offered Fold/Check/Call/Bet/Raise/All-in controls, including present-but-disabled, negative, occluded, and ambiguous cases. Do not mistake opponent FOLD/RAISE badges for hero buttons.
 - Measure hero-card, controls, to-call, hero-stack, raise-bound, button/position, opponent-badge and commitment regions from actual practice captures. Existing provisional rectangles are not validated measurements.
@@ -686,7 +696,7 @@ Implement the future seated branch behind explicit capability approval; do not s
 - Use history context only when verified. Opening ranges are not 3-bet defense ranges. Keep Unknown/uniform-range assumptions visible until a separately validated history-aware range policy exists.
 - Preserve current heads-up-only raising and multiway all-in/side-pot guards. Six-max capture support is not complete six-player strategy support. Do not widen these guards to make the UI look complete.
 - `ADVICE_READY` requires verified positive data, quality/performance gates and an explicitly approved manual practice-development acceptance session. Each displayed recommendation still expires or clears immediately when its turn/state is no longer current.
-- Practice and cash remain the same technical mechanism, but this plan provides no cash/real-money acceptance. No automated actions are added at any stage.
+- Practice and cash remain the same technical mechanism, but this plan provides no cash/real-money acceptance.
 
 ## 11. Validation Matrix and Completion Records
 
@@ -699,4 +709,60 @@ Implement the future seated branch behind explicit capability approval; do not s
 - Integration: Rust tests, relevant Python tests, browser desktop/small-window tests, build/doctor where permitted after code changes. These are new-change validations, not repetition of old model work. No release/workflow edits.
 - Record UTC command start/end, exit codes, stderr, model/version/hash, quality and p50/p95 results, session scope, source/verification authority and outstanding gaps. Add a new follow-on addendum; do not rewrite Addendum 10's historical failed acceptance.
 
-Phase-one completion means cleaned active docs plus tested read-only dashboard/feed/ledger infrastructure, with an honest baseline-failed/no-advice state. Stop at the manual data checkpoint. Positive collection, compute and final guidance are separately gated milestones, not actions to launch during planning or silently after the first implementation pass.
+Phase-one completion means cleaned active docs plus tested dashboard/feed/ledger infrastructure, with an honest baseline-failed/no-advice state. Stop at the manual data checkpoint. Positive collection, compute and final guidance are separately gated milestones, not actions to launch during planning or silently after the first implementation pass.
+
+## Follow-on: Manual Inference Integration (2026-10-12)
+
+The approved implementation now adds `laya_capture.py start --mode inference-enabled`
+alongside the default capture-only CLI. It closes the actual recorder bypass: one
+approved source -> exact durable frame receipt -> existing Laya/runtime admission ->
+typed JSONL -> bounded private session reader -> existing DashboardState -> Monitor.
+Source capture, service model readiness and per-session inference consent remain
+separate. The browser could not start/restart either mode at this checkpoint. No automatic attachment,
+recommendation pipeline, alternate dashboard or unrelated data inventory was added.
+
+Session/source/service replacement, STOP, errors and the first600s/1200frame limit
+retire results and collection. Native request headers are session/service-bound,
+original capture UTC/monotonic leases remain non-renewable, and browser budget
+leases only shorten. Recorder/feed failure stops visibly. Existing draft markers,
+private hash/gap receipts and unmet20distinct-opportunity deficit remain intact.
+
+Offline completion: full Rust workspace521pass/1live-smokeignored, Python/Node282pass,
+native binary build, strict native lint/format, synthetic native-to-actual-renderer
+transport, saved real-source/answer regression and independent lifecycle review.
+Exact UTC/commands/exits/stdout/stderr and earlier failed attempts remain private at
+`.local/laya/train/manual-inference-20261012/`. See its HANDOFF and the expanded
+`docs/SEATED_DIAGNOSTIC.md` for limits, approval/launch/stop steps and capability matrix.
+
+Fresh model diagnostics and actual live measurements are NOT performed or inferred
+from these tests. Prior Pot/3-5-5stack candidates and below-floor board remain saved
+answer evidence only. Genuine seated hero/control support is unestablished; p6/p7
+stay disabled. Suggestions OFF, R17 strict, Gate F historical FAIL, all labels DRAFT,
+human review PENDING. Implementation is verified offline, with the one separately
+approved bounded runtime verification still pending. No commit or push.
+
+## Follow-on: Authorized Automatic Observation and Real Limits
+
+The operator later authorized one-shot automatic startup with a required existing
+source profile, qualified table/layout/readability and visible table-region change,
+whether observing or seated. It reuses the same single-owner recorder/inference/feed
+path; no source prompts or fabricated seated assertion in this explicit mode. Model
+opt-in remains separate. Search/loading, 30-second probe, active and terminal states
+are visible. The original capture budget includes probe frames; no automatic rearm.
+
+Two separately authorized real attempts are preserved privately. The first exposed
+receipt sharing/submission defects; offline corrections passed. The second executed
+it1 on25recorded frames and generated21pass-answer records plus3typed diagnostics/
+rejections reaching DashboardState. None were admitted as current. Two completions
+were past the5-second deadline and a third obsolete; stack batches measured4.50-6.07s,
+with board scores still below1.0floor. Probe stopped at30seconds,0/20opportunities.
+No stale readings were rendered and no model score was promoted to human approval.
+
+Final offline tests:525Rust workspace passed/2ignored,304Python/Node passed, separate
+saved-private-frame replay passed; build/lint/format and source/crop/hash audits
+passed. Exact UTC/commands/exits/stderr, real Monitor screenshots and limitations:
+`.local/laya/train/automatic-inference-20261012/HANDOFF.md`. The integration exists,
+but usable live-reading performance and seated accuracy remain unverified. Next
+engineering blocker is latency-budgeted pass execution, not dashboard startup or
+weaker acceptance thresholds. Existing first-phase artifacts and incoming untracked
+runtime-refresh plan preserved; no commit or push.

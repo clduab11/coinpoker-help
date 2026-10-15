@@ -26,17 +26,19 @@ approval. The prospective `<5000 ms` warm capture-to-display p95 and hard
 5000 ms full end-to-end deadline need new eligible-result measurements; the
 old battery is not a seated/end-to-end pass, nor a reason to relax freshness.
 
-The active follow-on develops actual Practice Games with practice chips in
-the same repo/representation/guards as cash, without a bypass or real-money
-acceptance. Seated advice remains blocked until positive real UI examples
-and approved human-held-out calibration/evaluation. Root PNG charts and PDF
+Current profile metadata declares `six-max-table`, not practice/cash mode. Both
+use the same repo/representation/guards, without a bypass or established real-money
+acceptance. Genuine current full native state and a matching legal decision can
+display experimental analysis with `quality_approved:false`; positive real UI
+examples and approved human-held-out calibration/evaluation are still required
+for quality acceptance. Root PNG charts and PDF
 are deterministic reference/replay material, not positive seated UI captures.
 
-The planned launcher is `scripts/start-vlm.ps1 -DashboardOnly` for no GPU/model
-load, or default asynchronous pinned model loading. Optional
-`-LiveConfig .local/profile.json` explicitly supervises one native passive feed;
-it is not automatically used for capture in the first phase. Browser controls
-are read-only and trigger no capture/training. Planned history is private,
+Default startup and `scripts/start-vlm.ps1 -DashboardOnly` use no GPU/model load;
+inference requires explicit `-EnableInference`. Manual capture confirms the exact
+source within 30 seconds, without a seating assertion. The current browser has
+session-bound **Stop capture**; HTTP start/mark, training and poker-input controls
+are not implemented. GET polling has no runtime side effects. History is private,
 bounded and per-session under `.local/`, with opaque IDs and unknown/gap markers.
 
 No follow-on implementation-test or accepted live receipt is supplied by this
@@ -45,10 +47,11 @@ root/loading/failed-pin/busy prediction, freshness/clearing and history outcomes
 Page/model health alone is not `COLLECTOR_READY`; source timestamps/frame
 progress, optional recorder counters and private output require their own
 tests. No script/test/server/GPU run is implied by the updated instructions.
-Native health currently reports `recording_enabled:false`, `recorded_frames:0`;
-capture-frame counts are not recorded images. Typed `-LiveConfig` target settings
-do not forward a `--record-dir` option. Recorder/profile readiness and a later
-manual-data checkpoint remain pending, independently of UI/model health.
+Historical first-phase health reported `recording_enabled:false`, `recorded_frames:0`;
+capture-frame counts are not recorded images. Current recorder receipts and the
+experimental analysis/stop contracts are in [EVENTS_V2.md](EVENTS_V2.md), with
+launch/source-confirmation steps in [SEATED_DIAGNOSTIC.md](SEATED_DIAGNOSTIC.md).
+These updates do not replace missing real-window acceptance measurements.
 Historical packaging lacks Laya server/dashboard support and the local weights;
 no release/workflow change is made here.
 

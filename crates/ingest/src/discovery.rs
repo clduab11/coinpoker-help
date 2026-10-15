@@ -291,6 +291,14 @@ impl<S: CaptureSource> CaptureManager<S> {
         &self.selection
     }
 
+    pub fn source(&self) -> &S {
+        &self.source
+    }
+
+    pub fn source_mut(&mut self) -> &mut S {
+        &mut self.source
+    }
+
     pub fn refresh(&mut self) -> Result<Selection, CaptureError> {
         let snapshot = if self.config.has_identity() {
             match self.source.discover() {
