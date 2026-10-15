@@ -614,13 +614,14 @@ class VisualWorker:
     def _load(self):
         from laya_board import BoardTemplateRecognizer
         from laya_actions import ActionReader, ActionTimeline, CropTemplates
+        from laya_prep import load_regions
         board = BoardTemplateRecognizer.load(
             self.root / ".local/laya/dataset/exemplars.json",
             self.root / ".local/captures/20261009T170508Z-laya-train/derived/exemplars.npz",
             extra_bank_path=self.root / ".local/laya/board-pixel-bank-20261014.json"
                 if (self.root / ".local/laya/board-pixel-bank-20261014.json").is_file() else None,
             evidence_root=self.root)
-        self.regions = json.loads((self.root / "crates/ingest/assets/laya/regions.json").read_bytes())
+        self.regions = load_regions(self.root)
         bank = CropTemplates.from_draft_review(
             self.root / ".local/laya/datasets/observing-20261010-v2-staging/human-review-20261010/labels.draft.json",
             self.root)

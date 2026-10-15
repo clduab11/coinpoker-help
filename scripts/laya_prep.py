@@ -7,9 +7,32 @@ crops come from identical code. numpy and Pillow are imported lazily; this modul
 pixels anywhere.
 """
 
-TITLE_BAR_PX = 28
-TITLE_BAR_RANGE = (20, 48)
-CONTENT_ASPECT = 1.3677
+import copy
+from functools import lru_cache
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+REGIONS_REL_PATH = "crates/ingest/assets/laya/regions.json"
+
+
+@lru_cache(maxsize=1)
+def _default_regions():
+    return json.loads((ROOT / REGIONS_REL_PATH).read_bytes())
+
+
+def load_regions(root=None):
+    """Load the canonical region manifest (`crates/ingest/assets/laya/regions.json`)."""
+    if root is None or Path(root).resolve() == ROOT:
+        return copy.deepcopy(_default_regions())
+    return json.loads((Path(root).resolve() / REGIONS_REL_PATH).read_bytes())
+
+
+_GEOMETRY = _default_regions()["geometry"]
+TITLE_BAR_PX = int(_GEOMETRY["title_bar_px"])
+TITLE_BAR_RANGE = tuple(int(v) for v in _GEOMETRY["title_bar_range_px"])
+CONTENT_ASPECT = float(_GEOMETRY["content_aspect"])
+MIN_CROP_PX = int(_GEOMETRY["min_crop_px"])
 MAX_GLYPHS = 8
 GLYPH_STYLES = ("white", "gold")
 
@@ -40,6 +63,14 @@ def box_px(box, w, h):
     c = max(0, min(w, int(math.ceil(x0 + u1 * cw))))
     d = max(0, min(h, int(math.ceil(y0 + v1 * ch))))
     return a, b, c, d
+
+
+def region_px(name, w, h, *, regions=None):
+    """Pixel box of a named region from regions.json, or None for an unknown name."""
+    source = _default_regions() if regions is None else regions
+    table = source.get("regions", source) if isinstance(source, dict) else {}
+    box = table.get(name)
+    return None if box is None else box_px(box, w, h)
 
 
 def _text_score(arr, style):

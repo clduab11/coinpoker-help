@@ -18,10 +18,10 @@ from pathlib import Path
 
 try:
     from .laya_actions import CropTemplates, Template, _score, _normal_mask
-    from .laya_prep import _components, _text_mask, box_px
+    from .laya_prep import _components, _text_mask, box_px, load_regions
 except ImportError:
     from laya_actions import CropTemplates, Template, _score, _normal_mask
-    from laya_prep import _components, _text_mask, box_px
+    from laya_prep import _components, _text_mask, box_px, load_regions
 
 
 VERSION = "numeric_cpu_v1"
@@ -258,8 +258,7 @@ def _original(root, directory, index, sha256, size):
 class NumericReader:
     def __init__(self, root, regions=None, templates=None):
         self.root = Path(root).resolve()
-        self.regions = copy.deepcopy(regions) if regions is not None else json.loads(
-            (self.root / "crates/ingest/assets/laya/regions.json").read_bytes())
+        self.regions = copy.deepcopy(regions) if regions is not None else load_regions(self.root)
         configured = self.regions.get("regions", self.regions)
         for key in ["pot", *["seat_%d_stack" % seat for seat in range(1, 7)]]:
             roi = configured.get(key)

@@ -158,8 +158,8 @@ mod tests {
         assert_eq!(r.regions.len(), 20);
     }
 
-    /// Expected values computed with `scripts/laya_prep.content_rect`; none of
-    /// these sizes hits an exact `.5` rounding tie.
+    /// Expected values computed with `scripts/laya_prep.content_rect`, including
+    /// exact `.5` ties (`5000 * 1.3677 = 6838.5 -> 6838`, `15000 * 1.3677 = 20515.5 -> 20516`).
     #[test]
     fn content_rect_matches_python() {
         for (size, expected) in [
@@ -170,6 +170,8 @@ mod tests {
             ((800, 700), (0, 71, 800, 585)),
             ((1280, 778), (127, 28, 1026, 750)),
             ((100, 20), (0, 28, 100, 0)),
+            ((8000, 5028), (581, 28, 6838, 5000)),
+            ((24000, 15028), (1742, 28, 20516, 15000)),
         ] {
             assert_eq!(content_rect(size.0, size.1), expected, "{size:?}");
         }

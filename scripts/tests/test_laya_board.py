@@ -653,6 +653,43 @@ class BoardTemplateTests(unittest.TestCase):
             self.assertFalse(result["candidate_cards"])
             self.assertFalse(result["scene_verified"])
 
+    def test_laya_prep_regions_manifest_and_rust_geometry_parity(self):
+        manifest = laya_prep.load_regions()
+        self.assertEqual(manifest["schema"], "coinpoker-laya-regions/1")
+        self.assertEqual(laya_prep.TITLE_BAR_PX, manifest["geometry"]["title_bar_px"])
+        self.assertEqual(list(laya_prep.TITLE_BAR_RANGE), manifest["geometry"]["title_bar_range_px"])
+        self.assertEqual(laya_prep.CONTENT_ASPECT, manifest["geometry"]["content_aspect"])
+        self.assertEqual(laya_prep.MIN_CROP_PX, manifest["geometry"]["min_crop_px"])
+        for size, expected in (
+            ((800, 613), (0, 28, 800, 585)),
+            ((1015, 770), (0, 28, 1015, 742)),
+            ((1280, 963), (0, 27, 1280, 936)),
+            ((1280, 720), (167, 28, 946, 692)),
+            ((800, 700), (0, 71, 800, 585)),
+            ((1280, 778), (127, 28, 1026, 750)),
+            ((100, 20), (0, 28, 100, 0)),
+            ((8000, 5028), (581, 28, 6838, 5000)),
+            ((24000, 15028), (1742, 28, 20516, 15000)),
+        ):
+            self.assertEqual(laya_prep.content_rect(*size), expected)
+        for size, region, expected in (
+            ((800, 613), "board_slot_1", (248, 247, 309, 332)),
+            ((800, 613), "pot", (320, 222, 512, 247)),
+            ((1015, 770), "board_slot_1", (315, 306, 391, 413)),
+            ((1015, 770), "pot", (406, 275, 650, 305)),
+            ((1015, 770), "board_slot_5", (624, 306, 700, 413)),
+            ((1280, 720), "board_slot_1", (461, 287, 532, 387)),
+            ((1280, 720), "pot", (545, 258, 773, 287)),
+            ((800, 700), "board_slot_1", (248, 290, 309, 375)),
+            ((800, 700), "pot", (320, 265, 512, 290)),
+            ((1280, 963), "board_slot_1", (398, 378, 494, 512)),
+            ((1280, 963), "pot", (512, 338, 820, 377)),
+            ((1280, 778), "seat_controls", (783, 706, 1153, 771)),
+            ((100, 20), "pot", (40, 20, 64, 20)),
+        ):
+            self.assertEqual(laya_prep.region_px(region, *size), expected)
+        self.assertIsNone(laya_prep.region_px("no_such_region", 800, 613))
+
 
 if __name__ == "__main__":
     unittest.main()
