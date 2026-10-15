@@ -133,8 +133,13 @@ def runtime_identity():
             packages[name] = entry
         except (OSError, ValueError, TypeError, metadata.PackageNotFoundError):
             packages[name] = {"version": None, "state": "unknown"}
+    # Resolve the process-owned interpreter, not arbitrary redirected evidence.
+    try:
+        executable = Path(sys.executable).resolve(strict=True)
+    except (OSError, RuntimeError):
+        executable = Path(sys.executable)
     python = {"version": platform.python_version(), "implementation": platform.python_implementation(),
-              "executable": file_identity(sys.executable, maximum=128 * 1024 * 1024),
+              "executable": file_identity(executable, maximum=128 * 1024 * 1024),
               "prefix": sys.prefix, "base_prefix": sys.base_prefix}
     return {"python": python, "packages": packages,
             "complete": python["executable"]["state"] == "known"

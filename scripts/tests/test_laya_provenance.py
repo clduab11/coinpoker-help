@@ -131,6 +131,7 @@ class ProvenanceTests(unittest.TestCase):
         self.assertIsNone(value["packages"]["torch"]["version"])
         self.assertNotIn("SECRET", json.dumps(value))
         self.assertEqual(value["python"]["executable"]["state"], "known")
+        self.assertEqual(value["python"]["executable"]["path"], str(Path(provenance.sys.executable).resolve(strict=True)))
 
     def pins(self):
         entry = {"path": "model.safetensors", "size": 4, "sha256": hashlib.sha256(b"base").hexdigest()}
