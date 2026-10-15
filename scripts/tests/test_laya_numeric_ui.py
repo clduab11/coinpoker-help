@@ -48,6 +48,18 @@ if(input.scenario==='fast'){
   accept(other);assert.equal(nodes.get('amount-pot').textContent,'-');assert.equal(stack().textContent,'-');
 }else if(input.scenario==='native-older'){
   assert.equal(nodes.get('amount-pot').textContent,'0.07');assert.equal(nodes.get('amount-pot').dataset.reading,'provisional');
+}else if(input.scenario==='native-vs-empty'){
+  assert.equal(nodes.get('amount-pot').textContent,'123.45 chips');
+  assert.equal(nodes.get('amount-pot').dataset.reading,'current');
+  const capture=nodes.get('amount-pot').dataset.captureRef;
+  wall+=1001;mono+=1001;accept(pulse());
+  assert.equal(nodes.get('amount-pot').dataset.reading,'last-read','CPU empty cannot extend the native lease');
+  assert.equal(nodes.get('amount-pot').dataset.captureRef,capture);
+}else if(input.scenario==='qualifier'){
+  assert.equal(nodes.get('amount-pot').getAttribute('aria-describedby'),'pot-reason');
+  assert(nodes.get('pot-reason').textContent.includes('Provisional'));
+  assert(nodes.get('pot-qualifier').textContent.includes('Provisional'));
+  assert(seats[0].childNodes[2].textContent.includes('Provisional'));
 }else if(input.scenario==='empty-vs-visual'){
   assert.equal(wager().textContent,'-','a newer unrelated native board ticket must not restore an older visual wager');
 }else if(input.scenario==='expiry-with-native'){
@@ -104,6 +116,14 @@ class NumericUiTests(unittest.TestCase):
     def test_newer_cpu_measurement_wins_over_older_native_pot(self):
         self.value["partial_observation"] = self.native
         self.run_ui("native-older")
+
+    def test_newer_cpu_empty_does_not_erase_admitted_native_pot_or_extend_its_original_lease(self):
+        self.value["partial_observation"] = self.native
+        self.value["numeric_observation"]["pot"].update(status="empty", literal=None, value=None)
+        self.run_ui("native-vs-empty")
+
+    def test_provisional_pot_has_visible_words_and_accessible_reason(self):
+        self.run_ui("qualifier")
 
     def test_newer_cpu_empty_wager_beats_visual_even_with_unrelated_newer_native_ticket(self):
         self.value["visual_observation"] = self.visual

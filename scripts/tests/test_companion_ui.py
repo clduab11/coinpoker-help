@@ -286,7 +286,7 @@ if (input.scenario.startsWith('sustained-')) {
     // The minimal DOM harness does not parse static text; the visible main-view paragraph must contain it.
     assert(/<p id="monitor-recovery"[^>]*>[^<]*never starts capture or inference\.<\/p>/.test(html));
     assert(!nodes.get('monitor-launch').hidden);
-    assert.equal(nodes.get('monitor-launch').textContent, 'scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ContinuousObservation');
+    assert.equal(nodes.get('monitor-launch').textContent, 'pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ContinuousObservation -ManualStart');
     assert(!nodes.get('recorder-status').textContent.includes('observation continues'));
   };
   if (input.scenario === 'sustained-long') {
@@ -782,6 +782,8 @@ if (input.scenario.startsWith('context-') || input.scenario === 'persistent-tabl
     assert(nodes.get('player-stats-scope').textContent.includes('Sample size unknown / scope unknown'));
     assert(nodes.get('player-stats-status').textContent.includes('Last observed client-displayed'));
     assert(nodes.get('player-evidence').getAttribute('href').startsWith('/api/evidence/'));
+    assert.equal(nodes.get('player-evidence').getAttribute('target'), '_blank');
+    assert.equal(nodes.get('player-evidence').getAttribute('rel'), 'noopener noreferrer');
     assert(!seats.some(seat => /VPIP|PFR|3-BET|C-BET/.test(seat.textContent)));
     const original = input.snapshot.table_context.seats[0].stats.capture;
     assert(nodes.get('player-stats-source').textContent.includes(new Date(original.captured_at_unix_ms).toISOString()));
@@ -1018,7 +1020,9 @@ if (input.scenario.startsWith('analysis-')) {
     assert(visible()); assert.equal(nodes.get('action-title').textContent, 'Experimental recommendation');
     assert.equal(nodes.get('action-move').textContent, input.action || 'Call');
     assert.equal(nodes.get('action-amount').textContent, input.amount || '0.50 chips');
-    assert.equal(nodes.get('analysis-status').textContent, 'Experimental analysis');
+    assert.equal(nodes.get('analysis-status').textContent, 'Analysis unavailable');
+    assert(nodes.get('suggested-action').hidden, 'payload compatibility does not enable the B3 advice UI');
+    assert(!nodes.get('announce').textContent.includes('recommendation available'));
     assert(nodes.get('action-reason').textContent.includes('quality_approved: false'));
     assert(nodes.get('action-reason').textContent.includes('Estimated EV: 12.50 (native units)'));
     assert(!nodes.get('metrics-readings').hidden);
@@ -1122,6 +1126,7 @@ POLL_CHECKS = r"""
 STOP_CHECKS = r"""
 (async () => {
   const button = nodes.get('stop-capture'), requests = []; let resolve, reject;
+  const unavailable = () => button.getAttribute('aria-disabled') === 'true';
   const response = (status, data, extra = {}) => {
     let read = false;
     return { status, ok: status === 200, headers: { get: name => name === 'content-type' ?
@@ -1137,10 +1142,11 @@ STOP_CHECKS = r"""
   assert.equal(requests.length, 0); test.loadReference(); assert.equal(requests.length, 0);
   if (input.scenario === 'stop-disabled') {
     if (input.hidden) { document.hidden = true; test.suspend(); }
-    assert(button.disabled); await button.listeners.click(); assert.equal(requests.length, 0);
+    assert(unavailable()); await button.listeners.click(); assert.equal(requests.length, 0);
   } else {
-    assert(!button.disabled); assert.equal(button.tagName, 'button');
-    const pending = button.listeners.click(); assert(button.disabled);
+    assert(!unavailable()); assert.equal(button.tagName, 'button');
+    button.focus(); const pending = button.listeners.click(); assert(unavailable());
+    assert.equal(button.disabled, false); assert.equal(document.activeElement, button);
     await button.listeners.click(); assert.equal(requests.length, 1);
     const { path, options } = requests[0];
     assert.equal(path, '/api/capture/stop'); assert.equal(options.method, 'POST');
@@ -1155,10 +1161,10 @@ STOP_CHECKS = r"""
       else replacement.server.instance_id = 'replacement-service';
       accept(replacement); assert(options.signal.aborted);
       resolve(response(200, { ok: true })); await pending;
-      assert(!button.disabled); assert.equal(nodes.get('stop-capture-status').textContent, '');
+      assert(!unavailable()); assert.equal(nodes.get('stop-capture-status').textContent, '');
     } else if (input.scenario === 'stop-disconnect') {
       test.suspend(); assert(options.signal.aborted);
-      resolve(response(200, { ok: true })); await pending; assert(button.disabled);
+      resolve(response(200, { ok: true })); await pending; assert(unavailable());
       assert(!nodes.get('stop-capture-status').textContent.includes('Stop requested'));
     } else {
       if (input.networkError) reject(Error('PRIVATE-NETWORK'));
@@ -1167,15 +1173,110 @@ STOP_CHECKS = r"""
       assert(nodes.get('stop-capture-status').textContent.includes(input.expectedStop || 'Stop requested'));
       assert(!nodes.get('stop-capture-status').textContent.includes('PRIVATE'));
       if (!input.expectedStop) {
-        assert(button.disabled); assert(!visible());
+        assert(unavailable()); assert(!visible());
         const replay = newer(2, input.snapshot.event_seq + 1); accept(replay);
-        assert(!visible()); assert(button.disabled); await button.listeners.click();
+        assert(!visible()); assert(unavailable()); await button.listeners.click();
         replay.event_seq += 1; replay.capture_session.status = 'stopped'; accept(replay);
         assert.equal(nodes.get('stop-capture-status').textContent, 'Capture session stopped.');
-      } else if (input.status === 409) assert(button.disabled);
-      else assert(!button.disabled);
+      } else if (input.status === 409) assert(unavailable());
+      else assert(!unavailable());
     }
     assert.equal(requests.length, 1, 'never retry a POST automatically');
+  }
+  console.log(`offline UI ${input.scenario}: PASS`);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+
+
+OPERATOR_CHECKS = r"""
+(async () => {
+  const css = fs.readFileSync(input.html.replace('index.html', 'styles.css'), 'utf8');
+  if (input.scenario === 'operator-initial-failure') {
+    context.fetch = async () => { throw Error('offline'); };
+    await test.poll();
+    assert.equal(nodes.get('pot-reason').textContent, 'Insufficient context');
+    accept(input.snapshot);
+    assert.equal(nodes.get('pot-reason').textContent, 'Insufficient context');
+    assert.equal(nodes.get('source-freshness').textContent, 'No current reading');
+    assert(!nodes.get('monitor-empty').hidden);
+    assert(!nodes.get('monitor-empty').classList.contains('sr-only'));
+  } else {
+    accept(input.snapshot);
+    if (input.scenario === 'operator-tones') {
+      assert.equal(nodes.get('source-status').dataset.tone, input.tone);
+      assert(!/#source-status\s*\{\s*color:\s*var\(--mint\)/.test(css));
+      test.suspend(); assert.equal(nodes.get('source-status').dataset.tone, 'danger');
+    } else if (input.scenario === 'operator-previous') {
+      const stamp = new Date(input.snapshot.capture_session.updated_at_unix_ms).toISOString();
+      for (const id of ['monitor-stop', 'monitor-empty', 'recorder-status']) {
+        assert(nodes.get(id).textContent.includes('Previous session'), id);
+        assert(nodes.get(id).textContent.includes(stamp), id);
+        assert(nodes.get(id).textContent.includes('2m+'), id);
+      }
+      assert(nodes.get('capture-freshness').textContent.includes('not current'));
+      wall -= 60000; mono += 60000; test.refreshClocks();
+      assert(nodes.get('monitor-stop').textContent.includes('3m+'));
+    } else if (input.scenario === 'operator-lifecycle') {
+      assert(!nodes.get('monitor-lifecycle').hidden);
+      assert(!nodes.get('monitor-launch').hidden);
+      assert.equal(nodes.get('monitor-launch').textContent,
+        `pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference${input.sustained ? ' -ContinuousObservation' : ''} -ManualStart`);
+      assert(nodes.get('monitor-launch-mode').textContent.includes(input.sustained ? 'Sustained' : 'Bounded'));
+      const lifecycle = html.indexOf('id="monitor-lifecycle"'), diagnostics = html.indexOf('id="diagnostics-panel"');
+      assert(lifecycle < diagnostics, 'lifecycle must not be inside collapsed Diagnostics');
+      assert(/Stop monitor leaves the model warm/.test(html));
+    } else if (input.scenario === 'operator-qualifiers') {
+      const seat = nodes.get('seat-readings').childNodes[0], freshness = seat.childNodes[2];
+      assert(freshness.textContent.includes('Current'));
+      assert.equal(nodes.get('pot-qualifier').textContent, 'Current / native');
+      assert(!/\.spatial-seats \.seat-freshness\s*\{[^}]*font-size:\s*0/.test(css));
+      assert(!/\.spatial-seats \.seat-amounts \.field-reason\s*\{[^}]*clip:/.test(css));
+      assert(/\.seat-freshness\[data-reading="provisional"\]::before[^}]*border-radius:\s*0/.test(css));
+      wall += 1001; mono += 1001; test.refreshClocks();
+      assert(nodes.get('pot-qualifier').textContent.includes('Last read'));
+      assert(freshness.textContent.includes('Last read'));
+      assert(nodes.get('amount-pot').classList.contains('retained-number'));
+      assert(/\.retained-number\s*\{[^}]*opacity:/.test(css));
+    } else if (input.scenario === 'operator-hidden-advice') {
+      assert(nodes.get('suggested-action').hidden);
+      assert.equal(nodes.get('analysis-status').textContent, 'Analysis unavailable');
+      assert(!nodes.get('announce').textContent.includes('recommendation available'));
+    } else if (input.scenario === 'operator-command-hidden') {
+      assert(nodes.get('monitor-launch').hidden, 'do not suggest relaunch during an active source or automatic startup');
+    } else if (input.scenario === 'operator-pending' || input.scenario === 'operator-control-failure') {
+      const button = nodes.get(input.start ? 'start-capture' : 'stop-capture');
+      const requests = []; let resolve, reject;
+      const timeouts = [];
+      window.setTimeout = (callback, ms) => { timeouts.push({callback, ms}); return ++timer; };
+      context.fetch = (path, options) => { requests.push({path, options}); return new Promise((ok, fail) => {
+        resolve = ok; reject = fail; options.signal.addEventListener('abort', () => fail(Error('aborted')), {once:true});
+      }); };
+      assert.equal(button.getAttribute('aria-disabled'), 'false');
+      button.focus(); const pending = button.listeners.click();
+      assert.equal(button.disabled, false); assert.equal(button.getAttribute('aria-disabled'), 'true');
+      assert.equal(button.getAttribute('aria-busy'), 'true');
+      assert.equal(document.activeElement, button);
+      await button.listeners.click(); assert.equal(requests.length, 1);
+      if (input.scenario === 'operator-control-failure') {
+        if (input.failure === 'timeout') timeouts.find(entry => entry.ms === 1500).callback();
+        else if (input.failure === 'unreachable') reject(Error('PRIVATE network'));
+        else { let read = false; resolve({status:400, headers:{get:()=> 'application/json'},
+          body:{getReader:()=>({read:async()=> read ? {done:true} : (read=true,{done:false,value:new TextEncoder().encode('{"error":"invalid-request"}')})})}}); }
+        await pending;
+        const message = nodes.get(input.start ? 'start-capture-status' : 'stop-capture-status').textContent;
+        assert(message.includes(input.failure === 'timeout' ? 'timed out' : input.failure === 'unreachable' ? 'unreachable' : 'rejected'));
+        assert(!message.includes('PRIVATE')); assert.equal(requests.length, 1);
+        assert.equal(document.activeElement, button); assert.equal(button.disabled, false);
+        console.log(`offline UI ${input.scenario}: PASS`); return;
+      }
+      let read = false;
+      const body = input.start ? {ok:true, control_id:'b'.repeat(32)} : {ok:true};
+      resolve({status:input.start ? 202 : 200, headers:{get:()=> 'application/json'},
+        body:{getReader:()=>({read:async()=> read ? {done:true} : (read=true,{done:false,value:new TextEncoder().encode(JSON.stringify(body))})})}});
+      await pending; assert.equal(document.activeElement, button);
+      assert.equal(button.disabled, false); assert.equal(button.getAttribute('aria-disabled'), 'true');
+      await button.listeners.click(); assert.equal(requests.length, 1);
+    }
   }
   console.log(`offline UI ${input.scenario}: PASS`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
@@ -1202,6 +1303,9 @@ class CompanionUiTests(unittest.TestCase):
             script = script.replace("console.log(`offline UI ${input.scenario}: PASS`);", POLL_CHECKS)
         if scenario.startswith("stop-"):
             script = stage2.NODE_UI.replace("console.log(`offline UI ${input.scenario}: PASS`);", STOP_CHECKS)
+        if scenario.startswith("operator-"):
+            script = stage2.NODE_UI.split("const visible = ()")[0] + OPERATOR_CHECKS
+            script = script.replace("{ normalizeSnapshot, acceptSnapshot", "{ poll, normalizeSnapshot, acceptSnapshot")
         # Feed the harness through stdin rather than Windows' bounded command line.
         script = script.replace("JSON.parse(fs.readFileSync(0, 'utf8'))", json.dumps(payload))
         script = script.replace("let wall = input.snapshot.capture.last_heartbeat_unix_ms,", "let wall = input.snapshot.capture.last_heartbeat_unix_ms ?? input.snapshot.capture_session?.updated_at_unix_ms,")
@@ -1882,6 +1986,60 @@ class CompanionUiTests(unittest.TestCase):
                     "inference-status": "model loading" if model == "loading" else "Inference OFF",
                     "model-status": model, "monitor-empty": "No manual session",
                 })
+
+    def test_operator_initial_failed_poll_then_idle_does_not_invent_an_expired_reading(self):
+        self.manual_session(mode="capture-only", status="idle", updated_at_unix_ms=None)
+        self.snapshot["partial_observation"] = None
+        self.snapshot["field_statuses"] = {}
+        self.run_ui("operator-initial-failure")
+
+    def test_operator_source_tones_follow_state_not_permanent_mint(self):
+        for status, tone in (("capturing", "okay"), ("idle", "neutral"), ("stopped", "neutral"), ("failed", "danger")):
+            with self.subTest(status=status):
+                self.manual_session(status=status)
+                self.run_ui("operator-tones", tone=tone)
+
+    def test_operator_previous_session_has_original_receipt_date_and_monotonic_age(self):
+        self.manual_session(status="stopped", stop_reason="operator-stop",
+                            updated_at_unix_ms=self.snapshot["capture"]["last_heartbeat_unix_ms"] - 120000)
+        self.run_ui("operator-previous")
+
+    def test_operator_launcher_and_lifecycle_are_visible_outside_diagnostics(self):
+        self.manual_session(status="idle")
+        self.run_ui("operator-lifecycle")
+
+    def test_operator_launcher_does_not_interrupt_legacy_live_or_automatic_startup(self):
+        self.run_ui("operator-command-hidden")
+        self.snapshot["partial_observation"] = None
+        self.snapshot["automatic_startup"] = {"enabled": True, "status": "searching", "stop_reason": None}
+        self.run_ui("operator-command-hidden")
+
+    def test_operator_current_and_last_read_qualifiers_are_not_clipped_or_color_only(self):
+        self.retained_session()
+        self.run_ui("operator-qualifiers")
+
+    def test_operator_hidden_recommendation_is_not_announced_or_promoted(self):
+        self.full_analysis()
+        self.run_ui("operator-hidden-advice")
+
+    def test_operator_pending_start_and_stop_keep_focus_and_guard_repeated_activation(self):
+        for start in (True, False):
+            with self.subTest(start=start):
+                self.manual_session(status="idle" if start else "capturing")
+                self.snapshot["server"]["instance_id"] = "service-a"
+                self.snapshot["capture_control"] = {"control_id": "a" * 32, "enabled": True,
+                    "status": "available" if start else "running", "can_start": start, "can_stop": not start}
+                self.run_ui("operator-pending", start=start)
+
+    def test_operator_control_failures_distinguish_timeout_unreachable_and_rejected_without_retry(self):
+        for start in (True, False):
+            for failure in ("timeout", "unreachable", "rejected"):
+                with self.subTest(start=start, failure=failure):
+                    self.manual_session(status="idle" if start else "capturing")
+                    self.snapshot["server"]["instance_id"] = "service-a"
+                    self.snapshot["capture_control"] = {"control_id": "a" * 32, "enabled": True,
+                        "status": "available" if start else "running", "can_start": start, "can_stop": not start}
+                    self.run_ui("operator-control-failure", start=start, failure=failure)
 
     def test_manual_inference_without_result_is_not_admitted_or_busy_by_default(self):
         self.manual_session()

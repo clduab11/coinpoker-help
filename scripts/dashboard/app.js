@@ -638,21 +638,26 @@
 
   function renderStopCapture() {
     const control = snapshot?.captureControl;
-    node("start-capture").disabled = !canStartCapture();
+    node("start-capture").disabled = false;
+    attribute(node("start-capture"), "aria-disabled", !canStartCapture());
     attribute(node("start-capture"), "aria-busy", !!(startMatches() && startRequest.state === "pending"));
     const startMessages = { pending: "Requesting monitor start.", requested: "Start accepted; waiting for the monitor receipt.",
       invalid: "Start request was rejected.", forbidden: "Start request origin was rejected.",
-      unavailable: "Monitor start is no longer available.", failed: "Start not confirmed. No automatic retry." };
+      unavailable: "Monitor start is no longer available.", failed: "Start not confirmed. No automatic retry.",
+      timeout: "Start not confirmed: request timed out. No automatic retry.", unreachable: "Start not confirmed: service unreachable. No automatic retry." };
     text("start-capture-status", !connected ? "Monitor disconnected." : startMatches() ? startMessages[startRequest.state] :
       !snapshot?.service ? "Monitor service unavailable." : !control?.enabled ? "Manual start not configured." :
       ["disabled", "failed"].includes(snapshot.modelState) ? `Model ${snapshot.modelState}; start unavailable.` :
       control.message || ({ starting: "Starting monitor / validating source.", running: "Monitor running.",
         stopping: "Stopping monitor.", unavailable: "Monitor unavailable.", available: "Start only on request; model stays warm." })[control.status]);
-    node("stop-capture").disabled = !canStopCapture();
+    node("stop-capture").disabled = false;
+    attribute(node("stop-capture"), "aria-disabled", !canStopCapture());
+    attribute(node("stop-capture"), "aria-busy", !!(stopMatches() && stopRequest.state === "pending"));
     text("stop-capture", stopMatches() && stopRequest.state === "pending" ? "Stopping monitor..." : "Stop monitor");
     const messages = { pending: "Requesting monitor stop.", requested: "Stop requested; waiting for the session receipt.",
       unavailable: "Capture session is no longer available.", invalid: "Stop request was rejected.",
-      forbidden: "Stop request origin was rejected.", failed: "Stop not confirmed. No automatic retry." };
+      forbidden: "Stop request origin was rejected.", failed: "Stop not confirmed. No automatic retry.",
+      timeout: "Stop not confirmed: request timed out. No automatic retry.", unreachable: "Stop not confirmed: service unreachable. No automatic retry." };
     text("stop-capture-status", stopMatches() ? stopRequest.state === "requested" &&
       (control ? control.status === "available" : snapshot.recording.status !== "capturing") ?
       control ? "Monitor stopped; model stays warm." : `Capture session ${snapshot.recording.status}.` : messages[stopRequest.state] : "");
@@ -667,11 +672,13 @@
     const controller = new AbortController();
     startController = controller;
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let responseReceived = false;
     renderStopCapture();
     try {
       const response = await fetch("/api/capture/start", { method: "POST", mode: "same-origin", credentials: "omit",
         headers: { Accept: "application/json", "Content-Type": "application/json" }, cache: "no-store", redirect: "error",
         body: JSON.stringify({ service_instance_id: request.service, control_id: request.control }), signal: controller.signal });
+      responseReceived = true;
       const result = await readJson(response);
       if (startRequest !== request || !startMatches() || !connected || version !== lifecycle) return;
       if (response.status === 202 && record(result) && Object.keys(result).length === 2 && result.ok === true &&
@@ -681,7 +688,8 @@
       else if (response.status === 403) request.state = "forbidden";
       else request.state = "failed";
     } catch {
-      if (startRequest === request && startMatches() && connected && version === lifecycle) request.state = "failed";
+      if (startRequest === request && startMatches() && connected && version === lifecycle)
+        request.state = controller.signal.aborted ? "timeout" : responseReceived ? "failed" : "unreachable";
     } finally {
       window.clearTimeout(timeout);
       if (startController === controller) startController = null;
@@ -698,12 +706,14 @@
     const controller = new AbortController();
     stopController = controller;
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let responseReceived = false;
     renderStopCapture();
     try {
       const response = await fetch("/api/capture/stop", { method: "POST", mode: "same-origin", credentials: "omit",
         headers: { Accept: "application/json", "Content-Type": "application/json" }, cache: "no-store", redirect: "error",
         body: JSON.stringify({ session_id: request.session, service_instance_id: request.service,
           ...(request.control !== null ? { control_id: request.control } : {}) }), signal: controller.signal });
+      responseReceived = true;
       const result = await readJson(response);
       if (stopRequest !== request || !stopMatches() || !connected || version !== lifecycle) {
         if (stopRequest === request) request.state = "failed";
@@ -723,7 +733,8 @@
       else if (response.status === 403) request.state = "forbidden";
       else request.state = "failed";
     } catch {
-      if (stopRequest === request && stopMatches() && connected && version === lifecycle) request.state = "failed";
+      if (stopRequest === request && stopMatches() && connected && version === lifecycle)
+        request.state = controller.signal.aborted ? "timeout" : responseReceived ? "failed" : "unreachable";
     } finally {
       window.clearTimeout(timeout);
       if (stopController === controller) stopController = null;
@@ -1280,7 +1291,12 @@
     numericFloor = { binding, sequence: numeric.capture.sequence, captured: numeric.captured, sha: numeric.capture.sha256,
       deadline: numericLease.deadline, eligible: next.map(item => item.status === "provisional"), literals: next.map(item => item.literal) };
     for (const [path, item] of [["pot_size", numeric.pot], ...numeric.seats.map(row => [`seats.${row.seat}.displayed_stack`, row.stack])]) {
-      if (item.status === "empty") { retainedNumbers.delete(path); continue; }
+      // CPU empty pot segmentation is not evidence against an admitted native pot.
+      if (item.status === "empty") {
+        const previous = retainedNumbers.get(path);
+        if (path !== "pot_size" || previous?.key.startsWith("numeric:") && previous.captured <= numeric.captured) retainedNumbers.delete(path);
+        continue;
+      }
       const fence = path === "pot_size" ? null : occupantFences.get(Number(path.split(".")[1]));
       if (item.status !== "provisional" || !retentionAllowed() || fence?.empty || fence && numeric.captured < fence.captured) continue;
       const previous = retainedNumbers.get(path);
@@ -1292,11 +1308,13 @@
     for (const [path, item] of [["pot_size", numeric.pot], ...numeric.seats.flatMap(row => [
       [`seats.${row.seat}.displayed_stack`, row.stack], [`seats.${row.seat}.visible_wager`, row.wager]])]) {
       const previous = numericSupersession.get(path);
-      if (["provisional", "empty"].includes(item.status) && (!previous || numeric.captured > previous.captured_at_unix_ms)) numericSupersession.set(path, item.capture);
+      if ((item.status === "provisional" || item.status === "empty" && path !== "pot_size") &&
+          (!previous || numeric.captured > previous.captured_at_unix_ms)) numericSupersession.set(path, item.capture);
     }
   }
 
   function newestNumeric(item, native, nativeCapture, fence = null) {
+    // Newer (or same-capture) CPU numbers win provisionally; empty pot is never a native veto.
     return item?.status === "provisional" && (!fence || !fence.empty && item.capture.captured_at_unix_ms >= fence.captured) &&
       (!integer(native) || !nativeCapture || item.capture.captured_at_unix_ms >= nativeCapture.captured_at_unix_ms) ? item : null;
   }
@@ -1629,7 +1647,7 @@
     const prefix = rendered.slice(0, 3).every(row => row.card) ? rendered[4].card ? 5 : rendered[3].card ? 4 : 3 : 0;
     const stage = { 3: "Flop", 4: "Turn", 5: "River" }[prefix];
     if (stage && (!observation || observation.phase === "unknown")) text("game-phase", stage + (lastSeen ? " / last seen" : ""));
-    text("board-reason", nativeEmpty ? "No community cards" : visualEmpty ? "No community cards observed / hand boundary unknown" : lastSeen ? "Last seen board cards are dimmed; not current" : count ? "Source-bound experimental cards; unreadable slots stay unknown" : `Unknown / ${reasonFor(observation, "board_slots.1")}`);
+    text("board-reason", nativeEmpty ? "No community cards" : visualEmpty ? "Provisional / no community cards observed / hand boundary unknown" : lastSeen ? "Last seen board cards are dimmed; not current" : count ? `${rendered.some(row => row.card && row.state === "provisional") ? "Provisional" : "Current"} / source-bound experimental cards; unreadable slots stay unknown` : `Unknown / ${reasonFor(observation, "board_slots.1")}`);
   }
 
   function renderTableSeats(observation) {
@@ -1699,7 +1717,8 @@
         patchText(target.value, value);
         target.value.classList.toggle("retained-number", !!last);
         target.value.classList.toggle("unknown-value", state === "unknown");
-        patchText(target.reason, last ? retainedLabel(path) : state === "unknown" ? reasonFor(observation, path, key === "visible_wager" ? "missing-capability" : "insufficient-context") : "");
+        patchText(target.reason, last ? retainedLabel(path) : state === "unknown" ? reasonFor(observation, path, key === "visible_wager" ? "missing-capability" : "insufficient-context") :
+          state === "provisional" ? cleared ? "Provisional / CPU empty; amount unknown" : "Provisional" : "Current / native");
         publishField(target.value, path, value, state, fast?.capture || (cleared ? quick.capture : current ? originalFor(observation, path) : last?.capture || (state === "provisional" ? visual.captureRef : null)));
         hasCurrent ||= current; hasRetained ||= !!last; hasProvisional ||= state === "provisional";
       }
@@ -1712,7 +1731,7 @@
       hasProvisional ||= badgeState === "provisional";
       const state = hasProvisional ? "provisional" : hasCurrent || occupancy !== "unknown" ? "current" : hasRetained ? "last-read" : "unknown";
       const age = sourceAge(context?.capture || (hasCurrent ? originalFor(observation, `seats.${seat}.displayed_stack`) : null));
-      const label = state === "provisional" ? "Provisional" : state === "last-read" ? "Last seen / not current" : state === "current" ? "Current" : "Unknown";
+      const label = state === "provisional" ? "Provisional" : state === "last-read" ? "Last read / not current" : state === "current" ? "Current" : "Unknown";
       patchText(slot.freshness, `${label}${lastIdentity ? " / last-seen name; association uncertain" : ""}${hasRetained && state !== "last-read" ? " / last-seen stack" : ""}${age !== null ? ` / ${ageSummary(age)}` : ""}`);
       data(slot.freshness, "reading", state);
     }
@@ -1935,10 +1954,11 @@
   function renderAction(observation) {
     const role = observation ? observation.role : "uncertain";
     const advice = observation && adviceLease ? adviceLease.value : null;
-    node("suggested-action").hidden = !observation;
+    // B3 owns visible coherent advice. Never expose the CSS-hidden diagnostic payload.
+    node("suggested-action").hidden = true;
     node("suggested-action").dataset.role = role;
     text("action-title", advice ? "Experimental recommendation" : "Observation status");
-    text("analysis-status", advice ? "Experimental analysis" : "Analysis unavailable");
+    text("analysis-status", "Analysis unavailable");
     status("role-status", ROLE_NAMES[role], role === "your_turn" ? "warning" : "neutral");
     node("role-status").hidden = role === "uncertain";
     text("action-move", advice ? ACTION_NAMES[advice.action] : ROLE_MESSAGES[role]);
@@ -1988,7 +2008,7 @@
     const nativePotCapture = originalFor(observation, "pot_size");
     const nativePot = integer(observation?.amounts.pot_size) && !numericSupersedes("pot_size", nativePotCapture) ? observation.amounts.pot_size : null;
     const fastPot = newestNumeric(numericLease?.value.pot, nativePot, nativePotCapture);
-    const clearedPot = numericCleared(numericLease?.value.pot, integer(nativePot) ? nativePotCapture : retainedNumbers.get("pot_size")?.capture || null);
+    const clearedPot = nativePot == null && !retainedNumbers.has("pot_size") && numericCleared(numericLease?.value.pot, null);
     const retainedPot = !fastPot && !clearedPot && nativePot == null && retainedNumbers.has("pot_size");
     amount("amount-pot", fastPot?.value ?? (clearedPot ? null : retainedPot ? retainedNumbers.get("pot_size").value : nativePot),
       fastPot?.literal ?? (retainedPot ? retainedNumbers.get("pot_size").literal : observation?.amountTexts.pot_size));
@@ -1996,7 +2016,10 @@
     publishField(node("amount-pot"), "pot_size", node("amount-pot").textContent,
       fastPot || clearedPot ? "provisional" : retainedPot ? "last-read" : nativePot != null ? "current" : "unknown",
       fastPot?.capture ?? (clearedPot ? numericLease.value.pot.capture : retainedPot ? retainedNumbers.get("pot_size").capture : originalFor(observation, "pot_size")));
-    text("pot-reason", fastPot || clearedPot ? "" : retainedPot ? retainedLabel("pot_size") : nativePot != null ? "" : reasonFor(observation, "pot_size"));
+    const potState = node("amount-pot").dataset.reading;
+    text("pot-qualifier", potState === "current" ? "Current / native" : potState === "provisional" ? "Provisional / CPU" : potState === "last-read" ? "Last read / not current" : "Unknown");
+    data(node("pot-qualifier"), "reading", potState);
+    text("pot-reason", fastPot ? "Provisional / CPU recognition; not native-admitted." : clearedPot ? "Provisional / CPU empty; amount unknown." : retainedPot ? retainedLabel("pot_size") : nativePot != null ? "" : reasonFor(observation, "pot_size"));
     text("stack-reason", observation?.amounts.hero_chips != null ? "" : reasonFor(observation, "hero_chips", "missing-capability"));
     node("hero-stack-reading").hidden = observing || observation?.amounts.hero_chips == null;
     node("call-reading").hidden = !observation || observation.partial;
@@ -2177,6 +2200,11 @@
     const receiptFresh = recordingFresh();
     const budgetOpen = recordingBudgetOpen();
     const healthy = captureHealthy();
+    const receiptTime = recorder?.updated_at_unix_ms;
+    const previousSession = terminal ? integer(receiptTime) && receiptTime > 0 && receiptTime <= Date.now() + 500 &&
+      Number.isFinite(new Date(receiptTime).getTime()) ?
+      `Previous session receipt ${new Date(receiptTime).toISOString()} / ${ageSummary(sourceAge({ captured_at_unix_ms: receiptTime }))} old.` :
+      "Previous session receipt time unavailable." : "";
     text("source-status", !connected ? "Disconnected" : idle ? automatic ? ACTIVITY_LABELS.idle : "No manual session" : terminal ? `Session ${recorder.status}` :
       recorder && !receiptFresh ? "Session status stale" : recorder && !budgetOpen ? sustained ? "Session closed" : "Session budget closed" :
       sustained && healthy ? "Observing same table" :
@@ -2192,16 +2220,16 @@
       context?.provisional ? "provisional" : context?.roleStatus || (observation ? "current" : "unknown"), context?.capture || originalFor(observation, "role"));
     const captureAge = !capture || capture.heartbeat === null || heartbeat !== capture.heartbeat ? null : Math.max(0, Date.now() - capture.heartbeat,
       HEARTBEAT_MAX_MS - (heartbeatDeadline - performance.now()));
-    const captureCurrent = connected && (!sustained || healthy) && snapshot.source === "live" && capture?.fresh &&
+    const captureCurrent = connected && !idle && !terminal && (!sustained || healthy) && snapshot.source === "live" && capture?.fresh &&
       Date.now() < heartbeatExpires && performance.now() < heartbeatDeadline;
     text("capture-freshness", captureAge === null || !connected ? "No current capture" :
       captureCurrent ? "Capture current" : `Last capture ${ageSummary(captureAge)} old / not current`);
     const lastReadOnly = !observation && retainedNumbers.size > 0;
-    const sourceAge = observation ? Math.max(0, Date.now() - observation.captured) : null;
-    text("source-freshness", observation ? `Reading age ${ageSummary(sourceAge)}${retainedCount(observation) ? " / last-read fields individually labeled" : ""}` :
+    const readingAge = observation ? Math.max(0, Date.now() - observation.captured) : null;
+    text("source-freshness", observation ? `Reading age ${ageSummary(readingAge)}${retainedCount(observation) ? " / last-read fields individually labeled" : ""}` :
       lastReadOnly ? "Last-read amounts only / not current" : clearReason === "stale" ? "Reading expired" : "No current reading");
     text("diagnostic-timing", !connected ? "Unavailable" :
-      `Capture ${captureAge === null ? "unknown" : `${count(Math.floor(captureAge))} ms`} / reading ${sourceAge === null ? "unavailable" : `${count(Math.floor(sourceAge))} ms`}${recorder ? ` / observation ${duration(recorder.elapsed_ms)}` : ""}`);
+      `Capture ${captureAge === null ? "unknown" : `${count(Math.floor(captureAge))} ms`} / reading ${readingAge === null ? "unavailable" : `${count(Math.floor(readingAge))} ms`}${recorder ? ` / observation ${duration(recorder.elapsed_ms)}` : ""}`);
     const recorderStatus = recorder?.status === "capturing" ? !receiptFresh ? "status stale" : !budgetOpen ? "budget closed" : automatic && recorder.mode === "inference-enabled" ? `capturing / activity ${recorder.activityState}` : "capturing" : recorder?.status;
     text("recorder-status", !connected || !recorder ? "Recorder status unavailable" : idle ? automatic ? ACTIVITY_LABELS.idle : "No manual session" :
       sustained ? `Evidence recording ${recorder.evidence.status}${recorder.evidence.status === "ended" && healthy ? "; observation continues" : healthy ? "" : " / last received"}${recorder.evidence.stop_reason ? ` / ${recorder.evidence.stop_reason}` : ""}` :
@@ -2230,7 +2258,8 @@
       `${!connected || !terminal && (!receiptFresh || !budgetOpen) ? "Last received recorder" : "Recorder"} ${recorder.status}${recorder.stopReason ? `: ${recorder.stopReason}` : ""}. Stops at the first budget limit; no automatic restart. Markers remain DRAFT / review PENDING.` :
       `${snapshot?.captureControl?.enabled ? "Use Start monitor to request source validation; Stop monitor leaves the model warm." : automatic ? "Automatic observation is controlled by the supervisor." : "Use the manual capture terminal to confirm the source and start."} Opening this page never starts capture or inference.`);
     if (connected && recorder && !node("monitor-empty").hidden) {
-      text("monitor-empty", idle ? automatic ? "Automatic observation idle. No active-table readings." : "No manual session. Start only in the capture terminal." :
+      text("monitor-empty", idle ? snapshot?.captureControl?.enabled ? "No manual session. Use Start monitor above when available." :
+        automatic ? "Automatic observation idle. No active-table readings." : "No manual session. Start only in the capture terminal." :
         terminal ? recorder.stopReason === "table-activity-unconfirmed" ? "Table activity unconfirmed. Probe stopped; readings cleared." : `Session ${recorder.status}. Readings cleared.` :
         !receiptFresh ? "Session status stale. Readings cleared." :
         !budgetOpen ? `Session ${sustained ? "closed" : "budget closed"}. Readings cleared.` :
@@ -2258,20 +2287,34 @@
       text("monitor-empty", stopReason === "table-activity-unconfirmed" ? "Table activity unconfirmed. Probe stopped; readings cleared." :
         `${label}. ${startup.status === "searching" ? "Metadata only; no capture started." : "No active-table readings."}`);
     }
+    if (terminal) {
+      text("recorder-status", `${node("recorder-status").textContent} / ${previousSession}`);
+      text("recorder-stop", `${node("recorder-stop").textContent} ${previousSession}`);
+      if (!node("monitor-empty").hidden) text("monitor-empty", `${node("monitor-empty").textContent} ${previousSession}`);
+    }
     const startupTerminal = automatic && ["stopped", "failed", "interrupted"].includes(startup?.status) ||
       !recorder && ["stopped", "failed", "interrupted"].includes(startup?.status);
     const starting = snapshot?.captureControl?.status === "starting";
     const recovery = !starting && !!(terminal || startupTerminal || recorder && !idle && !budgetOpen);
-    node("monitor-lifecycle").hidden = !recovery;
-    node("monitor-launch").hidden = !!snapshot?.captureControl?.enabled || !recovery || !automatic && !startupTerminal;
+    const needsLauncher = connected && !starting && !snapshot?.captureControl?.enabled && (recovery || idle || !recorder && !healthy && !startup);
+    node("monitor-lifecycle").hidden = !recovery && !needsLauncher;
+    node("monitor-launch").hidden = !needsLauncher;
+    node("monitor-launch-mode").hidden = !needsLauncher;
     if (connected && starting) text("source-status", ["waiting-model", "searching", "verifying", "active"].includes(startup?.status) ?
       AUTOMATIC_LABELS[startup.status] : "Starting monitor");
     if (recovery) {
       const stopReason = recorder?.stopReason || startupTerminal && startup.stopReason ||
         sustained && recordingLease?.session === recorder.session && recordingLease.stopReason;
-      text("monitor-stop", `${startupTerminal ? AUTOMATIC_LABELS[startup.status] : terminal ? `Session ${recorder.status}` : sustained ? "Session closed" : "Session budget closed"}${stopReason ? `: ${stopReason}` : "; stop reason unavailable"}. Current and last-read amounts cleared.`);
-      text("monitor-launch", `scripts/start-vlm.ps1 -EnableInference -AutomaticInference${sustained ? " -ContinuousObservation" : ""}`);
+      text("monitor-stop", `${startupTerminal ? AUTOMATIC_LABELS[startup.status] : terminal ? `Session ${recorder.status}` : sustained ? "Session closed" : "Session budget closed"}${stopReason ? `: ${stopReason}` : "; stop reason unavailable"}. Current and last-read amounts cleared.${previousSession ? ` ${previousSession}` : ""}`);
+    } else if (needsLauncher) text("monitor-stop", "Manual controls not configured. Relaunch with -ManualStart to enable Start monitor.");
+    if (needsLauncher) {
+      text("monitor-launch-mode", sustained ? "Sustained manual-start mode: observation continues until stopped; evidence limits end recording only." :
+        "Bounded manual-start mode: collection stops at its first time, frame or evidence limit.");
+      text("monitor-launch", `pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference${sustained ? " -ContinuousObservation" : ""} -ManualStart`);
     }
+    data(node("source-status"), "tone", !connected ? "danger" : connected && starting ? "warning" : startupOnly ?
+      ["failed", "interrupted"].includes(startup.status) ? "danger" : ["idle", "stopped"].includes(startup.status) ? "neutral" : "warning" :
+      terminal ? recorder.status === "stopped" ? "neutral" : "danger" : idle ? "neutral" : healthy && !activityPending ? "okay" : "warning");
   }
 
   function renderDiagnostics(observation) {
@@ -2369,13 +2412,14 @@
   }
 
   function disconnected() {
+    const reason = activeLease || retainedNumbers.size || numericLease || visualLease || contextLease ? "stale" : clearReason;
     connected = false;
     clearContext();
     clearVisual();
     clearRetained();
     clearExperimental();
     recoveryAfterSequence = Math.max(recoveryAfterSequence, highestSequence);
-    clearObservation("stale");
+    clearObservation(reason);
     renderHistory(snapshot ? snapshot.history : null);
     text("monitor-empty", "Table disconnected. Waiting for a fresh reading.");
     announce("Table disconnected. Analysis unavailable.");
@@ -2505,7 +2549,7 @@
     leaseTimer = window.setTimeout(refreshClocks, Math.max(0, Math.min(deadline - monotonic, expires - wall,
       adviceLease ? adviceLease.deadline - monotonic : Infinity, adviceLease ? adviceLease.expires - wall : Infinity)) + 1);
     renderObservation(observation);
-    if (previousRole !== observation.role) announce(adviceLease ? "Experimental recommendation available; model quality is not approved." : ROLE_MESSAGES[observation.role]);
+    if (previousRole !== observation.role) announce(ROLE_MESSAGES[observation.role]);
   }
 
   function acceptSnapshot(value, roundTripMs) {

@@ -12,6 +12,7 @@ from scripts.tests import test_laya_dashboard_stage2 as stage2
 CHECKS = r"""
 (async () => {
   const start = nodes.get('start-capture'), stop = nodes.get('stop-capture'), requests = [], timeouts = [];
+  const unavailable = button => button.getAttribute('aria-disabled') === 'true';
   const seats = [...nodes.get('seat-readings').childNodes];
   const response = (status, data, extra = {}) => {
     let read = false;
@@ -51,10 +52,11 @@ CHECKS = r"""
   };
   const mounted = () => assert(nodes.get('seat-readings').childNodes.every((seat, index) => seat === seats[index]));
   assert.equal(start.tagName, 'button'); assert.equal(stop.tagName, 'button');
+  assert.equal(start.disabled, false); assert.equal(stop.disabled, false);
   assert.equal(stop.textContent, 'Stop monitor');
   assert.equal(requests.length, 0); test.loadReference(); assert.equal(requests.length, 0);
   if (input.scenario === 'controls-disabled') {
-    assert(start.disabled); await start.listeners.click(); assert.equal(requests.length, 0);
+    assert(unavailable(start)); await start.listeners.click(); assert.equal(requests.length, 0);
     assert(status('start').includes(input.reason), status('start'));
   } else if (input.scenario === 'controls-malformed') {
     for (const changes of input.invalid) {
@@ -66,33 +68,34 @@ CHECKS = r"""
     test.suspend(); test.resume(); await test.poll();
     assert.equal(requests.length, 0, 'GET, page lifecycle and reference never start capture');
   } else if (input.scenario === 'controls-stop-pending' || input.scenario === 'controls-stop-active') {
-    assert(start.disabled); assert(!stop.disabled);
+    assert(unavailable(start)); assert(!unavailable(stop)); stop.focus();
     const pending = stop.listeners.click(); await stop.listeners.click(); assert.equal(requests.length, 1);
-    assert(stop.disabled); assert.equal(timeouts.at(-1).ms, 1500);
+    assert(unavailable(stop)); assert.equal(document.activeElement, stop); assert.equal(timeouts.at(-1).ms, 1500);
     assert.deepEqual(JSON.parse(requests[0].options.body), {service_instance_id:input.snapshot.server.instance_id,
       session_id:input.scenario === 'controls-stop-pending' ? null : input.snapshot.capture_session.session_id,
       control_id:input.snapshot.capture_control.control_id});
     requests[0].resolve(response(200, {ok:true})); await pending;
-    assert(status('stop').includes('Stop requested')); assert(stop.disabled); assert(!visible()); mounted();
+    assert(status('stop').includes('Stop requested')); assert(unavailable(stop)); assert(!visible()); mounted();
     assert(nodes.get('model-status').textContent.includes('model ready'));
     assert.equal(nodes.get('history-folds').textContent, '2');
     const idle = arm(input.snapshot.capture_control.control_id, 'available', input.snapshot.event_seq + 1);
     Object.assign(idle.capture_session, {status:'stopped', stop_reason:'operator-stop', activity_state:'idle'});
     Object.assign(idle.capture, {state:'idle', fresh_capture:false}); idle.source = 'idle'; accept(idle);
-    assert(!start.disabled); assert(stop.disabled); assert(status('stop').includes('model stays warm')); mounted();
+    assert(!unavailable(start)); assert(unavailable(stop)); assert(status('stop').includes('model stays warm')); mounted();
   } else if (input.scenario === 'controls-stop-late') {
-    assert(!stop.disabled); const pending = stop.listeners.click(), seq = input.snapshot.event_seq;
+    assert(!unavailable(stop)); const pending = stop.listeners.click(), seq = input.snapshot.event_seq;
     const next = arm(input.replace === 'session' ? input.snapshot.capture_control.control_id : 'c'.repeat(32), 'running', seq + 1, 'c'.repeat(32));
     if (input.replace === 'service') next.server.instance_id = 'd'.repeat(32);
     accept(next); next.event_seq += 1; next.partial_observation.generation += 1; accept(next);
     assert(requests[0].options.signal.aborted); assert(visible());
     const pot = nodes.get('amount-pot').textContent;
     requests[0].resolve(response(200, {ok:true})); await pending;
-    assert(visible()); assert.equal(nodes.get('amount-pot').textContent, pot); assert(!stop.disabled);
+    assert(visible()); assert.equal(nodes.get('amount-pot').textContent, pot); assert(!unavailable(stop));
     assert.equal(status('stop'), ''); mounted();
   } else {
-    assert(!start.disabled); const pending = start.listeners.click();
-    assert(start.disabled); await start.listeners.click(); assert.equal(requests.length, 1);
+    assert(!unavailable(start)); start.focus(); const pending = start.listeners.click();
+    assert(unavailable(start)); assert.equal(document.activeElement, start);
+    await start.listeners.click(); assert.equal(requests.length, 1);
     const {path, options} = requests[0];
     assert.equal(path, '/api/capture/start'); assert.equal(options.method, 'POST');
     assert.equal(options.mode, 'same-origin'); assert.equal(options.credentials, 'omit');
@@ -109,8 +112,8 @@ CHECKS = r"""
       assert(options.signal.aborted);
       const before = nodes.get('amount-pot').textContent;
       if (input.nextState === 'available') {
-        assert(!start.disabled); const second = start.listeners.click(); assert.equal(requests.length, 2);
-        requests[0].reject(Error('PRIVATE late failure')); await pending; assert(start.disabled);
+        assert(!unavailable(start)); const second = start.listeners.click(); assert.equal(requests.length, 2);
+        requests[0].reject(Error('PRIVATE late failure')); await pending; assert(unavailable(start));
         assert(status('start').includes('Requesting'));
         requests[1].resolve(response(202, {ok:true, control_id:'c'.repeat(32)})); await second;
         assert(status('start').includes('accepted'));
@@ -118,25 +121,25 @@ CHECKS = r"""
         if (input.networkError) requests[0].reject(Error('PRIVATE late failure'));
         else requests[0].resolve(response(202, {ok:true, control_id:'d'.repeat(32)}));
         await pending; assert.equal(nodes.get('amount-pot').textContent, before);
-        assert(start.disabled); assert(!status('start').includes('not confirmed')); assert(!stop.disabled);
+        assert(unavailable(start)); assert(!status('start').includes('not confirmed')); assert(!unavailable(stop));
       }
     } else if (input.scenario === 'controls-start-failure') {
       if (input.timeout) timeouts.at(-1).callback();
       else if (input.networkError) requests[0].reject(Error('PRIVATE network'));
       else requests[0].resolve(response(input.status || 202, input.response || {ok:false}, input));
-      await pending; assert(!start.disabled); assert(status('start').includes(input.reason || 'not confirmed'));
+      await pending; assert(!unavailable(start)); assert(status('start').includes(input.reason || 'not confirmed'));
       assert(!status('start').includes('PRIVATE')); assert.equal(requests.length, 1);
     } else {
       requests[0].resolve(response(202, {ok:true, control_id:'b'.repeat(32)})); await pending;
-      assert(start.disabled); assert(status('start').includes('accepted'));
+      assert(unavailable(start)); assert(status('start').includes('accepted'));
       await start.listeners.click(); assert.equal(requests.length, 1);
       const seq = input.snapshot.event_seq, waiting = arm('b'.repeat(32), 'starting', seq + 1);
-      accept(waiting); assert(start.disabled); assert(!stop.disabled); assert(!visible()); mounted();
+      accept(waiting); assert(unavailable(start)); assert(!unavailable(stop)); assert(!visible()); mounted();
       assert.equal(nodes.get('source-role').textContent, 'Role unknown');
       assert.equal(nodes.get('source-status').textContent, 'Searching for table');
       const running = arm('b'.repeat(32), 'running', seq + 2); accept(running);
       running.event_seq += 1; running.partial_observation.generation += 1; accept(running);
-      assert(visible()); assert(start.disabled); assert(!stop.disabled); mounted();
+      assert(visible()); assert(unavailable(start)); assert(!unavailable(stop)); mounted();
       assert.equal(nodes.get('history-folds').textContent, '2');
       // Retired receipts never recover, even inside the new control arm.
       const retired = structuredClone(running); retired.event_seq += 1;
