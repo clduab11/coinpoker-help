@@ -50,6 +50,260 @@ class PartialTests(unittest.TestCase):
         self.assertEqual(snap["capture"]["generation"], 2)
         self.assertNotIn("PRIVATE", json.dumps(snap["capture"]))
 
+    def test_a1_acquisition_and_delivery_boundaries_are_independent(self):
+        now = int(self.clock.wall() * 1000)
+        for acquisition, delivery, expected in ((999, 2499, True), (1000, 0, False),
+                                                 (0, 2499, True), (0, 2500, False)):
+            with self.subTest(acquisition=acquisition, delivery=delivery):
+                self.state.begin_stream()
+                emitted = now - delivery
+                self.health(emitted_at_unix_ms=emitted, captured_at_unix_ms=emitted - acquisition)
+                self.assertEqual(self.state.snapshot()["capture"]["fresh_capture"], expected)
+                source = self.record(captured_at_unix_ms=emitted - acquisition,
+                                     emitted_at_unix_ms=emitted, valid_for_ms=5000,
+                                     expires_at_unix_ms=emitted - acquisition + 5000)
+                self.state.ingest(source)
+                self.assertEqual(self.state.snapshot()["partial_observation"] is not None, expected)
+
+    def test_a1_transient_health_recovers_without_renewing_same_pixels(self):
+        source = self.record()
+        self.state.ingest(source)
+        deadline, expires = self.state.partial_deadline, source["expires_at_unix_ms"]
+        floor = self.state.invalidated_version
+        self.clock.value += .2
+        self.health(fresh_capture=False)
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.assertEqual(self.state.invalidated_version, floor)
+        self.state.ingest(source)
+        self.assertEqual(self.state.invalidated_version, floor)
+        self.health()
+        replay = copy.deepcopy(source)
+        now = int(self.clock.wall() * 1000)
+        replay.update(emitted_at_unix_ms=now, valid_for_ms=3000, expires_at_unix_ms=now + 3000)
+        self.state.ingest(replay)
+        view = self.state.snapshot()["partial_observation"]
+        self.assertIsNotNone(view)
+        self.assertEqual(self.state.partial_deadline, deadline)
+        self.assertEqual(view["expires_at_unix_ms"], expires)
+        self.clock.value += .801
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.health()
+        self.state.ingest(replay)
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+
+    def test_a1_transient_health_never_clears_explicit_tombstones(self):
+        source = self.record()
+        self.state.ingest(source)
+        self.state.ingest(self.scoped_invalidation(source, fields=["pot_size"]))
+        tombstones = self.state.invalidated_version, self.state.invalidated_partial_ticket
+        self.health(fresh_capture=False)
+        self.health()
+        self.state.ingest(source)
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.assertEqual((self.state.invalidated_version, self.state.invalidated_partial_ticket), tombstones)
+
+    def test_a1_acquisition_lag_recovers_with_same_generation_and_epoch(self):
+        now = int(self.clock.wall() * 1000)
+        floor = self.state.invalidated_version
+        self.health(captured_at_unix_ms=now - 1000)
+        self.assertFalse(self.state.snapshot()["capture"]["fresh_capture"])
+        source = self.record()
+        self.state.ingest(source)
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.assertEqual(self.state.invalidated_version, floor)
+        self.health()
+        self.state.ingest(source)
+        self.assertEqual(self.state.snapshot()["partial_observation"]["pot_size"], 12345)
+
+    def test_a1_delayed_obsolete_partial_does_not_poison_new_health_or_display(self):
+        old = self.record()
+        self.state.ingest(old)
+        self.clock.value += .2
+        self.health(3)
+        before = self.state.snapshot()["partial_observation"]
+        self.state.ingest(self.record(2, expires_at_unix_ms=1))
+        self.assertEqual(self.state.snapshot()["partial_observation"], before)
+        new = self.record(3, pot_size=456)
+        self.state.ingest(new)
+        current = self.state.snapshot()["partial_observation"]
+        self.assertEqual(current["pot_size"], 456)
+        self.state.ingest(old)
+        self.assertEqual(self.state.snapshot()["partial_observation"], current)
+        self.assertEqual(self.state.version, (3, 1))
+
+    def test_a1_health_rejects_future_backward_and_invalid_frame_clocks(self):
+        now = int(self.clock.wall() * 1000)
+        for extra in ({"emitted_at_unix_ms": now + 1}, {"captured_at_unix_ms": now + 1},
+                      {"frame_width": 0}, {"frame_count": 0}, {"identity": None}):
+            with self.subTest(extra=extra):
+                self.state.begin_stream()
+                self.health(**extra)
+                self.assertFalse(self.state.snapshot()["capture"]["fresh_capture"])
+        self.state.begin_stream()
+        self.health()
+        self.health(2, emitted_at_unix_ms=now - 1, captured_at_unix_ms=now - 1)
+        self.assertFalse(self.state.snapshot()["capture"]["fresh_capture"])
+
+    def test_a1_delayed_older_health_does_not_clear_newer_source(self):
+        self.health(3)
+        self.state.ingest(self.record(3))
+        before = self.state.snapshot()
+        floor, heartbeat = self.state.invalidated_version, self.state.last_heartbeat
+        now = int(self.clock.wall() * 1000)
+        for generation in (2, 3):
+            self.health(generation, emitted_at_unix_ms=now - 1, captured_at_unix_ms=now - 1)
+            after = self.state.snapshot()
+            after["event_seq"] = before["event_seq"]
+            self.assertEqual(after, before)
+            self.assertEqual((self.state.invalidated_version, self.state.last_heartbeat), (floor, heartbeat))
+
+    def test_a1_partial_dispositions_cover_early_returns_without_payload_leaks(self):
+        append = Mock()
+        self.state.ledger.append = append
+
+        def outcome(record, reason, **kwargs):
+            append.reset_mock()
+            self.state.ingest(record, **kwargs)
+            rows = [call.args[0] for call in append.call_args_list]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["reason"], reason)
+            self.assertIn(rows[0]["disposition"], ("admitted", "rejected", "suppressed"))
+            self.assertNotIn("PRIVATE", json.dumps(rows))
+            return rows[0]
+
+        source = self.record(service_instance_id="b" * 32, raw_response="PRIVATE-RAW")
+        sequence = self.state.event_seq
+        outcome(source, "foreign-session", session_id="c" * 32)
+        self.assertEqual(self.state.event_seq, sequence)
+        outcome({**source, "schema_version": "PRIVATE"}, "invalid-envelope")
+        self.state.begin_stream()
+        self.health()
+        self.state.ledger.append = append
+        outcome({**source, "source_policy": "automatic-bounded", "activity_state": "idle"}, "activity-gate")
+        row = outcome(source, "accepted")
+        self.assertEqual(row["service_instance_id"], "b" * 32)
+        self.assertEqual(row["captured_at_ms"], source["observation"]["captured_at_ms"])
+        deadline = self.state.partial_deadline
+        outcome(source, "duplicate-bundle")
+        self.assertEqual(self.state.partial_deadline, deadline)
+        self.state.ingest(self.scoped_invalidation(source, fields=["pot_size"]))
+        outcome(source, "scoped-replay")
+        self.health(3)
+        outcome(self.record(2), "obsolete-version")
+        outcome(self.record(3, valid_for_ms=0), "failed-lease")
+        outcome(self.record(3), "invalidated-version")
+        self.health(4, fresh_capture=False)
+        outcome(self.record(4), "capture-unavailable")
+        self.health(4)
+        outcome(self.record(4, observation={"identity": "PRIVATE"}), "failed-lease")
+
+    def test_a1_current_source_clock_failure_is_not_obsolete_suppression(self):
+        source = self.record()
+        self.state.ingest(source)
+        append = self.state.ledger.append = Mock()
+        bad = copy.deepcopy(source)
+        bad["observation"]["captured_at_ms"] += 1
+        bad["captured_at_unix_ms"] -= 1
+        self.state.ingest(bad)
+        self.assertEqual(append.call_args.args[0]["reason"], "source-clock-regression")
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.assertEqual(self.state.invalidated_version, (1, 1))
+
+    def test_a1_foreign_live_owner_partial_is_accounted_without_state_mutation(self):
+        self.state.ingest(self.record())
+        append = self.state.ledger.append = Mock()
+        before = self.state.snapshot()
+        feed = dashboard.ManualSessionFeed(self.state, "b" * 32)
+        feed.session_id, feed.stream_id = "a" * 32, self.state.session_id
+        feed.source_policy = "automatic-sustained"
+        with patch.object(feed, "poll"), patch.object(dashboard.manual_capture, "public_snapshot", return_value={}):
+            self.assertFalse(feed.ingest_live("c" * 32, self.record()))
+        self.assertEqual(append.call_args.args[0]["reason"], "foreign-session")
+        self.assertEqual(append.call_args.args[0]["capture_session_id"], "c" * 32)
+        self.assertEqual(self.state.snapshot(), before)
+
+    def test_a1_partial_remaining_budget_and_source_regression_are_accounted(self):
+        self.state.ledger.append = Mock()
+        source = self.record()
+        self.state.ingest(source)
+        self.clock.value += 1.001
+        self.health(2)
+        replay = copy.deepcopy(source)
+        replay["observation"]["generation"] = 2
+        now = int(self.clock.wall() * 1000)
+        replay.update(emitted_at_unix_ms=now, valid_for_ms=2000, expires_at_unix_ms=now + 2000)
+        self.state.ingest(replay)
+        self.assertEqual(self.state.ledger.append.call_args.args[0]["reason"], "no-remaining-budget")
+        self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.state.begin_stream()
+        self.health()
+        self.state.ledger.append = Mock()
+        source = self.record()
+        self.state.ingest(source)
+        older = copy.deepcopy(source)
+        older["observation"]["captured_at_ms"] -= 1
+        older["captured_at_unix_ms"] -= 1
+        before = self.state.snapshot()["partial_observation"]
+        self.state.ingest(older)
+        self.assertEqual(self.state.ledger.append.call_args.args[0]["reason"], "obsolete-source")
+        self.assertEqual(self.state.snapshot()["partial_observation"], before)
+
+    def test_a1_partial_wall_rollback_cannot_renew_monotonic_deadline(self):
+        source = self.record()
+        self.state.ingest(source)
+        deadline = self.state.partial_deadline
+        with patch.object(self.state, "wall", return_value=self.clock.wall() - 10):
+            self.clock.value += 1.001
+            self.assertIsNone(self.state.snapshot()["partial_observation"])
+            self.health()
+            self.state.ingest(source)
+            self.assertIsNone(self.state.snapshot()["partial_observation"])
+        self.assertEqual(self.state.partial_source_deadline, deadline)
+
+    def test_a1_owner_boundary_accounts_rejected_envelopes_and_activity(self):
+        for fault, reason in (({"schema_version": 1}, "manual-feed-record"),
+                              ({"service_instance_id": "c" * 32}, "manual-feed-instance-mismatch"),
+                              ({"source_policy": "manual"}, "manual-feed-policy-mismatch"),
+                              ({"observation": {"identity": {**IDENTITY, "hwnd": "0x2"}}},
+                               "manual-feed-source-mismatch"),
+                              ({"activity_state": "PRIVATE"}, "manual-feed-activity-invalid"),
+                              ({"activity_state": "idle"}, "activity-gate")):
+            with self.subTest(reason=reason):
+                self.state.begin_stream()
+                self.health()
+                append = self.state.ledger.append = Mock()
+                self.manual_tail([self.record(raw_response="PRIVATE", **fault)])
+                rows = [call.args[0] for call in append.call_args_list
+                        if call.args[0]["event"] == "partial_observation"]
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["reason"], reason)
+                self.assertEqual(rows[0]["capture_session_id"], "a" * 32)
+                self.assertNotIn("PRIVATE", json.dumps(rows))
+
+    def test_a1_private_partial_ledger_is_bounded_and_identifies_safe_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ledger.jsonl"
+            self.state.begin_stream()
+            self.health()
+            self.state.ledger = dashboard.PrivateLedger(path, max_events=2, max_bytes=100000)
+            source = self.record(raw_response="PRIVATE", service_instance_id="b" * 32)
+            source["original_capture"] = {"schema_version": 1, "frame_index": 7, "width": 800,
+                "height": 613, "sha256": "d" * 64, "captured_at_monotonic_ms": 1001,
+                "source_utc_unix_ms": source["captured_at_unix_ms"], "path": "PRIVATE"}
+            for _ in range(3):
+                self.state.ingest(source)
+            self.assertEqual(self.state.ledger.count, 2)
+            self.assertFalse(self.state.ledger.complete)
+            self.state.ledger.close()
+            text = path.read_text()
+            self.assertNotIn("PRIVATE", text)
+            rows = [json.loads(line) for line in text.splitlines()]
+            self.assertEqual([row["reason"] for row in rows], ["accepted", "duplicate-bundle"])
+            for row in rows:
+                self.assertEqual(row["source_sha256"], "d" * 64)
+                self.assertEqual(row["source_sequence"], 7)
+                self.assertEqual(row["session_id"], self.state.session_id)
+
     def test_public_capture_epoch_preserves_known_source_during_freshness_lag_not_source_loss(self):
         self.health(generation=2, fresh_capture=False)
         snap = self.state.snapshot()

@@ -675,6 +675,7 @@ class DashboardState:
         self.advice = self.advice_deadline = self.decision_seen = None
         self.partial_observation = self.partial_deadline = None
         self.partial_source = self.partial_source_deadline = None
+        self.partial_source_expires = None
         self.partial_ticket = self.invalidated_partial_ticket = None
         self.field_statuses = field_statuses()
         self.status_source = self.status_deadline = self.status_expires = None
@@ -718,6 +719,7 @@ class DashboardState:
             self.observation_ticket = self.observation_source = self.decision_seen = None
             self.last_heartbeat = None
             self.partial_source = self.partial_source_deadline = None
+            self.partial_source_expires = None
             self.partial_ticket = self.invalidated_partial_ticket = None
             self.field_statuses = field_statuses()
             self.status_source = self.status_deadline = self.status_expires = None
@@ -759,9 +761,10 @@ class DashboardState:
             self._invalidate(code(reason, "attachment-unavailable"))
             self.event_seq += 1
 
-    def _invalidate(self, reason, *, version=None):
-        self.invalidated_version = max(self.invalidated_version or (0, 0),
-                                       self.version if version is None else version)
+    def _invalidate(self, reason, *, version=None, transient=False):
+        if not transient:
+            self.invalidated_version = max(self.invalidated_version or (0, 0),
+                                           self.version if version is None else version)
         self._clear_analysis()
         self.observation = self.observation_ticket = self.deadline = None
         self.partial_observation = self.partial_deadline = None
@@ -809,7 +812,7 @@ class DashboardState:
         return (self.experimental_bet_action is True and self.experimental_approved
                 and isinstance(self.service_instance_id, str) and re.fullmatch(r"[0-9a-f]{32}", self.service_instance_id) is not None
                 and self.source == "live" and self.model["model_state"] == "ready" and self.capture["fresh_capture"]
-                and self.last_heartbeat is not None and (self.monotonic() - self.last_heartbeat) * 1000 < HEARTBEAT_MS
+                and self._heartbeat_current()
                 and self.experimental_budget is not None and self.monotonic() < self.experimental_budget
                 and receipt.get("source_policy") == "automatic-bounded" and receipt.get("status") == "capturing"
                 and isinstance(receipt.get("session_id"), str) and re.fullmatch(r"[0-9a-f]{32}", receipt["session_id"]) is not None
@@ -940,13 +943,57 @@ class DashboardState:
         if (gen is None or epoch is None or captured_mono is None
                 or gen < self.version[0] or epoch < self.version[1]
                 or target is None or target != self.target or not self.capture["fresh_capture"]
-                or self.last_heartbeat is None or (self.monotonic() - self.last_heartbeat) * 1000 >= HEARTBEAT_MS
+                or epoch != self.capture["epoch"]
+                or not self._heartbeat_current()
                 or not valid or emitted is None or expires is None or captured is None
                 or source_utc is not None and source_utc != captured
                 or emitted > now or captured > emitted or expires <= now or expires > emitted + valid
                 or expires > captured + 5000):
             return None
         return gen, epoch, captured_mono, captured, expires, min(valid, expires - now)
+
+    def _heartbeat_current(self):
+        emitted = self.capture["last_heartbeat_unix_ms"]
+        # Enforce the integer wall boundary too; subtracting large float clocks
+        # can otherwise leave an exact 2500 ms delivery current for another tick.
+        return (self.last_heartbeat is not None and emitted is not None
+                and emitted <= int(self.wall() * 1000) < emitted + HEARTBEAT_MS
+                and self.monotonic() < self.last_heartbeat + HEARTBEAT_MS / 1000)
+
+    def _partial_disposition(self, record, reason, *, disposition="rejected", session_id=None, view=None):
+        """Account for a partial using closed metadata, never its rejected payload."""
+        if not isinstance(record, dict) or record.get("event") != "partial_observation":
+            return
+        ticket = self._ticket(record.get("observation"))
+        saved = {"event": "partial_observation", "sequence": self.event_seq,
+                 "ledger_sequence": self.ledger.count + 1,
+                 "recorded_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                 "session_id": self.session_id, "disposition": disposition, "reason": reason,
+                 "ticket_identified": ticket is not None}
+        for key, value in (("stream_session_id", session_id),
+                           ("capture_session_id", record.get("capture_session_id")),
+                           ("service_instance_id", record.get("service_instance_id"))):
+            saved[key] = value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) else None
+        for key in ("captured_at_unix_ms", "emitted_at_unix_ms", "expires_at_unix_ms", "valid_for_ms"):
+            saved[key] = integer(record.get(key))
+        if ticket is not None:
+            saved.update(generation=ticket[0], epoch=ticket[1], captured_at_ms=ticket[2],
+                         ticket_captured_at_unix_ms=ticket[3], target_id=ticket[4])
+        original = record.get("original_capture")
+        if isinstance(original, dict) and ticket is not None:
+            digest = original.get("sha256")
+            width, height = integer(original.get("width"), 16384), integer(original.get("height"), 16384)
+            sequence = integer(original.get("frame_index"))
+            if (type(original.get("schema_version")) is int and original["schema_version"] == 1
+                    and width and height and sequence is not None
+                    and integer(original.get("captured_at_monotonic_ms")) == ticket[2]
+                    and integer(original.get("source_utc_unix_ms")) == saved["captured_at_unix_ms"]
+                    and saved["captured_at_unix_ms"] is not None
+                    and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)):
+                saved.update(source_sha256=digest, source_sequence=sequence, width=width, height=height)
+        if view is not None:
+            saved["partial_observation"] = view
+        self.ledger.append(saved)
 
     def _diagnostic_statuses(self, record, diagnostics):
         """Same-source reasons only: diagnostics can never grant a value or a lease."""
@@ -1020,12 +1067,14 @@ class DashboardState:
     def ingest(self, record, *, session_id=None):
         with self.lock:
             if session_id is not None and session_id != self.session_id:
+                self._partial_disposition(record, "foreign-session", session_id=session_id)
                 return
             self.event_seq += 1
             if (not isinstance(record, dict) or type(record.get("schema_version")) is not int
                     or record["schema_version"] != 2):
                 if isinstance(record, dict) and record.get("event") == "partial_observation_invalidated":
                     return
+                self._partial_disposition(record, "invalid-envelope", session_id=session_id)
                 self._invalidate("invalid-feed-record")
                 return
             event = record.get("event")
@@ -1033,6 +1082,7 @@ class DashboardState:
                                 and record.get("activity_state") != "active")
             if activity_pending and (event in ("observation", "table", "history", "decision", "recommendation")
                     or event == "partial_observation" and record.get("activity_state") != "verifying"):
+                self._partial_disposition(record, "activity-gate", disposition="suppressed", session_id=session_id)
                 return
             if event in ("partial_observation", "observation") and self.invalidated_partial_ticket is not None:
                 ticket = self._ticket(record.get("observation"))
@@ -1040,6 +1090,7 @@ class DashboardState:
                 # A scoped replay cannot tombstone newer health or reuse changed pixels.
                 if ticket is not None and (ticket[:2] <= invalidated[:2]
                         or ticket[4] == invalidated[4] and ticket[2] <= invalidated[2]):
+                    self._partial_disposition(record, "scoped-replay", disposition="suppressed", session_id=session_id)
                     return
             saved = {"event": code(event), "sequence": self.event_seq,
                      "recorded_utc": dt.datetime.now(dt.timezone.utc).isoformat()}
@@ -1055,8 +1106,19 @@ class DashboardState:
                 now = int(self.wall() * 1000)
                 width = integer(record.get("frame_width"), 16384)
                 height = integer(record.get("frame_height"), 16384)
+                if (target is not None and target == self.target and gen is not None and epoch is not None
+                        and gen <= self.version[0] and epoch <= self.version[1] and emitted is not None
+                        and self.capture["last_heartbeat_unix_ms"] is not None
+                        and emitted < self.capture["last_heartbeat_unix_ms"]):
+                    # A delayed older heartbeat is not a failure of newer pixels.
+                    saved.update(disposition="suppressed", reason="obsolete-health-record")
+                    self.ledger.append(saved)
+                    return
                 if (gen is None or epoch is None or gen < self.version[0] or epoch < self.version[1]
-                        or emitted is None or emitted > now or now - emitted >= HEARTBEAT_MS):
+                        or emitted is None or emitted > now or now - emitted >= HEARTBEAT_MS
+                        or self.capture["last_heartbeat_unix_ms"] is not None
+                        and emitted < self.capture["last_heartbeat_unix_ms"]):
+                    self.capture.update(state="unavailable", fresh_capture=False)
                     self.capture["recording_complete"] = False
                     self.capture["epoch"] = None
                     self._invalidate("obsolete-health-record")
@@ -1070,7 +1132,7 @@ class DashboardState:
                 self.target = target
                 self.version = (gen, epoch)
                 fresh = (record.get("fresh_capture") is True and target is not None
-                          and captured is not None and captured <= emitted and now - captured < 1000)
+                          and captured is not None and captured <= emitted and emitted - captured < 1000)
                 frames = integer(record.get("frame_count"))
                 if not width or not height:
                     fresh = False
@@ -1090,7 +1152,7 @@ class DashboardState:
                                       last_heartbeat_unix_ms=emitted)
                 self._recording(record, frames, fresh)
                 if not fresh:
-                    self._invalidate("capture-not-fresh")
+                    self._invalidate("capture-not-fresh", transient=True)
                 saved.update(self.capture)
                 saved["target_id"] = target
             elif event == "perception_diagnostics":
@@ -1137,27 +1199,49 @@ class DashboardState:
                 self._diagnostic_statuses(record, diagnostics)
                 return
             elif event == "partial_observation":
+                ticket = self._ticket(record.get("observation"))
+                if ticket is not None and (ticket[0] < self.version[0] or ticket[1] < self.version[1]):
+                    self._partial_disposition(record, "obsolete-version", disposition="suppressed", session_id=session_id)
+                    return
+                captured = integer(record.get("captured_at_unix_ms"))
+                if (ticket is not None and ticket[4] == self.target and self.partial_source is not None
+                        and captured is not None and ticket[2] <= self.partial_source[0]
+                        and captured <= self.partial_source[1]
+                        and (ticket[2], captured) != self.partial_source):
+                    self._partial_disposition(record, "obsolete-source", disposition="suppressed", session_id=session_id)
+                    return
+                if not self.capture["fresh_capture"]:
+                    self._partial_disposition(record, "capture-unavailable", disposition="suppressed", session_id=session_id)
+                    return
                 lease = self._partial_lease(record)
                 if lease is None:
+                    self._partial_disposition(record, "failed-lease", session_id=session_id)
                     self._invalidate("obsolete-or-expired-partial")
                     return
                 gen, epoch, captured_mono, captured, expires, remaining = lease
-                if (self.invalidated_version is not None and (gen, epoch) <= self.invalidated_version
-                        or self.partial_source is not None
+                if self.invalidated_version is not None and (gen, epoch) <= self.invalidated_version:
+                    self._partial_disposition(record, "invalidated-version", disposition="suppressed", session_id=session_id)
+                    return
+                if (self.partial_source is not None
                         and (captured_mono < self.partial_source[0] or captured < self.partial_source[1]
-                             or captured_mono == self.partial_source[0] and captured != self.partial_source[1])):
+                              or captured_mono == self.partial_source[0] and captured != self.partial_source[1])):
+                    self._partial_disposition(record, "source-clock-regression", session_id=session_id)
                     self._invalidate("obsolete-or-expired-partial")
                     return
                 if (self.partial_observation is not None and (gen, epoch) ==
                         (self.partial_observation["generation"], self.partial_observation["epoch"])):
+                    self._partial_disposition(record, "duplicate-bundle", disposition="suppressed", session_id=session_id)
                     return
                 # Replace the complete field bundle. Never fill holes from an older hand/capture.
                 view = partial_view(record, readout_only=activity_pending)
                 deadline = self.monotonic() + remaining / 1000
                 if self.partial_source == (captured_mono, captured):
                     deadline = min(deadline, self.partial_source_deadline)
-                    remaining = max(0, int((deadline - self.monotonic()) * 1000))
+                    expires = min(expires, self.partial_source_expires)
+                    remaining = max(0, min(int((deadline - self.monotonic()) * 1000),
+                                           expires - int(self.wall() * 1000)))
                 if not remaining:
+                    self._partial_disposition(record, "no-remaining-budget", session_id=session_id)
                     self._invalidate("partial-observation-expired")
                     return
                 self._clear_analysis()
@@ -1166,6 +1250,7 @@ class DashboardState:
                 self.partial_source = (captured_mono, captured)
                 self.partial_ticket = self._ticket(record["observation"])
                 self.partial_deadline = self.partial_source_deadline = deadline
+                self.partial_source_expires = expires
                 self.partial_observation = {**view, "generation": gen, "epoch": epoch,
                                              "captured_at_unix_ms": captured, "expires_at_unix_ms": expires,
                                              "remaining_ms": remaining}
@@ -1197,7 +1282,9 @@ class DashboardState:
                 self.status_source = (gen, epoch, captured_mono, captured)
                 self.status_deadline, self.status_expires = deadline, expires
                 self.message = "Partial reading; action context incomplete."
-                saved["partial_observation"] = self.partial_observation
+                self._partial_disposition(record, "accepted", disposition="admitted", session_id=session_id,
+                                          view=self.partial_observation)
+                return
             elif event == "partial_observation_invalidated":
                 ticket = self._ticket(record.get("observation"))
                 emitted = integer(record.get("emitted_at_unix_ms"))
@@ -1289,7 +1376,7 @@ class DashboardState:
                         or self.invalidated_version is not None and (gen, epoch) <= self.invalidated_version
                         or target is None or target != self.target or not self.capture["fresh_capture"]
                         or epoch != self.capture["epoch"]
-                        or self.last_heartbeat is None or (self.monotonic() - self.last_heartbeat) * 1000 >= HEARTBEAT_MS
+                        or not self._heartbeat_current()
                         or not valid or emitted is None or expires is None or emitted > now
                         or expires <= now or expires > emitted + valid):
                     self._invalidate("obsolete-or-expired-observation")
@@ -1588,7 +1675,7 @@ class DashboardState:
                     self._clear_experimental()
                 else:
                     self.experimental_candidates["remaining_ms"] = max(0, int((self.experimental_deadline - now) * 1000))
-            if self.last_heartbeat is not None and (now - self.last_heartbeat) * 1000 >= HEARTBEAT_MS:
+            if self.last_heartbeat is not None and not self._heartbeat_current():
                 self.capture.update(state="unavailable", fresh_capture=False, epoch=None, recording_complete=False)
                 self._invalidate("capture-heartbeat-expired")
             if self.deadline is not None:
@@ -2015,6 +2102,19 @@ class ManualSessionFeed:
                 self._flush_stops()
 
     def _ingest_row(self, row, current):
+        if isinstance(row, dict) and row.get("event") == "partial_observation":
+            row = {**row, "capture_session_id": self.session_id}
+        try:
+            self._ingest_checked_row(row, current)
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
+            reason = str(error) if str(error) in (
+                "manual-feed-record", "manual-feed-source-mismatch", "manual-feed-instance-mismatch",
+                "manual-feed-policy-mismatch", "manual-feed-activity-invalid") else "invalid-partial-record"
+            with self.state.lock:
+                self.state._partial_disposition(row, reason, session_id=self.stream_id)
+            raise
+
+    def _ingest_checked_row(self, row, current):
         if not isinstance(row, dict):
             raise ValueError("manual-feed-record")
         if row.get("event") == "manual_capture":
@@ -2041,6 +2141,9 @@ class ManualSessionFeed:
             if (row["event"] in {"observation", "history", "table", "decision"}
                     and (activity != "active" or current["activity_state"] != "active")
                     or row["event"] == "partial_observation" and activity == "idle"):
+                with self.state.lock:
+                    self.state._partial_disposition(row, "activity-gate", disposition="suppressed",
+                                                    session_id=self.stream_id)
                 return
             if row["event"] == "partial_observation" and current["activity_state"] != "active":
                 row = {**row, "activity_state": "verifying"}
@@ -2057,6 +2160,10 @@ class ManualSessionFeed:
             current = manual_capture.public_snapshot(root=self.root)
             if (session_id != self.session_id or self.source_policy != "automatic-sustained"
                     or self.stream_id is None or not self._valid(current)):
+                with self.state.lock:
+                    packet = {**row, "capture_session_id": session_id} if isinstance(row, dict) else row
+                    self.state._partial_disposition(packet, "foreign-session" if session_id != self.session_id
+                                                    else "owner-unavailable", session_id=self.stream_id)
                 return False
             try:
                 if row.get("event") == "manual_capture":

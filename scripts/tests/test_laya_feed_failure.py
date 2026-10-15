@@ -115,7 +115,13 @@ class FeedFailureTests(unittest.TestCase):
         self.assertAlmostEqual(self.feed.receipt_deadline - self.state.monotonic(), 2.502, places=6)
         self.assertAlmostEqual(self.feed.receipt_deadline, 1792006801456 / 1000 + 3, places=6)
         self.assertEqual(self.state.capture["frames"], 16)
-        self.assertFalse(self.state.capture["fresh_capture"], "receipt progress does not freshen source pixels")
+        # Acquisition was prompt (182 ms); delivery does not change that fact.
+        # Owner receipt progress must still leave the original heartbeat untouched.
+        self.assertTrue(self.state.capture["fresh_capture"])
+        self.assertAlmostEqual(self.state.last_heartbeat, 1792006799491 / 1000, places=6)
+        self.utc = 1792006799491 + dashboard.HEARTBEAT_MS
+        self.assertFalse(self.state.snapshot()["capture"]["fresh_capture"])
+        self.assertTrue(self.feed._valid(self.current))
         self.assertIsNone(self.state.partial_observation)
 
     def test_snapshot_and_poll_do_not_retire_new_owner_progress_after_consumer_gap(self):
