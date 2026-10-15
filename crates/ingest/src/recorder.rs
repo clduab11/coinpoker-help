@@ -817,18 +817,57 @@ mod tests {
     use std::time::Duration;
 
     fn temp_root() -> tempfile::TempDir {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap();
-        let fixtures =
-            root.join(".local/laya/train/manual-inference-20261012/native/recorder-fixtures");
-        fs::create_dir_all(&fixtures).unwrap();
         tempfile::Builder::new()
             .prefix("recorder-b-synthetic-")
-            .tempdir_in(fixtures)
+            .tempdir()
             .unwrap()
+    }
+
+    #[test]
+    fn temp_root_is_external_and_cleans_up_recorder_on_return_and_panic() {
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        for panic in [false, true] {
+            let mut path = PathBuf::new();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let root = temp_root();
+                path = root.path().canonicalize().unwrap();
+                assert!(!path.starts_with(&checkout));
+                assert!(path.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+                let mut recorder = recorder(&root, RecorderConfig::default());
+                recorder.record(&frame(), stamp(0));
+                assert_eq!(rows(&recorder).len(), 1);
+                if panic {
+                    panic!("synthetic fixture failure");
+                }
+            }));
+            assert_eq!(result.is_err(), panic);
+            assert!(!path.exists());
+        }
+    }
+
+    #[test]
+    fn temp_roots_are_unique_and_independently_owned_in_parallel() {
+        let threads: Vec<_> = (0..4).map(|_| std::thread::spawn(temp_root)).collect();
+        let roots: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        let paths: std::collections::HashSet<_> =
+            roots.iter().map(|root| root.path().to_path_buf()).collect();
+        assert_eq!(paths.len(), roots.len());
+        let mut roots = roots.into_iter();
+        let first = roots.next().unwrap();
+        let first_path = first.path().to_path_buf();
+        drop(first);
+        assert!(!first_path.exists());
+        assert!(roots.all(|root| root.path().is_dir()));
+        assert!(paths.iter().all(|path| !path.exists()));
     }
 
     fn utc() -> SystemTime {

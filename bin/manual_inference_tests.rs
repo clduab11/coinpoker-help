@@ -100,27 +100,55 @@ fn legacy_result_error_and_disconnected_worker_remain_terminal() {
 
 const SOURCE_UTC: u64 = 1_800_000_000_000;
 
-struct TempRoot(PathBuf);
-impl TempRoot {
-    fn new() -> Self {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "coinpoker-sustained-native-{}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        ));
-        fs::create_dir(&path).unwrap();
-        Self(path)
+fn temp_root() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("coinpoker-inference-test-")
+        .tempdir()
+        .unwrap()
+}
+
+#[test]
+fn inference_temp_root_is_external_and_cleans_up_on_return_and_panic() {
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    for panic in [false, true] {
+        let mut path = PathBuf::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let root = temp_root();
+            path = root.path().canonicalize().unwrap();
+            assert!(!path.starts_with(&checkout));
+            assert!(path.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            fs::write(path.join("synthetic.txt"), b"test").unwrap();
+            assert_eq!(fs::read(path.join("synthetic.txt")).unwrap(), b"test");
+            if panic {
+                panic!("synthetic fixture failure");
+            }
+        }));
+        assert_eq!(result.is_err(), panic);
+        assert!(!path.exists());
     }
 }
-impl Drop for TempRoot {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
-    }
+
+#[test]
+fn inference_temp_roots_are_unique_and_independently_owned_in_parallel() {
+    let threads: Vec<_> = (0..4).map(|_| std::thread::spawn(temp_root)).collect();
+    let roots: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    let paths: std::collections::HashSet<_> =
+        roots.iter().map(|root| root.path().to_path_buf()).collect();
+    assert_eq!(paths.len(), roots.len());
+    let mut roots = roots.into_iter();
+    let first = roots.next().unwrap();
+    let first_path = first.path().to_path_buf();
+    drop(first);
+    assert!(!first_path.exists());
+    assert!(roots.all(|root| root.path().is_dir()));
+    assert!(paths.iter().all(|path| !path.exists()));
 }
 
 #[test]
@@ -919,8 +947,8 @@ fn sustained_capture_passes_600_seconds_and_1200_acquisitions_with_frozen_eviden
         ("duration", RecorderStatus::DurationLimit),
         ("disk", RecorderStatus::DiskLimit),
     ] {
-        let root = TempRoot::new();
-        let stop = root.0.join("STOP");
+        let root = temp_root();
+        let stop = root.path().join("STOP");
         let time = Rc::new(Time::default());
         let utc = || UNIX_EPOCH + Duration::from_millis(SOURCE_UTC + time.now_ms());
         let mut approval = sustained_approval();
@@ -935,7 +963,7 @@ fn sustained_capture_passes_600_seconds_and_1200_acquisitions_with_frozen_eviden
         // One tiny PNG plus the source/readability metadata fits, two do not.
         let max_bytes = if case == "disk" { 768 } else { 1_073_741_824 };
         let recorder = PrivateRecorder::new(
-            &root.0,
+            root.path(),
             RecorderConfig {
                 max_frames: approval.max_frames,
                 max_bytes,
@@ -1008,7 +1036,7 @@ fn sustained_capture_passes_600_seconds_and_1200_acquisitions_with_frozen_eviden
         );
         assert!(progress["stop_reason"].is_null());
         assert_eq!(
-            fs::read_dir(root.0.join(".local/captures"))
+            fs::read_dir(root.path().join(".local/captures"))
                 .unwrap()
                 .count(),
             1
@@ -1066,8 +1094,8 @@ fn sustained_ended_evidence_still_rejects_source_capture_and_clock_failures() {
         ("utc-rollback", "capture-failed"),
         ("mono-rollback", "capture-failed"),
     ] {
-        let root = TempRoot::new();
-        let stop = root.0.join("STOP");
+        let root = temp_root();
+        let stop = root.path().join("STOP");
         let time = Rc::new(Time::default());
         let utc_time = Cell::new(SOURCE_UTC);
         let utc = || UNIX_EPOCH + Duration::from_millis(utc_time.get());
@@ -1088,7 +1116,7 @@ fn sustained_ended_evidence_still_rejects_source_capture_and_clock_failures() {
                 stop: stop.clone(),
             },
             &approval,
-            &root.0,
+            root.path(),
             &stop,
             time.as_ref(),
             &utc,
@@ -1127,8 +1155,8 @@ fn sustained_ended_evidence_still_rejects_source_capture_and_clock_failures() {
 
 #[test]
 fn sustained_unexpected_recorder_io_is_terminal_not_an_evidence_end() {
-    let root = TempRoot::new();
-    let stop = root.0.join("STOP");
+    let root = temp_root();
+    let stop = root.path().join("STOP");
     let time = Rc::new(Time::default());
     let utc = || UNIX_EPOCH + Duration::from_millis(SOURCE_UTC + time.now_ms());
     let mut approval = sustained_approval();
@@ -1147,7 +1175,7 @@ fn sustained_unexpected_recorder_io_is_terminal_not_an_evidence_end() {
             stop: stop.clone(),
         },
         &approval,
-        &root.0,
+        root.path(),
         &stop,
         time.as_ref(),
         &utc,
@@ -1176,8 +1204,12 @@ fn sustained_unexpected_recorder_io_is_terminal_not_an_evidence_end() {
     );
 }
 
-fn exercise_sustained_schedule(case: &'static str, job_ms: u64, root: PathBuf) -> Exercise {
-    let stop = root.join("STOP");
+fn exercise_sustained_schedule(
+    case: &'static str,
+    job_ms: u64,
+    root: tempfile::TempDir,
+) -> Exercise {
+    let stop = root.path().join("STOP");
     let time = Rc::new(Time::default());
     let utc = || UNIX_EPOCH + Duration::from_millis(SOURCE_UTC + time.now_ms());
     let mut approval = sustained_approval();
@@ -1203,7 +1235,7 @@ fn exercise_sustained_schedule(case: &'static str, job_ms: u64, root: PathBuf) -
                 stop: stop.clone(),
             },
             &approval,
-            &root,
+            root.path(),
             &stop,
             time.as_ref(),
             &utc,
@@ -1212,7 +1244,7 @@ fn exercise_sustained_schedule(case: &'static str, job_ms: u64, root: PathBuf) -
         Worker {
             state: worker.clone(),
             time: time.clone(),
-            root: root.clone(),
+            root: root.path().to_path_buf(),
             case,
         },
         |delay| {
@@ -1233,11 +1265,10 @@ fn exercise_sustained_schedule(case: &'static str, job_ms: u64, root: PathBuf) -
 
 #[test]
 fn sustained_board_schedule_and_runtime_admit_above_floor_distinct_unsaved_reads() {
-    let root = TempRoot::new();
-    let (_, events, source, worker) =
-        exercise_sustained_schedule("sustained-positive", 0, root.0.clone());
+    let (root, events, source, worker) =
+        exercise_sustained_schedule("sustained-positive", 0, temp_root());
     assert!(source.borrow().captures > 2);
-    assert_eq!(rows(&root.0).len(), 2);
+    assert_eq!(rows(root.path()).len(), 2);
     assert!(worker.borrow().unsaved_starts >= 20);
     let worker = worker.borrow();
     let board_jobs: Vec<_> = worker
@@ -1354,9 +1385,8 @@ fn sustained_board_schedule_and_runtime_admit_above_floor_distinct_unsaved_reads
 
 #[test]
 fn sustained_pairs_revisit_all_seats_within_ten_seconds_at_one_second_job_latency() {
-    let root = TempRoot::new();
-    let (_, events, _, worker) =
-        exercise_sustained_schedule("sustained-positive", 1_000, root.0.clone());
+    let (_root, events, _, worker) =
+        exercise_sustained_schedule("sustained-positive", 1_000, temp_root());
     let worker = worker.borrow();
     for seat in 1..=6 {
         let captures: Vec<_> = worker.passes.iter().filter_map(|(ticket, pass)| {
@@ -1375,9 +1405,8 @@ fn sustained_pairs_revisit_all_seats_within_ten_seconds_at_one_second_job_latenc
 #[test]
 fn sustained_cpu_board_pairs_keep_native_board_unknown_and_original_numeric_leases() {
     for job_ms in [1_500, 2_000] {
-        let root = TempRoot::new();
-        let (_, events, _, worker) =
-            exercise_sustained_schedule("sustained-cpu-board", job_ms, root.0.clone());
+        let (_root, events, _, worker) =
+            exercise_sustained_schedule("sustained-cpu-board", job_ms, temp_root());
         let worker = worker.borrow();
         assert!(worker
             .passes
@@ -1429,9 +1458,8 @@ fn sustained_cpu_board_pairs_keep_native_board_unknown_and_original_numeric_leas
 
 #[test]
 fn sustained_cpu_board_schedule_does_not_claim_ten_seconds_for_slow_jobs() {
-    let root = TempRoot::new();
-    let (_, events, _, worker) =
-        exercise_sustained_schedule("sustained-cpu-board", 2_500, root.0.clone());
+    let (_root, events, _, worker) =
+        exercise_sustained_schedule("sustained-cpu-board", 2_500, temp_root());
     let worker = worker.borrow();
     let captures: Vec<_> = worker
         .passes
@@ -1462,9 +1490,8 @@ fn sustained_board_pair_admits_at_2000ms_with_unknown_role() {
 }
 
 fn assert_sustained_board_pair_at_latency(job_ms: u64) {
-    let root = TempRoot::new();
-    let (_, events, _, worker) =
-        exercise_sustained_schedule("sustained-unknown-role", job_ms, root.0.clone());
+    let (_root, events, _, worker) =
+        exercise_sustained_schedule("sustained-unknown-role", job_ms, temp_root());
     let worker = worker.borrow();
     let board_jobs: Vec<_> = worker
         .passes
@@ -1552,8 +1579,7 @@ fn sustained_board_pair_rejects_stale_seed_expired_job_and_failed_core() {
         ("sustained-unknown-role", 5_000),
         ("sustained-core-rejected", 2_000),
     ] {
-        let root = TempRoot::new();
-        let (_, events, _, worker) = exercise_sustained_schedule(case, job_ms, root.0.clone());
+        let (_root, events, _, worker) = exercise_sustained_schedule(case, job_ms, temp_root());
         assert_eq!(
             worker
                 .borrow()
@@ -1604,8 +1630,7 @@ fn sustained_change_preserves_manual_and_bounded_save_before_infer_and_terminal_
         ("worker-failure", "inference-failed"),
         ("stop-inflight", "operator-stop"),
     ] {
-        let root = TempRoot::new();
-        let (_, events, _, worker) = exercise_in(case, root.0.clone());
+        let (root, events, _, worker) = exercise_in(case, temp_root());
         let terminal = events
             .iter()
             .rev()
@@ -1613,7 +1638,7 @@ fn sustained_change_preserves_manual_and_bounded_save_before_infer_and_terminal_
             .unwrap();
         assert_eq!(terminal["version"], 1);
         assert_eq!(terminal["stop_reason"], expected, "{case}");
-        let saved = rows(&root.0);
+        let saved = rows(root.path());
         for ticket in &worker.borrow().starts {
             assert!(saved
                 .iter()
@@ -1630,33 +1655,28 @@ fn sustained_change_preserves_manual_and_bounded_save_before_infer_and_terminal_
 }
 
 type Exercise = (
-    PathBuf,
+    tempfile::TempDir,
     Vec<Value>,
     Rc<RefCell<SourceState>>,
     Rc<RefCell<WorkerState>>,
 );
 
 fn exercise(case: &'static str) -> Exercise {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join(if case.starts_with("auto-") {
-            ".local/laya/train/automatic-inference-20261012/native"
-        } else {
-            ".local/laya/train/manual-inference-20261012/native"
-        })
-        .join(format!(
-            "{case}-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-    fs::create_dir_all(&root).unwrap();
-    exercise_in(case, root)
+    exercise_in(case, temp_root())
 }
 
-fn exercise_in(case: &'static str, root: PathBuf) -> Exercise {
+#[test]
+fn exercise_retains_temp_root_for_filesystem_inspection_then_cleans_up() {
+    let (root, _, _, _) = exercise("stop");
+    let path = root.path().to_path_buf();
+    assert!(rows(root.path()).is_empty());
+    assert!(path.join("stdout.jsonl").is_file());
+    assert!(path.join("approval.json").is_file());
+    drop(root);
+    assert!(!path.exists());
+}
+
+fn exercise_in(case: &'static str, root: tempfile::TempDir) -> Exercise {
     let mut receipt = approval_json();
     if case.starts_with("auto-") {
         receipt
@@ -1693,7 +1713,7 @@ fn exercise_in(case: &'static str, root: PathBuf) -> Exercise {
         job_ms: if case == "decision-expired" { 5_000 } else { 0 },
         ..Default::default()
     }));
-    let stop = root.join("STOP");
+    let stop = root.path().join("STOP");
     if case == "stop" {
         fs::write(&stop, "synthetic stop").unwrap();
     }
@@ -1709,7 +1729,7 @@ fn exercise_in(case: &'static str, root: PathBuf) -> Exercise {
                 stop: stop.clone(),
             },
             &approval,
-            &root,
+            root.path(),
             &stop,
             time.as_ref(),
             &|| UNIX_EPOCH + Duration::from_millis(SOURCE_UTC + time.now_ms()),
@@ -1718,7 +1738,7 @@ fn exercise_in(case: &'static str, root: PathBuf) -> Exercise {
         Worker {
             state: worker.clone(),
             time: time.clone(),
-            root: root.clone(),
+            root: root.path().to_path_buf(),
             case,
         },
         |delay| {
@@ -1731,7 +1751,7 @@ fn exercise_in(case: &'static str, root: PathBuf) -> Exercise {
             }
             if case == "recorder-failure" && time.now_ms() == 1_500 {
                 fs::write(
-                    session(&root).join("frame-0000000004.png"),
+                    session(root.path()).join("frame-0000000004.png"),
                     "preserve-existing-evidence",
                 )
                 .unwrap();
@@ -1774,10 +1794,10 @@ fn exercise_in(case: &'static str, root: PathBuf) -> Exercise {
         .iter()
         .map(|value| format!("{value}\n"))
         .collect::<String>();
-    fs::write(root.join("stdout.jsonl"), text).unwrap();
+    fs::write(root.path().join("stdout.jsonl"), text).unwrap();
     receipt["max_frames"] = json!(approval.max_frames);
     fs::write(
-        root.join("approval.json"),
+        root.path().join("approval.json"),
         serde_json::to_vec_pretty(&receipt).unwrap(),
     )
     .unwrap();
@@ -1793,7 +1813,7 @@ fn slow_initial_selection_cannot_make_the_recorder_skip_the_second_capture() {
         300
     );
     let (root, events, source, _) = exercise("auto-slow-selection");
-    let manifest = rows(&root);
+    let manifest = rows(root.path());
     assert_eq!(manifest.len(), 16);
     assert_eq!(source.borrow().captures, 16);
     assert_eq!(manifest[0]["captured_at_monotonic_ms"], 1200);
@@ -1821,7 +1841,7 @@ fn slow_initial_selection_cannot_make_the_recorder_skip_the_second_capture() {
 fn manual_inference_partial_fields_stay_non_actionable_with_pipeline_enabled() {
     let (root, events, source, worker) = exercise("partial");
     assert_eq!(source.borrow().captures, 9);
-    assert_eq!(rows(&root).len(), 9);
+    assert_eq!(rows(root.path()).len(), 9);
     assert!(worker.borrow().starts.len() >= 2);
     let partial = events
         .iter()
@@ -1862,14 +1882,13 @@ fn manual_inference_partial_fields_stay_non_actionable_with_pipeline_enabled() {
     );
     println!(
         "MANUAL_INFERENCE_SYNTHETIC_STDOUT={}",
-        root.join("stdout.jsonl").display()
+        root.path().join("stdout.jsonl").display()
     );
 }
 
 #[test]
 fn manual_inference_forwards_validated_pipeline_decision_and_weak_table() {
-    let root = TempRoot::new();
-    let (_, events, _, worker) = exercise_in("decision-valid", root.0.clone());
+    let (_root, events, _, worker) = exercise_in("decision-valid", temp_root());
     let worker = worker.borrow();
     assert!(
         worker.starts.len() >= 2,
@@ -1973,8 +1992,7 @@ fn manual_inference_rejects_untrusted_obsolete_and_expired_decisions() {
         ("decision-obsolete", "obsolete-observation"),
         ("decision-expired", "decision-deadline-exceeded"),
     ] {
-        let root = TempRoot::new();
-        let (_, events, _, worker) = exercise_in(case, root.0.clone());
+        let (_root, events, _, worker) = exercise_in(case, temp_root());
         assert!(!worker.borrow().starts.is_empty(), "{case}");
         assert!(
             events.iter().all(|event| !matches!(
@@ -2002,8 +2020,7 @@ fn manual_inference_rejects_untrusted_obsolete_and_expired_decisions() {
 
 #[test]
 fn manual_inference_rechecks_decision_lease_after_observation_publication() {
-    let root = TempRoot::new();
-    let (_, events, _, worker) = exercise_in("decision-publication-expired", root.0.clone());
+    let (_root, events, _, worker) = exercise_in("decision-publication-expired", temp_root());
     assert!(!worker.borrow().recommendations.is_empty());
     let observation = events
         .iter()
@@ -2034,8 +2051,7 @@ fn manual_inference_failed_table_observation_or_decision_write_stops_publication
         "decision-observation-write-failure",
         "decision-write-failure",
     ] {
-        let root = TempRoot::new();
-        let (_, events, _, worker) = exercise_in(case, root.0.clone());
+        let (_root, events, _, worker) = exercise_in(case, temp_root());
         assert!(worker.borrow().recommendations.len() >= 2);
         assert!(
             events.iter().all(|event| event["event"] != "decision"),
@@ -2098,7 +2114,7 @@ fn automatic_activity_requires_persistent_qualified_pixels_not_role_or_model_jit
                 && event["event"] != "decision")
     );
     assert_eq!(source.borrow().captures, 16);
-    assert_eq!(rows(&root).len(), 16);
+    assert_eq!(rows(root.path()).len(), 16);
     assert!(worker.borrow().starts.len() >= 4);
     let activated_at = events[activation]["elapsed_ms"].as_u64().unwrap();
     assert!(worker
@@ -2124,11 +2140,11 @@ fn automatic_activity_requires_persistent_qualified_pixels_not_role_or_model_jit
     assert_eq!(final_progress["stop_reason"], "frame-limit");
     assert_eq!(final_progress["elapsed_ms"], 7_500);
     let approval: Value =
-        serde_json::from_slice(&fs::read(root.join("approval.json")).unwrap()).unwrap();
+        serde_json::from_slice(&fs::read(root.path().join("approval.json")).unwrap()).unwrap();
     assert!(approval.get("operator_assertion").is_none());
     println!(
         "AUTOMATIC_ACTIVITY_SYNTHETIC_STDOUT={}",
-        root.join("stdout.jsonl").display()
+        root.path().join("stdout.jsonl").display()
     );
 }
 
@@ -2140,7 +2156,7 @@ fn automatic_partial_lanes_recover_after_core_only_admission_and_interruption() 
         "auto-partial-middle",
         "auto-partial-late",
     ] {
-        let (_, events, _, _) = exercise(case);
+        let (_root, events, _, _) = exercise(case);
         let activation = events
             .iter()
             .position(|event| {
@@ -2202,7 +2218,7 @@ fn automatic_partial_lanes_recover_after_core_only_admission_and_interruption() 
 
 #[test]
 fn cosmetic_and_one_stack_churn_do_not_block_independent_current_amounts() {
-    let (_, events, _, _) = exercise("auto-partial-cosmetic");
+    let (_root, events, _, _) = exercise("auto-partial-cosmetic");
     let readings: Vec<_> = events
         .iter()
         .filter(|event| event["event"] == "partial_observation")
@@ -2296,9 +2312,11 @@ fn automatic_idle_lobby_transient_ambiguous_jitter_and_resize_keep_finite_run_bu
                 .all(|event| event["event"] != "partial_observation"));
         }
         assert!(source.borrow().captures <= 75, "{case}");
-        assert!(rows(&root).len() <= 75, "{case}");
+        assert!(rows(root.path()).len() <= 75, "{case}");
         assert_eq!(
-            fs::read_dir(root.join(".local/captures")).unwrap().count(),
+            fs::read_dir(root.path().join(".local/captures"))
+                .unwrap()
+                .count(),
             1,
             "{case}"
         );
@@ -2309,7 +2327,7 @@ fn automatic_idle_lobby_transient_ambiguous_jitter_and_resize_keep_finite_run_bu
 fn unchanged_observed_table_reads_amounts_without_activity_or_history() {
     let (root, events, source, worker) = exercise("auto-partial-idle");
     assert_eq!(source.borrow().captures, 240);
-    assert_eq!(rows(&root).len(), 240);
+    assert_eq!(rows(root.path()).len(), 240);
     let readings: Vec<_> = events
         .iter()
         .filter(|event| event["event"] == "partial_observation")
@@ -2356,7 +2374,7 @@ fn unchanged_observed_table_reads_amounts_without_activity_or_history() {
     assert_eq!(final_progress["stop_reason"], "frame-limit");
     println!(
         "AUTOMATIC_IDLE_READOUT_SYNTHETIC_STDOUT={}",
-        root.join("stdout.jsonl").display()
+        root.path().join("stdout.jsonl").display()
     );
 }
 
@@ -2486,7 +2504,7 @@ fn manual_inference_terminal_sources_never_rearm_or_infer_unsaved_pixels() {
         let (root, events, source, worker) = exercise(case);
         assert!(source.borrow().captures <= 1, "{case}");
         assert!(worker.borrow().starts.is_empty(), "{case}");
-        assert!(rows(&root).is_empty(), "{case}");
+        assert!(rows(root.path()).is_empty(), "{case}");
         assert_eq!(
             events
                 .iter()
@@ -2516,7 +2534,7 @@ fn manual_inference_resize_slow_capture_and_inflight_stop_retain_budget_and_orig
         "publication-failure",
     ] {
         let (root, events, source, worker) = exercise(case);
-        let saved = rows(&root);
+        let saved = rows(root.path());
         let final_progress = events
             .iter()
             .rev()
@@ -2532,7 +2550,9 @@ fn manual_inference_resize_slow_capture_and_inflight_stop_retain_budget_and_orig
         assert_eq!(final_progress["stop_reason"], expected, "{case}");
         assert!(source.borrow().captures <= 16, "bounded {case}");
         assert_eq!(
-            fs::read_dir(root.join(".local/captures")).unwrap().count(),
+            fs::read_dir(root.path().join(".local/captures"))
+                .unwrap()
+                .count(),
             1
         );
         if case == "resize" {
@@ -2572,7 +2592,7 @@ fn manual_inference_resize_slow_capture_and_inflight_stop_retain_budget_and_orig
         if case == "recorder-failure" {
             assert_eq!(worker.borrow().starts.len(), 1);
             assert_eq!(
-                fs::read(session(&root).join("frame-0000000004.png")).unwrap(),
+                fs::read(session(root.path()).join("frame-0000000004.png")).unwrap(),
                 b"preserve-existing-evidence"
             );
         }
