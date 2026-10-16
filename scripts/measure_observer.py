@@ -30,6 +30,10 @@ SEAT_PASS = re.compile(r"p([567])_seat_([1-6])_(stack|wager|scene)$")
 EVENT_LIMIT = 12000
 EVENT_ROW_LIMIT = 256
 UI_RECEIPT_LIMIT = 8 * 1024 * 1024
+NAMESPACE_LIMIT = 128
+NAMESPACE_API_LIMIT = 33
+NAMESPACE_BYTES = 8 * 1024 * 1024
+NAMESPACE_ROWS = 12000
 CAPTURE_KEYS = ("service_instance_id", "session_id", "capture_session_id", "source_id",
                 "epoch", "sequence", "captured_at_ms", "captured_at_unix_ms", "sha256", "width", "height")
 CAPTURE_BASE_SPEC = dict.fromkeys((*CAPTURE_KEYS, "native_source_id", "table_context_id", "table_epoch", "generation",
@@ -75,7 +79,7 @@ CONTEXT_SPEC = {**dict.fromkeys(("role", "hero_seat", "table_context_id", "table
 FIELD_STATUS_SPEC = dict.fromkeys(("status", "reason", "confidence", "expires_at_unix_ms", "captured_at_unix_ms",
                                  "admission_status", "admission_reason"))
 FIELD_STATUS_SPEC.update(source_capture=CAPTURE_SPEC, capture=CAPTURE_SPEC)
-FIELD_NAMES = ("pot", "board", "role", "hero_seat", "hero_seated", "action_required", *(
+FIELD_NAMES = ("pot", "pot_size", "board", "role", "hero_seat", "hero_seated", "action_required", *(
     f"seats.{seat}.{field}" for seat in range(1, 7) for field in
     ("displayed_stack", "visible_wager", "badge", "occupied", "status", "dealer", "small_blind", "big_blind", "acting")))
 READING_SPEC = {**dict.fromkeys(("session_id", "source_id", "epoch", "generation", "captured_at_ms",
@@ -99,7 +103,15 @@ NUMERIC_FIELD_SPEC = {**dict.fromkeys(("literal", "value", "status", "reason", "
 NUMERIC_SPEC = {**dict.fromkeys(("source", "provisional", "quality_approved", "expires_at_unix_ms", "processing_ms", "published_at_unix_ms", "attempts", "dropped_frames")),
     "capture": CAPTURE_SPEC, "pot": NUMERIC_FIELD_SPEC,
     "seats": (6, {"seat": None, "stack": NUMERIC_FIELD_SPEC, "wager": NUMERIC_FIELD_SPEC})}
+NATIVE_TIMING_KEYS = ("schema_version", "generation", "epoch", "captured_at_ms", "captured_at_unix_ms",
+                      "emitted_at_unix_ms", "ingested_at_unix_ms", "api_snapshot_at_unix_ms")
+NAMESPACE_SCOPE = (*CAPTURE_KEYS[:5], "width", "height")
+NAMESPACE_SPEC = {**dict.fromkeys(("namespace_id", "status", "admitted_evidence", "semantics", "frozen_prefix",
+    "workers_drained", "sequence", "retirement_reason")), "scope": dict.fromkeys(NAMESPACE_SCOPE),
+    **{name: dict.fromkeys(("path", "bytes", "complete")) for name in ("visual_log", "context_log")},
+    "archive": dict.fromkeys(("frames", "bytes", "log_bytes", "complete"))}
 STATE_SPEC = {"schema_version": None, "session_id": None,
+    "native_timing": dict.fromkeys(NATIVE_TIMING_KEYS),
     "server": dict.fromkeys(("instance_id", "model_state", "status")),
     "capture_session": dict.fromkeys(("session_id", "status", "activity_state", "stop_reason", "updated_at_unix_ms")),
     "capture": {**CAPTURE_SPEC, **dict.fromkeys(("state", "fresh_capture", "last_capture_at_unix_ms", "stop_reason"))},
@@ -107,6 +119,8 @@ STATE_SPEC = {"schema_version": None, "session_id": None,
     "field_statuses": {name: FIELD_STATUS_SPEC for name in FIELD_NAMES},
     "visual_observation": VISUAL_SPEC, "table_context": CONTEXT_SPEC, "readout_evidence": EVIDENCE_SPEC,
     "numeric_observation": NUMERIC_SPEC, "numeric_diagnostics": dict.fromkeys(("attempts", "dropped_frames", "error")),
+    "visual_diagnostics": {"schema_version": None, "namespace_overflow_count": None,
+        "namespaces": (NAMESPACE_API_LIMIT, NAMESPACE_SPEC)},
     "event_evidence": EVIDENCE_SPEC, "context_diagnostics": dict.fromkeys(("log_path", "log_complete", "bytes",
         "dropped", "log_bytes", "log_dropped", "max_bytes", "error"))}
 
@@ -153,23 +167,25 @@ class CompactProjection:
         self.event_limit, self.row_limit = event_limit, row_limit
         self.counts = collections.Counter()
         self.last_total = None
+        self.namespace = None
 
     def changes(self, values, kind, spec, issues):
         if not isinstance(values, list):
-            if values is not None:
+            if values is not None or kind == "namespace":
                 issues.append(kind + ":invalid-events")
             return []
-        if len(values) > self.row_limit:
-            self.counts["row_drops"] += len(values) - self.row_limit
+        row_limit = min(self.row_limit, NAMESPACE_API_LIMIT) if kind == "namespace" else self.row_limit
+        if len(values) > row_limit:
+            self.counts["row_drops"] += len(values) - row_limit
             issues.append(kind + ":row-limit")
         result = []
-        for value in values[:self.row_limit]:
+        for value in values[:row_limit]:
             if not isinstance(value, dict):
                 self.counts["invalid_events"] += 1
                 issues.append(kind + ":invalid-event")
                 continue
-            if kind == "context":
-                identity = value.get("event_id")
+            if kind in ("context", "namespace"):
+                identity = value.get("namespace_id" if kind == "namespace" else "event_id")
                 if not (isinstance(identity, str) and 0 < len(identity) <= 256 or type(identity) is int and 0 < identity <= 2**53 - 1):
                     self.counts["invalid_events"] += 1
                     issues.append(kind + ":event-id-missing")
@@ -180,7 +196,7 @@ class CompactProjection:
             projected = project_fields(value, spec, issues, kind)
             digest = hashlib.sha256(json.dumps(projected, sort_keys=True, allow_nan=False,
                 ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
-            key = (kind, identity)
+            key = (kind, self.namespace, identity) if kind in ("context", "visual") else (kind, identity)
             if self.seen.get(key) == digest:
                 self.counts["repeated_events"] += 1
                 continue
@@ -188,16 +204,27 @@ class CompactProjection:
                 self.counts["event_drops"] += 1
                 issues.append(kind + ":event-limit")
                 continue
+            if kind == "namespace" and key not in self.seen:
+                if self.counts["namespace_count"] >= NAMESPACE_LIMIT:
+                    self.counts["namespace_drops"] += 1
+                    issues.append("namespace:limit")
+                    continue
+                self.counts["namespace_count"] += 1
             self.counts["changed_events" if key in self.seen else "new_events"] += 1
             self.seen[key] = digest
             result.append(projected)
         return result
 
-    def project(self, state):
+    def project(self, state, namespace_id=None):
+        if namespace_id != self.namespace:
+            self.last_total = None
+            self.namespace = namespace_id
         issues = []
         projected = project_fields(state, STATE_SPEC, issues)
         context = state.get("table_context")
         if isinstance(context, dict):
+            if namespace_id is not None:
+                projected["table_context"]["diagnostic_namespace_id"] = namespace_id
             before = self.counts["new_events"]
             projected["table_context"]["events"] = self.changes(context.get("events"), "context", EVENT_SPEC, issues)
             total = context.get("events_total")
@@ -218,6 +245,17 @@ class CompactProjection:
             spec = dict.fromkeys(("session_id", "source_id", "epoch", "sequence", "seat", "action", "captured_at_ms",
                                   "captured_at_unix_ms", "evidence_id", "capture", "status", "reason"))
             projected["visual_observation"]["sightings"] = self.changes(visual.get("sightings"), "visual", spec, issues)
+        diagnostics = state.get("visual_diagnostics")
+        if isinstance(diagnostics, dict) and "namespaces" in diagnostics:
+            if (any(key in diagnostics and type(diagnostics[key]) is not bool
+                    for key in ("namespaces_are_changes", "namespace_registry_cleared"))
+                    or diagnostics.get("namespace_registry_cleared") is True and diagnostics["namespaces"]):
+                issues.append("namespace:invalid-registry-flags")
+            projected["visual_diagnostics"]["namespaces"] = self.changes(diagnostics["namespaces"], "namespace", NAMESPACE_SPEC, issues)
+            projected["visual_diagnostics"]["namespaces_are_changes"] = True
+            projected["visual_diagnostics"]["namespace_registry_cleared"] = bool(
+                isinstance(diagnostics["namespaces"], list) and not diagnostics["namespaces"] and (
+                    diagnostics.get("namespaces_are_changes") is not True or diagnostics.get("namespace_registry_cleared") is True))
         return projected, {"schema_version": 1, "complete": not issues,
             "histories_omitted": True, "events_are_changes": True,
             "response_sha256_scope": "unprojected-http-body", "issues": sorted(set(issues)),
@@ -328,7 +366,7 @@ def write_json(path, value):
         stream.write(data)
 
 
-def read_rows(path, metadata, byte_limit=INPUT_LIMIT, boundary_size=None):
+def read_rows(path, metadata, byte_limit=INPUT_LIMIT, boundary_size=None, row_limit=None):
     info = {"path": str(path.relative_to(ROOT)), "rows": 0, "bytes": 0,
             "scanned_rows": 0, "invalid_rows": 0, "partial_tail": False, "capped": False}
     metadata.append(info)
@@ -347,7 +385,7 @@ def read_rows(path, metadata, byte_limit=INPUT_LIMIT, boundary_size=None):
                     shortened_since_boundary=size < boundary)
     rows, digest = [], hashlib.sha256()
     with path.open("rb") as stream:
-        while stream.tell() < stop and info["scanned_rows"] < ROW_LIMIT:
+        while stream.tell() < stop and info["scanned_rows"] < (ROW_LIMIT if row_limit is None else min(ROW_LIMIT, row_limit)):
             offset = stream.tell()
             raw = stream.readline(min(LINE_LIMIT + 1, stop - offset))
             digest.update(raw)
@@ -369,6 +407,241 @@ def read_rows(path, metadata, byte_limit=INPUT_LIMIT, boundary_size=None):
         info["capped"] |= stream.tell() < stop
     info.update(rows=len(rows), sha256_of_scanned_prefix=digest.hexdigest())
     return rows
+
+
+class VisualNamespaces:
+    """Bounded diagnostic namespace receipts, never a publication/admission ledger."""
+
+    def __init__(self):
+        self.entries, self.issues, self.scope = {}, collections.Counter(), None
+        self.present = False
+        self.overflow = 0
+        self.active_paths = set()
+        self._active = {}
+
+    @staticmethod
+    def integer(value):
+        return type(value) is int and 0 <= value <= 2**53 - 1
+
+    @staticmethod
+    def context_path(state):
+        value = state.get("context_diagnostics")
+        return value.get("log_path") if isinstance(value, dict) else None
+
+    def validate(self, value, scope):
+        if (not isinstance(value, dict) or not isinstance(value.get("namespace_id"), str)
+                or not re.fullmatch(r"uncommitted-[0-9a-f]{32}", value["namespace_id"])
+                or value.get("status") not in ("active", "retired-uncommitted")
+                or value.get("admitted_evidence") is not False
+                or not isinstance(value.get("semantics"), str) or len(value["semantics"]) > 256
+                or value["semantics"].split(";")[0] != "diagnostic-attempts-only"
+                or type(value.get("frozen_prefix")) is not bool
+                or value["frozen_prefix"] != (value["status"] == "retired-uncommitted")
+                or type(value.get("workers_drained")) is not bool or not self.integer(value.get("sequence"))
+                or value.get("scope") != scope or any(type(value["scope"].get(key)) is not type(scope[key]) for key in NAMESPACE_SCOPE)):
+            raise ValueError("namespace-schema-or-scope")
+        if value.get("retirement_reason") is not None and (not isinstance(value["retirement_reason"], str)
+                or len(value["retirement_reason"]) > 256):
+            raise ValueError("namespace-reason")
+        result = project_fields(value, NAMESPACE_SPEC, [])
+        directory = PRIVATE / "laya/events" / hashlib.sha256(scope["service_instance_id"].encode()).hexdigest()[:32] / value["namespace_id"]
+        for kind in ("visual_log", "context_log"):
+            log = value.get(kind)
+            if (not isinstance(log, dict) or not self.integer(log.get("bytes")) or type(log.get("complete")) is not bool
+                    or not isinstance(log.get("path"), str) or not 0 < len(log["path"]) <= 512
+                    or Path(log["path"]).is_absolute() or Path(log["path"]).drive):
+                raise ValueError("namespace-log-schema")
+            path = private_path(log["path"], PRIVATE / "laya/events")
+            # Exact service-hash/UUID/log binding also rejects symlink/junction substitutions.
+            if path != directory / ("visual.jsonl" if kind == "visual_log" else "context.jsonl"):
+                raise ValueError("namespace-log-path")
+            result[kind]["path"] = str(path.relative_to(ROOT))
+        archive = value.get("archive")
+        if (not isinstance(archive, dict) or any(not self.integer(archive.get(key)) for key in ("frames", "bytes", "log_bytes"))
+                or type(archive.get("complete")) is not bool):
+            raise ValueError("namespace-archive-schema")
+        return result
+
+    def invalidate_active(self):
+        self.active_paths = set()
+        self._active = {}
+
+    def observe(self, state):
+        previous_active = self._active
+        self.invalidate_active()
+        diagnostics = state.get("visual_diagnostics")
+        if not isinstance(diagnostics, dict) or "namespaces" not in diagnostics:
+            if self.present:
+                self.issues["registry-unavailable"] += 1
+            return False
+        self.present = True
+        if (type(diagnostics.get("schema_version")) is not int or diagnostics["schema_version"] != 1
+                or not isinstance(diagnostics.get("namespaces"), list)
+                or not self.integer(diagnostics.get("namespace_overflow_count"))
+                or any(key in diagnostics and type(diagnostics[key]) is not bool for key in ("namespaces_are_changes", "namespace_registry_cleared"))
+                or diagnostics.get("namespace_registry_cleared") is True and diagnostics["namespaces"]):
+            self.issues["registry-schema"] += 1
+            return False
+        capture = state.get("capture")
+        current = {**sample_scope(state), **{key: capture.get(key) if isinstance(capture, dict) else None for key in ("width", "height")}}
+        scope = {key: current.get(key) for key in NAMESPACE_SCOPE}
+        if (any(not isinstance(scope[key], str) or not 0 < len(scope[key]) <= 256 for key in CAPTURE_KEYS[:4])
+                or not self.integer(scope["epoch"]) or any(type(scope[key]) is not int or not 0 < scope[key] <= 16384 for key in ("width", "height"))
+                or self.scope is not None and scope != self.scope):
+            self.issues["registry-scope"] += 1
+            return False
+        self.scope = scope
+        self.overflow = max(self.overflow, diagnostics["namespace_overflow_count"])
+        if self.overflow:
+            self.issues["producer-overflow"] = self.overflow
+        values = diagnostics["namespaces"]
+        active_paths = dict(previous_active) if diagnostics.get("namespaces_are_changes") is True and not diagnostics.get("namespace_registry_cleared") else {}
+        valid, seen, active = len(values) <= NAMESPACE_API_LIMIT, set(), 0
+        if not valid:
+            self.issues["api-namespace-limit"] += 1
+        identities = collections.Counter(value.get("namespace_id") for value in values[:NAMESPACE_API_LIMIT]
+            if isinstance(value, dict) and isinstance(value.get("namespace_id"), str))
+        for value in values[:NAMESPACE_API_LIMIT]:
+            try:
+                entry = self.validate(value, scope)
+                identity = entry["namespace_id"]
+                if identities[identity] > 1 or identity in seen:
+                    raise ValueError("duplicate-namespace")
+                seen.add(identity)
+                active += entry["status"] == "active"
+                if entry["status"] == "active":
+                    active_paths[identity] = entry["context_log"]["path"]
+                else:
+                    active_paths.pop(identity, None)
+                old = self.entries.get(identity)
+                if old is None:
+                    if len(self.entries) >= NAMESPACE_LIMIT:
+                        self.issues["namespace-limit"] += 1
+                        continue
+                    self.entries[identity] = entry
+                else:
+                    if any(entry[kind]["path"] != old[kind]["path"] for kind in ("visual_log", "context_log")):
+                        raise ValueError("namespace-path-change")
+                    if old["frozen_prefix"]:
+                        if not entry["frozen_prefix"] or any(entry[kind]["bytes"] != old[kind]["bytes"] for kind in ("visual_log", "context_log")):
+                            self.issues["retired-prefix-change"] += 1
+                        if not entry["frozen_prefix"]:
+                            valid = False
+                            active_paths.pop(identity, None)
+                        old["workers_drained"] |= entry["workers_drained"]
+                    else:
+                        for kind in ("visual_log", "context_log"):
+                            if entry[kind]["bytes"] < old[kind]["bytes"]:
+                                self.issues["prefix-regression"] += 1
+                                entry[kind]["bytes"] = min(entry[kind]["bytes"], old[kind]["bytes"])
+                        self.entries[identity] = entry
+                if any(not entry[kind]["complete"] for kind in ("visual_log", "context_log", "archive")):
+                    self.issues["producer-incomplete"] += 1
+            except (ValueError, TypeError, OSError) as error:
+                reason = str(error)[:128] if isinstance(error, ValueError) else "namespace-path-io" if isinstance(error, OSError) else "namespace-type"
+                self.issues[reason] += 1
+                valid = False
+        if active > 1 or len(active_paths) > 1:
+            self.issues["multiple-active-namespaces"] += 1
+            valid = False
+        if diagnostics.get("namespaces_are_changes") is not True:
+            for identity, old in self.entries.items():
+                if not old["frozen_prefix"] and identity not in seen:
+                    self.issues["unseen-retirement"] += 1
+        if valid:
+            self._active = active_paths
+            self.active_paths = set(active_paths.values())
+        return valid
+
+    def snapshot(self):
+        return {"schema_version": 1, "namespaces": list(self.entries.values()), "issues": dict(self.issues),
+                "namespace_overflow_count": self.overflow, "complete": not self.issues,
+                "limits": {"namespaces": NAMESPACE_LIMIT, "bytes": NAMESPACE_BYTES, "rows": NAMESPACE_ROWS}}
+
+    def analyze(self, api, run, inputs):
+        issues, counts, candidates = self.issues.copy(), collections.Counter(), []
+        matched = set()
+        for _, row in api[:ROW_LIMIT]:
+            state = row.get("state")
+            if not isinstance(state, dict):
+                continue
+            path = self.context_path(state)
+            ids = [key for key, entry in self.entries.items() if entry["context_log"]["path"] == path]
+            for kind, name in (("visual_log", "visual_observation"), ("context_log", "table_context")):
+                reading = state.get(name)
+                if isinstance(reading, dict):
+                    try:
+                        for identity in ids:
+                            matched.add((identity, kind, capture_key(reading.get("capture"))))
+                    except ValueError:
+                        pass
+        namespaces = []
+        for identity, entry in sorted(self.entries.items()):
+            public = {**entry, "inputs": {}}
+            for kind in ("visual_log", "context_log"):
+                # Revalidate paths at read time: a namespace can become a junction after collection.
+                try:
+                    self.validate(entry, self.scope)
+                    path = ROOT / entry[kind]["path"]
+                    boundary = min(entry[kind]["bytes"], run.get("input_sizes_at_end", {}).get(entry[kind]["path"], entry[kind]["bytes"]))
+                    if not self.integer(boundary):
+                        raise ValueError("namespace-input-boundary")
+                    if boundary == 0:
+                        info = {"path": entry[kind]["path"], "rows": 0, "bytes": 0, "scanned_rows": 0,
+                            "expected_unopened": True, "size_at_collection_boundary": 0}
+                        inputs.append(info)
+                        rows = []
+                    elif counts["scanned_bytes"] >= NAMESPACE_BYTES or counts["scanned_rows"] >= NAMESPACE_ROWS:
+                        issues["aggregate-limit"] += 1
+                        counts["unread_logs"] += 1
+                        info, rows = {"path": entry[kind]["path"], "capped": True}, []
+                        inputs.append(info)
+                    else:
+                        before = len(inputs)
+                        try:
+                            rows = read_rows(path, inputs, min(INPUT_LIMIT, NAMESPACE_BYTES - counts["scanned_bytes"]),
+                                             boundary, NAMESPACE_ROWS - counts["scanned_rows"])
+                        finally:
+                            if len(inputs) > before:
+                                counts["scanned_bytes"] += inputs[-1].get("bytes", 0)
+                                counts["scanned_rows"] += inputs[-1].get("scanned_rows", 0)
+                        info = inputs[-1]
+                        for key, label in (("capped", "aggregate-or-input-limit"), ("partial_tail", "partial-tail"),
+                                           ("missing", "missing-log"), ("invalid_rows", "invalid-json"),
+                                           ("shortened_since_boundary", "shortened-log")):
+                            if info.get(key):
+                                issues[label] += 1
+                    public["inputs"][kind] = info
+                    for offset, record in rows:
+                        try:
+                            capture = record.get("capture")
+                            key = capture_key(capture)
+                            if (any(capture[name] != entry["scope"][name] for name in NAMESPACE_SCOPE)
+                                    or any(not self.integer(capture[name]) for name in ("epoch", "sequence", "captured_at_ms", "captured_at_unix_ms"))
+                                    or "generation" in capture and not self.integer(capture["generation"])):
+                                raise ValueError("candidate-scope")
+                            if not run["started_at_unix_ms"] <= capture["captured_at_unix_ms"] <= run["ended_at_unix_ms"]:
+                                counts["outside_window"] += 1
+                                continue
+                            api_match = (identity, kind, key) in matched
+                            candidates.append({"record_id": identity + ":" + kind + ":" + str(offset), "namespace_id": identity,
+                                "kind": kind, "offset": offset, "capture": {name: capture[name] for name in CAPTURE_KEYS}, "api_source_match": api_match,
+                                "admitted_evidence": False, "namespace_status": entry["status"]})
+                            counts["api_matched_candidates"] += api_match
+                        except (ValueError, TypeError, KeyError):
+                            issues["invalid-candidate"] += 1
+                except (ValueError, TypeError, OSError):
+                    issues["invalid-read-binding"] += 1
+            namespaces.append(public)
+        counts.update(candidate_records=len(candidates))
+        counts.setdefault("api_matched_candidates", 0)
+        return {"schema_version": 1, "namespaces": namespaces, "counts": dict(counts), "issues": dict(issues),
+            "candidates": candidates, "complete_coverage": False, "observed_prefixes_complete": not issues,
+            "limits": self.snapshot()["limits"], "semantics": "diagnostic-attempt-candidates-only; API/DOM publication authoritative",
+            "limitations": ["Namespace records are never merged into canonical current/continuity counts.",
+                "Only collected prefix ceilings are scanned; retired late writes and unseen namespaces remain excluded.",
+                "Archive counters are producer diagnostics; no archived image/index integrity scan is performed.",
+                "API source matches are not proof of current DOM publication, numeric accuracy, or complete attempt coverage."]}
 
 
 def merge_readouts(native, compact, perceptions, expected_target, expected_instance, expected_identity):
@@ -763,7 +1036,7 @@ def load_ui_receipts(path, metadata):
         return [], info
 
 
-def analyze_context(api, run, ui_receipts=(), ui_info=None, native_attempts=(), attempt_info=None):
+def analyze_context(api, run, ui_receipts=(), ui_info=None, native_attempts=(), attempt_info=None, namespace_receipts=None):
     """Context DTO timing is independent of legacy numeric/visual admission."""
     start, end = run["started_at_unix_ms"], run["ended_at_unix_ms"]
     rejected, counters, roles = collections.Counter(), collections.Counter(), collections.Counter()
@@ -958,13 +1231,18 @@ def analyze_context(api, run, ui_receipts=(), ui_info=None, native_attempts=(), 
             if not start <= candidate["capture"]["captured_at_unix_ms"] <= end:
                 counters["events_original_outside_window"] += 1
                 continue
-            previous = events.get(candidate["event_id"])
+            namespace_id = (namespace_receipts or {}).get(offset)
+            if namespace_receipts is not None and offset in namespace_receipts and namespace_id is None:
+                rejected["event-namespace-unavailable"] += 1
+                continue
+            scoped_id = (namespace_id, candidate["event_id"]) if namespace_id is not None else candidate["event_id"]
+            previous = events.get(scoped_id)
             if previous and (capture_key(previous["capture"]) != event_key
                     or any(previous.get(field) != candidate.get(field) for field in ("kind", "seat", "owner", "occupant_epoch"))):
                 rejected["event-id-conflict"] += 1
                 previous["conflicting_id"] = True
                 continue
-            events[candidate["event_id"]] = {**candidate, "api_offset": offset,
+            events[scoped_id] = {**candidate, "api_offset": offset, "diagnostic_namespace_id": namespace_id,
                 "conflicting_id": bool(previous and previous.get("conflicting_id"))}
 
     reference_scope = next((sample_scope(row["state"]) for _, row in api if isinstance(row.get("state"), dict)
@@ -1188,6 +1466,193 @@ def analyze_ui_receipts(receipts, references, run, info=None):
             "Repeated original receipts and expiry/status changes do not create fresh source observations."]}
 
 
+def analyze_native_timing(api, run, receipts=(), info=None):
+    """Bounded native numeric first-DOM stages; telemetry never qualifies a reading."""
+    start, end = run["started_at_unix_ms"], run["ended_at_unix_ms"]
+    counts, rejected, unknown = collections.Counter(), collections.Counter(), collections.Counter()
+    references, first, observed, samples = collections.defaultdict(set), set(), set(), []
+    ticket_bindings = collections.defaultdict(set)
+    expected = {"service_instance_id": run.get("service_instance"), "session_id": run.get("api_session"),
+                "capture_session_id": run.get("session"), "source_id": run.get("source_id"), "epoch": run.get("source_epoch")}
+    counts.update(api_rows_over_limit=max(0, len(api) - ROW_LIMIT), ui_rows_over_limit=max(0, len(receipts) - EVENT_LIMIT))
+
+    def clock(value):
+        return type(value) is int and 0 <= value <= 2**53 - 1
+
+    def bind_capture(capture, key, generation):
+        if "generation" in capture and (not clock(capture["generation"]) or capture["generation"] != generation):
+            raise ValueError("capture-generation-identity")
+        ticket = (*key[:5], generation, capture["captured_at_ms"], capture["captured_at_unix_ms"])
+        ticket_bindings[ticket].add((key, capture.get("native_source_id")))
+
+    def timing_key(timing, capture, generation, upper):
+        if (not isinstance(timing, dict) or any(not clock(timing.get(key)) for key in NATIVE_TIMING_KEYS)
+                or not clock(generation) or timing["schema_version"] != 1 or timing["generation"] != generation
+                or timing["epoch"] != capture["epoch"]
+                or any(timing[key] != capture[key] for key in ("captured_at_ms", "captured_at_unix_ms"))
+                or "generation" in capture and not clock(capture["generation"])
+                or capture.get("generation", generation) != generation):
+            raise ValueError("native-timing-ticket-or-clock")
+        times = [timing[key] for key in ("captured_at_unix_ms", "emitted_at_unix_ms", "ingested_at_unix_ms", "api_snapshot_at_unix_ms")]
+        if times != sorted(times) or times[-1] > upper:
+            raise ValueError("native-timing-clock-order")
+        return tuple(timing[key] for key in NATIVE_TIMING_KEYS[:-1])
+
+    for _, row in api[:ROW_LIMIT]:
+        sampled, state = row.get("sampled_at_unix_ms"), row.get("state")
+        if not clock(sampled) or not start <= sampled <= end or not isinstance(state, dict):
+            continue
+        try:
+            scope = sample_scope(state)
+            if not clock(scope.get("epoch")) or any(scope.get(key) != value for key, value in expected.items() if value is not None):
+                raise ValueError("api-source-scope")
+            partial = state.get("partial_observation")
+            if not isinstance(partial, dict):
+                continue
+            capture = partial.get("capture")
+            key = capture_key(capture)
+            if (capture.get("parent_capture") is not None or any(capture[name] != scope.get(name) for name in CAPTURE_KEYS[:5])
+                    or any(capture[name] != state.get("capture", {}).get(name) for name in ("width", "height"))
+                    or not all(clock(capture[name]) for name in ("epoch", "sequence", "captured_at_ms", "captured_at_unix_ms"))
+                    or not clock(partial.get("generation")) or not clock(partial.get("epoch")) or partial["epoch"] != capture["epoch"]
+                    or not clock(partial.get("captured_at_unix_ms"))
+                    or partial.get("captured_at_unix_ms") != capture["captured_at_unix_ms"]
+                    or not clock(partial.get("captured_at_ms", capture["captured_at_ms"]))
+                    or partial.get("captured_at_ms", capture["captured_at_ms"]) != capture["captured_at_ms"]
+                    or not clock(partial.get("expires_at_unix_ms")) or sampled >= partial["expires_at_unix_ms"]):
+                raise ValueError("api-partial-source-or-clock")
+            for name in expected:
+                if expected[name] is None:
+                    expected[name] = scope.get(name)
+            bind_capture(capture, key, partial["generation"])
+            timing, transport = state.get("native_timing"), None
+            if timing is not None:
+                try:
+                    transport = timing_key(timing, capture, partial["generation"], sampled)
+                except (ValueError, TypeError, KeyError) as exc:
+                    rejected["api:" + str(exc)] += 1
+            fields = [("pot_size", partial.get("pot_size"))]
+            fields += [(f"seats.{seat['seat']}.displayed_stack", seat.get("displayed_stack"))
+                       for seat in partial.get("seats", [])[:6] if isinstance(seat, dict) and type(seat.get("seat")) is int and 1 <= seat["seat"] <= 6]
+            for field, amount in fields:
+                field_capture = partial.get("field_captures", {}).get(field, capture)
+                if not clock(amount) or partial.get("field_statuses", {}).get(field, {}).get("status") != "accepted":
+                    continue
+                field_key = capture_key(field_capture)
+                if (field_capture.get("parent_capture") is not None
+                        or any(field_capture[name] != capture[name] for name in (*CAPTURE_KEYS[:5], "width", "height"))
+                        or not all(clock(field_capture[name]) for name in ("epoch", "sequence", "captured_at_ms", "captured_at_unix_ms"))
+                        or "generation" in field_capture and not clock(field_capture["generation"])
+                        or field_capture["captured_at_unix_ms"] > capture["captured_at_unix_ms"]
+                        or field_capture["captured_at_ms"] > capture["captured_at_ms"]):
+                    continue
+                exact = field_key == key and all(field_capture.get(name) == capture.get(name) for name in ("generation", "native_source_id"))
+                if "generation" in field_capture:
+                    bind_capture(field_capture, field_key, field_capture["generation"])
+                references[(field_key, field)].add((amount, transport if exact else None,
+                    field_capture.get("generation"), field_capture.get("native_source_id"), partial["expires_at_unix_ms"]))
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            rejected["api:" + str(exc)] += 1
+
+    # Scan every bounded API binding before choosing receipts: an ambiguous replay has no first winner.
+    ambiguous = [bindings for bindings in ticket_bindings.values() if len(bindings) > 1]
+    ambiguous_bindings = {binding for bindings in ambiguous for binding in bindings}
+    ambiguous_captures = {key for key, _ in ambiguous_bindings}
+    counts.update(ambiguous_native_tickets=len(ambiguous), ambiguous_original_captures=len(ambiguous_bindings))
+    if ambiguous:
+        rejected["api:ambiguous-ticket-binding"] += len(ambiguous)
+    # Export order is not evidence of first publication. Missing first timing must never be retrofilled.
+    ordered = sorted(receipts[:EVENT_LIMIT], key=lambda row: row.get("published_at_unix_ms")
+                     if isinstance(row, dict) and clock(row.get("published_at_unix_ms")) else -1)
+    for row in ordered:
+        try:
+            if not isinstance(row, dict):
+                raise ValueError("ui-record")
+            field = row.get("field")
+            if not isinstance(field, str) or not re.fullmatch(r"pot_size|seats\.[1-6]\.displayed_stack", field):
+                counts["excluded_non_numeric"] += 1
+                continue
+            if row.get("status") != "current":
+                counts["excluded_non_current"] += 1
+                continue
+            seat = None if field == "pot_size" else int(field.split(".")[1])
+            if row.get("seat") != seat or seat is not None and type(row.get("seat")) is not int:
+                raise ValueError("ui-field-seat")
+            capture, published = row.get("capture"), row.get("published_at_unix_ms")
+            key = capture_key(capture)
+            if "generation" in capture and not clock(capture["generation"]):
+                raise ValueError("ui-capture-generation-identity")
+            if not clock(published) or not all(clock(capture[name]) for name in ("epoch", "sequence", "captured_at_ms", "captured_at_unix_ms")):
+                raise ValueError("ui-publication-clock")
+            if not start <= capture["captured_at_unix_ms"] <= end or not start <= published <= end:
+                counts["outside_window"] += 1
+                continue
+            if published < capture["captured_at_unix_ms"]:
+                raise ValueError("ui-publication-before-capture")
+            identity = (key, field)
+            if identity in first:
+                counts["duplicate_publications"] += 1
+                continue
+            first.add(identity)
+            if key in ambiguous_captures:
+                raise ValueError("ui-ambiguous-ticket-binding")
+            matches = references.get(identity)
+            if not matches:
+                raise ValueError("ui-original-field-not-collected")
+            literal = row.get("value")
+            match = re.fullmatch(r"(\d+|\d{1,3}(?:,\d{3})+)(?:\.(\d{1,2}))?(?: chips)?", literal) if isinstance(literal, str) and len(literal) <= 64 else None
+            if not match:
+                raise ValueError("ui-numeric-literal")
+            amount = int(match[1].replace(",", "")) * 100 + int((match[2] or "").ljust(2, "0"))
+            matches = {item for item in matches if item[2:4] == (capture.get("generation"), capture.get("native_source_id"))}
+            if not matches or {item[0] for item in matches} != {amount}:
+                raise ValueError("ui-native-value-or-source-mismatch")
+            if published >= min(item[4] for item in matches):
+                raise ValueError("ui-publication-outside-collected-lease")
+            observed.add(identity)
+            stages_for_field = [None] * 4 + [published - capture["captured_at_unix_ms"]]
+            samples.append((field, stages_for_field))
+            timing = row.get("native_timing")
+            if timing is None:
+                unknown["missing-native-timing"] += 1
+                continue
+            transport = timing_key(timing, capture, timing.get("generation") if isinstance(timing, dict) else None, published)
+            transports = {item[1] for item in matches if item[1] is not None}
+            if not transports:
+                unknown["api-native-timing-unavailable"] += 1
+                continue
+            if transports != {transport}:
+                raise ValueError("ui-native-transport-mismatch")
+            times = [timing[name] for name in ("captured_at_unix_ms", "emitted_at_unix_ms", "ingested_at_unix_ms", "api_snapshot_at_unix_ms")] + [published]
+            stages_for_field[:4] = [b - a for a, b in zip(times, times[1:])]
+        except (ValueError, TypeError, KeyError) as exc:
+            rejected[str(exc)] += 1
+
+    def stages(rows):
+        result = {}
+        for index, name in enumerate(("capture_to_emit", "emit_to_ingest", "ingest_to_api", "api_to_dom", "capture_to_dom")):
+            values = sorted(row[1][index] for row in rows if row[1][index] is not None)
+            result[name] = {"count": len(values), "min": min(values, default=None), "max": max(values, default=None),
+                            "p95": values[(95 * len(values) + 99) // 100 - 1] if values else None}
+        return result
+
+    summary = stages(samples)
+    counts.update(collected_native_fields=len(references), collected_fields_without_valid_dom_receipt=len(references.keys() - observed))
+    return {"schema_version": 1, "sample_count": len(samples),
+        "complete_stage_sample_count": summary["api_to_dom"]["count"], "stages_ms": summary,
+        "quantile_method": "nearest-rank ceil(0.95*n)", "complete_coverage": False, "input": info,
+        "observed_p95_below_3000_ms": summary["capture_to_dom"]["p95"] < 3000 if samples else None,
+        "counts": dict(counts), "rejected_records": dict(rejected), "unknown_records": dict(unknown),
+        "fields": [{"field": field, "stages_ms": stages([row for row in samples if row[0] == field])}
+                   for field in sorted({row[0] for row in samples})],
+        "limitations": ["Bounded collected current native pot/stack first publications only; incomplete coverage is not a live acceptance verdict.",
+            "API-to-DOM is API snapshot completion to first DOM publication, including serialization/network/parse; not wire-send or paint time.",
+            "Independent API polls validate source/field and capture/emit/ingest ticket clocks, not equality of per-request API completion stamps.",
+            "Valid source/field first publications retain total latency even when component telemetry is missing, contradictory or belongs to a newer bundle.",
+            "CPU provisional, last-read and repeated polls/publications are not native latency samples; missing/contradictory component clocks remain unknown or rejected.",
+            "Browser and producer monotonic clocks are never subtracted; UTC ordering cannot prove clock synchronization or numeric accuracy."]}
+
+
 def analyze(out, report_name="timing.json", run=None, context=None, ui_receipts=None):
     run = run if run is not None else json.loads((out / "run.json").read_bytes())
     start, end = run["started_at_unix_ms"], run["ended_at_unix_ms"]
@@ -1200,7 +1665,34 @@ def analyze(out, report_name="timing.json", run=None, context=None, ui_receipts=
 
     api_rows = input_rows(out / "api.jsonl")
     api = [(offset, row) for offset, row in api_rows
-           if start <= row.get("sampled_at_unix_ms", 0) <= end]
+            if start <= row.get("sampled_at_unix_ms", 0) <= end]
+    namespaces, namespace_receipts = VisualNamespaces(), {}
+    for offset, row in api[:ROW_LIMIT]:
+        state = row.get("state")
+        if isinstance(state, dict):
+            if namespaces.present:
+                namespace_receipts[offset] = None
+            if boundary_reason(sample_scope(state), run.get("scope", {}), run.get("session")):
+                namespaces.issues["sample-run-scope"] += 1
+                namespaces.invalidate_active()
+                continue
+            valid_registry = namespaces.observe(state)
+            if namespaces.present:
+                namespace_receipts[offset] = None
+            audit = row.get("projection")
+            if namespaces.present and isinstance(audit, dict) and isinstance(audit.get("issues"), list) and any(
+                    isinstance(issue, str) and "namespace" in issue for issue in audit["issues"][:64]):
+                namespaces.issues["projection-namespace-loss"] += 1
+                valid_registry = False
+                namespaces.invalidate_active()
+            path = VisualNamespaces.context_path(state)
+            if valid_registry and isinstance(path, str) and any(Path(path) == Path(value) for value in namespaces.active_paths):
+                namespace_receipts[offset] = Path(path).parent.name
+    collected_registry = run.get("visual_namespaces")
+    if isinstance(collected_registry, dict) and isinstance(collected_registry.get("issues"), dict):
+        for name, count in list(collected_registry["issues"].items())[:64]:
+            if isinstance(name, str) and len(name) <= 128 and VisualNamespaces.integer(count):
+                namespaces.issues[name] = max(namespaces.issues[name], count)
     native = input_rows(session / "stdout.jsonl")
     ledger = input_rows(session / "ledger.jsonl")
     answers = input_rows(private_path(run["answers_log"]))
@@ -1208,13 +1700,17 @@ def analyze(out, report_name="timing.json", run=None, context=None, ui_receipts=
     compact = input_rows(session / "readouts.jsonl", READOUT_LIMIT)
     compact_info = inputs[-1]
     manifest = input_rows(private_path(run["manifest"]))
-    visual_rows = input_rows(private_path(run["manifest"]).with_name("visual.jsonl"))
+    visual_rows = [] if namespaces.present else input_rows(private_path(run["manifest"]).with_name("visual.jsonl"))
     ui_rows, ui_info = load_ui_receipts(ui_receipts, inputs)
     context_log = run.get("context_log") or next((row["state"].get("context_diagnostics", {}).get("log_path")
         for _, row in api if isinstance(row.get("state"), dict)
         and isinstance(row["state"].get("context_diagnostics"), dict)
         and row["state"]["context_diagnostics"].get("log_path")), None)
     context_attempts, context_input = [], {"missing": True, "complete": False}
+    if namespaces.present:
+        context_log = None
+        context_input = {"complete": False, "diagnostic_namespace_logs": True,
+                         "reason": "namespace candidates are separate from canonical context counts"}
     if context_log:
         try:
             log_path = private_path(context_log, PRIVATE / "laya/events")
@@ -1431,7 +1927,9 @@ def analyze(out, report_name="timing.json", run=None, context=None, ui_receipts=
     report = {"format": 1, "run": run, "inputs": inputs, "seats": seats,
               "reported_test_context": context,
               "readout_integrity": readout_audit,
-              "table_context": analyze_context(api, run, ui_rows, ui_info, context_attempts, context_input),
+              "table_context": analyze_context(api, run, ui_rows, ui_info, context_attempts, context_input, namespace_receipts),
+              "native_numeric_timing": analyze_native_timing(api, run, ui_rows, ui_info),
+              "diagnostic_namespaces": namespaces.analyze(api, run, inputs) if namespaces.present else None,
               "collection_integrity": {"projected_samples": sum(row.get("projected") is True for _, row in api),
                   "projection_incomplete_samples": sum(row.get("projection", {}).get("complete") is False for _, row in api),
                   "latest_projection": next((row["projection"] for _, row in reversed(api) if "projection" in row), None),
@@ -1508,6 +2006,12 @@ def summarize(report):
                 "readout_integrity": report.get("readout_integrity"),
                 "stop_reason": report["run"]["stop_reason"], "recording": report["recording"],
                 "visual": visual_summary,
+                "native_numeric_timing": {key: report.get("native_numeric_timing", {}).get(key) for key in
+                    ("schema_version", "sample_count", "complete_stage_sample_count", "stages_ms", "quantile_method",
+                     "complete_coverage", "observed_p95_below_3000_ms", "counts", "rejected_records", "unknown_records",
+                     "fields", "input", "limitations")},
+                "diagnostic_namespaces": {key: (report.get("diagnostic_namespaces") or {}).get(key) for key in
+                    ("schema_version", "counts", "issues", "limits", "observed_prefixes_complete", "complete_coverage", "semantics", "limitations")},
                 "context": {key: report.get("table_context", {}).get(key) for key in
                     ("coverage", "test_result", "contexts", "native_context_attempts", "sample_counts",
                      "rejected_records", "event_kind_counts", "event_evidence")},
@@ -1539,6 +2043,7 @@ def collect(args, out):
     count, bytes_written, api_bytes, failures, projection_failures = 0, 0, 0, 0, 0
     reason, expected_scope = "duration-limit", {}
     projection = CompactProjection()
+    namespaces, last_context_path = VisualNamespaces(), None
     evidence_paths = [answers, manifest, manifest.with_name("visual.jsonl"), *(
         session / name for name in ("stdout.jsonl", "ledger.jsonl", "readouts.jsonl", "perception.jsonl"))]
     run = {"format": 1, "session": args.session, "session_dir": str(session.relative_to(ROOT)),
@@ -1549,7 +2054,9 @@ def collect(args, out):
                        "max_samples": 1201, "input_bytes_per_file": INPUT_LIMIT, "rows_per_file": ROW_LIMIT,
                        "api_row_bytes": LINE_LIMIT, "projected_events": EVENT_LIMIT,
                        "projected_events_per_sample": EVENT_ROW_LIMIT, "ui_receipt_bytes": UI_RECEIPT_LIMIT,
-                       "ui_receipt_rows": EVENT_LIMIT, "context_log_bytes": 8 * 1024 * 1024},
+                        "ui_receipt_rows": EVENT_LIMIT, "context_log_bytes": 8 * 1024 * 1024,
+                        "diagnostic_namespaces": NAMESPACE_LIMIT, "namespace_log_bytes": NAMESPACE_BYTES,
+                        "namespace_log_rows": NAMESPACE_ROWS},
             "api_samples_projected": True, "response_hash_basis": "unprojected-http-body",
            "input_sizes_at_start": {str(path.relative_to(ROOT)): path.stat().st_size
                                     for path in (answers, manifest, session / "stdout.jsonl", session / "ledger.jsonl", session / "readouts.jsonl")
@@ -1602,20 +2109,36 @@ def collect(args, out):
                         for key, value in scope.items():
                             if value is not None:
                                 expected_scope.setdefault(key, value)
-                    projected, audit = projection.project(state)
+                    registry_valid = namespaces.observe(state) if reason == "duration-limit" else False
+                    context_path = VisualNamespaces.context_path(state)
+                    namespace_id = (Path(context_path).parent.name if registry_valid and isinstance(context_path, str)
+                        and any(Path(context_path) == Path(path) for path in namespaces.active_paths) else None)
+                    projected, audit = projection.project(state, namespace_id)
                     projection_failures += not audit["complete"]
                     entry.update(state=projected, projected=True, projection=audit,
                                  response_sha256=hashlib.sha256(raw).hexdigest(), response_bytes=len(raw))
                     diagnostics = projected.get("context_diagnostics")
                     if isinstance(diagnostics, dict) and diagnostics.get("log_path"):
-                        path = private_path(diagnostics["log_path"], PRIVATE / "laya/events")
-                        if run.get("context_log") not in (None, str(path.relative_to(ROOT))):
-                            if reason == "duration-limit":
-                                reason = "context-log-changed"
+                        if namespaces.present:
+                            supplied = diagnostics["log_path"]
+                            if registry_valid and isinstance(supplied, str) and any(Path(supplied) == Path(path) for path in namespaces.active_paths):
+                                last_context_path = supplied
+                            else:
+                                namespaces.issues["active-log-unvalidated"] += 1
+                                if last_context_path is not None and (not isinstance(supplied, str) or Path(last_context_path) != Path(supplied)) and reason == "duration-limit":
+                                    reason = "context-log-changed"
+                                if last_context_path is None and isinstance(supplied, str):
+                                    last_context_path = supplied
                         else:
-                            run["context_log"] = str(path.relative_to(ROOT))
-                            if path not in evidence_paths:
-                                evidence_paths.append(path)
+                            path = private_path(diagnostics["log_path"], PRIVATE / "laya/events")
+                            if last_context_path is not None and Path(last_context_path) != path.relative_to(ROOT):
+                                if reason == "duration-limit":
+                                    reason = "context-log-changed"
+                            else:
+                                run["context_log"] = str(path.relative_to(ROOT))
+                                last_context_path = run["context_log"]
+                                if path not in evidence_paths:
+                                    evidence_paths.append(path)
                     if isinstance(projected.get("capture_session"), dict) and projected["capture_session"].get("status") in (
                             "failed", "stopped", "complete", "completed") and reason == "duration-limit":
                         reason = "capture-interrupted"
@@ -1656,6 +2179,12 @@ def collect(args, out):
                     input_sizes_at_end={str(path.relative_to(ROOT)): path.stat().st_size
                                         for path in evidence_paths if path.is_file()})
         run["input_sizes_at_end"][str((out / "api.jsonl").relative_to(ROOT))] = bytes_written
+        if namespaces.present:
+            run["visual_namespaces"] = namespaces.snapshot()
+            run["collection_complete"] &= not namespaces.issues
+            for namespace in namespaces.entries.values():
+                for kind in ("visual_log", "context_log"):
+                    run["input_sizes_at_end"][namespace[kind]["path"]] = namespace[kind]["bytes"]
         write_json(out / "run.json", run)
     analyze(out, ui_receipts=getattr(args, "ui_receipts_path", None))
 
