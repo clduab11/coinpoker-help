@@ -530,6 +530,61 @@ Historical score eligibility is not live admission or human capability approval.
 Strict advice events/validator/R17 remain unchanged. Stage 2 implementation and
 later live observing acceptance each require their own explicit approval.
 
+### Current A2 Transport Diagnostics (2026-10-16)
+
+These extensions describe diagnostic evidence, not new observation admission or
+action authority. They do not change source selection, approval versions, field
+floors, or original capture leases. Earlier historical/proposed sections are not
+the implementation status of these extensions.
+
+Native `manual_capture` progress optionally includes `capture_failure`, either
+null or exactly `{code, detail}`. The producer retains the latest diagnostic,
+including after a recovered resize; it is not necessarily the final `stop_reason`.
+The private `status.json` retains the bounded detail (at most 1,024 printable ASCII
+bytes). Public `capture_session` exposes only `capture_failure_code`, null or a
+member of `scripts/laya_capture.py::CAPTURE_FAILURE_CODES`. Examples include
+`foreign-overlap`, `popup-overlap`, `center-mismatch`, and generic `backend`.
+No HWND, PID, class, rectangle, or arbitrary error text is carried in that public
+field. Classification is explanatory only; it does not authorize retries,
+reselection, or automatic rearming.
+
+The browser snapshot may contain optional `native_timing` with `schema_version:1`
+and these integer fields: `generation`, `epoch`, `captured_at_ms`,
+`captured_at_unix_ms`, `emitted_at_unix_ms`, `ingested_at_unix_ms`, and
+`api_snapshot_at_unix_ms`. The capture clocks are original producer clocks;
+`captured_at_ms` is not interchangeable with UTC or browser monotonic time.
+The UTC clocks describe acquisition, emission, consumer admission, and completion
+of the API snapshot respectively. API-to-DOM therefore includes subsequent
+serialization, transport and browser processing; it is neither wire-send latency
+nor paint time. Contradictory or missing clocks are unknown, never measured zero.
+
+Matched timing can accompany a newly published current native pot/stack render
+receipt. It cannot supply source identity, admit a value, renew a lease, borrow a
+newer bundle's clocks for an older cached field, or retrofit an existing first-DOM
+timestamp. Offline native timing reports use distinct source/field first
+publications and nearest-rank p95. Valid total capture-to-DOM samples remain
+counted when component clocks are unavailable; component coverage and rejected
+or ambiguous tickets are reported separately. CPU provisional and last-read
+values are not native current samples. Synthetic timing checks do not establish
+physical accuracy, sustained coverage, or a live latency pass.
+
+`visual_diagnostics` schema version 1 describes at most one active namespace and
+32 prior same-binding namespaces, with an explicit overflow count. Each entry
+identifies its binding scope and sequence, `active` or `retired-uncommitted`
+status, retirement reason, worker-drain state, and bounded log/archive counters.
+Its `visual_log` and `context_log` descriptors contain root-relative paths,
+observed prefix byte ceilings, and completeness flags. A zero-byte stream may
+not yet have a file. Retired prefixes freeze before draining: later writes must
+not extend the sampled prefix, even after workers finish.
+
+Namespace records are explicitly `diagnostic-attempts-only` with
+`admitted_evidence:false`; a log row alone is not a current observation. Namespace
+registries reset across owner/feed/source/epoch/geometry bindings. Diagnostic
+collection must keep those boundaries, aggregate budgets and overflow visible,
+without treating legitimate same-binding rotation as source loss or silently
+merging abandoned work into canonical evidence. Historical manifest-adjacent
+logs remain a distinct legacy layout, not permission to search arbitrary paths.
+
 ### Offline draft labels are not events (2026-10-10)
 
 The private `observing-20261010-v2-staging/human-review-20261010` sidecar binds
