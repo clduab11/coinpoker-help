@@ -674,6 +674,7 @@ class DashboardState:
         self.analysis_inputs = False
         self.advice = self.advice_deadline = self.decision_seen = None
         self.partial_observation = self.partial_deadline = None
+        self.native_timing = None
         self.partial_source = self.partial_source_deadline = None
         self.partial_source_expires = None
         self.partial_ticket = self.invalidated_partial_ticket = None
@@ -768,6 +769,7 @@ class DashboardState:
         self._clear_analysis()
         self.observation = self.observation_ticket = self.deadline = None
         self.partial_observation = self.partial_deadline = None
+        self.native_timing = None
         self.partial_ticket = None
         if (reason not in ("partial-observation-expired", "observation-expired")
                 and (version is None or self.experimental_source is None or version >= self.experimental_source[:2])):
@@ -1254,6 +1256,10 @@ class DashboardState:
                 self.partial_observation = {**view, "generation": gen, "epoch": epoch,
                                              "captured_at_unix_ms": captured, "expires_at_unix_ms": expires,
                                              "remaining_ms": remaining}
+                self.native_timing = {"schema_version": 1, "generation": gen, "epoch": epoch,
+                    "captured_at_ms": captured_mono, "captured_at_unix_ms": captured,
+                    "emitted_at_unix_ms": record["emitted_at_unix_ms"],
+                    "ingested_at_unix_ms": int(self.wall() * 1000)}
                 original = record.get("original_capture")
                 if isinstance(original, dict):
                     sequence = integer(original.get("frame_index"))
@@ -1711,7 +1717,8 @@ class DashboardState:
                                        "source_id": self.target if self.capture["epoch"] is not None else None,
                                        "generation": self.version[0] if self.capture["epoch"] is not None else None},
                                     "observation": self.observation, "advice": self.advice,
-                                    "partial_observation": self.partial_observation,
+                                     "partial_observation": self.partial_observation,
+                                     "native_timing": self.native_timing if self.partial_observation is not None else None,
                                      "experimental_candidates": self.experimental_candidates,
                                      "readout_evidence": {"enabled": self.readouts.path is not None,
                                                           "complete": self.readouts.complete,
@@ -1772,8 +1779,10 @@ class ManualSessionFeed:
         self.evidence_budget = self.evidence_last = None
         self.receipt_updated = self.receipt_elapsed = self.receipt_deadline = None
         self.candidate_updated = self.candidate_elapsed = None
+        self.owner_sample_serial = self.owner_sample_applied = 0
+        self.owner_receipt = manual_capture.default_snapshot()
         from laya_visual import VisualWorker
-        self.visual = VisualWorker(self.root, instance_id)
+        self.visual = VisualWorker(self.root, instance_id, wall=state.wall, monotonic=state.monotonic)
 
     def _failure(self, error, stage, row=None, *, persist=True):
         if self.failure_reason is None:
@@ -1821,6 +1830,7 @@ class ManualSessionFeed:
                 pass  # A separate, single bounded cause never blocks the owned stop.
 
     def _end(self, reason):
+        self.visual.revoke(reason)
         if self.stream_id is not None:
             if reason in {"receipt-invalid", "status-stale", "manual-session-ended"}:
                 self._failure(self.validation_reason or reason, "receipt", persist=False)
@@ -1927,10 +1937,26 @@ class ManualSessionFeed:
             self.receipt_updated, self.receipt_elapsed = updated, elapsed
         return valid
 
+    def _owner_sample(self):
+        with self.lock:
+            self.owner_sample_serial += 1
+            serial = self.owner_sample_serial
+            binding = self.session_id, self.stream_id
+        return serial, binding, manual_capture.public_snapshot(root=self.root)
+
+    def _owner_current(self, sample):
+        serial, binding, current = sample
+        if serial < self.owner_sample_applied or binding != (self.session_id, self.stream_id):
+            return self.owner_receipt, False
+        self.owner_sample_applied = serial
+        self.owner_receipt = current
+        return current, True
+
     def snapshot(self):
         # Polling can invalidate, but never joins, starts, or rearms a session.
+        sample = self._owner_sample()
         with self.lock:
-            current = manual_capture.public_snapshot(root=self.root)
+            current, _ = self._owner_current(sample)
             if self.stream_id is not None and not self._valid(current):
                 self._end(current.get("stop_reason") or ("model-not-ready" if self.state.model["model_state"] != "ready"
                                                          else "manual-session-ended"))
@@ -1950,27 +1976,50 @@ class ManualSessionFeed:
             snapshot["capture_session"] = {**current, "failure_reason": copy.deepcopy(self.failure_reason)
                                            if current.get("session_id") == self.session_id else None}
             snapshot["server"] = {**snapshot["server"], "instance_id": self.instance_id}
+            stream = self.stream_id
             partial = snapshot.get("partial_observation") or {}
             for capture in [partial.get("capture"), *(partial.get("field_captures") or {}).values()]:
                 if capture is not None:
                     capture["service_instance_id"] = self.instance_id
                     if capture.get("capture_session_id") is None:
                         capture["capture_session_id"] = self.session_id
-            snapshot["table_context"] = self.visual.context.snapshot(snapshot)
-            snapshot["visual_observation"] = self.visual.snapshot(snapshot,
-                occluded_regions=(snapshot["table_context"] or {}).get("occluded_regions", []))
-            snapshot["numeric_observation"] = self.visual.numeric.snapshot(snapshot,
-                occluded_regions=(snapshot["table_context"] or {}).get("occluded_regions", []))
-            snapshot["numeric_diagnostics"] = {"attempts": self.visual.numeric.attempts,
-                "dropped_frames": self.visual.numeric.dropped, "error": self.visual.numeric.last_error,
-                "last_timing": copy.deepcopy(self.visual.numeric.last_timing)}
-            self.visual.mask_snapshot(snapshot, snapshot["table_context"])
-            snapshot["event_evidence"] = self.visual.archive.snapshot()
-            snapshot["context_diagnostics"] = {"attempts": self.visual.context.attempts,
-                "dropped_frames": self.visual.context.dropped, "error": self.visual.context.last_error,
-                "log_complete": self.visual.context.log_complete, "log_bytes": self.visual.context.log_bytes,
-                "log_path": str((self.visual.archive.directory / "context.jsonl").relative_to(self.root))}
-            return snapshot
+        projection = self.visual.cached_snapshot(snapshot)
+        snapshot.update(projection)
+        with self.lock:
+            # Composition is outside the ordered feed lock. Retirement wins even
+            # when it races an HTTP copy that started with an earlier binding.
+            fresh = self.state.snapshot()
+            if stream != self.stream_id or fresh["event_seq"] != snapshot["event_seq"] or not fresh["capture"]["fresh_capture"]:
+                for key in ("table_context", "visual_observation", "numeric_observation", "event_evidence"):
+                    snapshot[key] = None
+                for key in ("context_diagnostics", "numeric_diagnostics"):
+                    snapshot.pop(key, None)
+                if isinstance(snapshot.get("visual_diagnostics"), dict):
+                    snapshot["visual_diagnostics"]["namespaces"] = []
+            # Expiry can mutate the native projection without advancing event_seq.
+            # Always select the final metadata projection before ref/mask binding.
+            snapshot.update({key: value for key, value in fresh.items() if key != "server"})
+            snapshot["capture_session"] = {**self.owner_receipt, "failure_reason": copy.deepcopy(self.failure_reason)
+                if self.owner_receipt.get("session_id") == self.session_id else None}
+            activity_pending = (self.owner_receipt.get("source_policy") in manual_capture.AUTOMATIC_POLICIES
+                                and self.owner_receipt.get("activity_state") != "active")
+            if activity_pending:
+                snapshot["observation"] = None
+                if self.owner_receipt.get("status") in {"idle", "capturing"}:
+                    snapshot["history"] = {**snapshot["history"], "state": "unavailable", "events": [], "counts": {}, "gaps": 0}
+            partial = snapshot.get("partial_observation") or {}
+            for capture in [partial.get("capture"), *(partial.get("field_captures") or {}).values()]:
+                if capture is not None:
+                    capture["service_instance_id"] = self.instance_id
+                    if capture.get("capture_session_id") is None:
+                        capture["capture_session_id"] = self.session_id
+            # This final bounded mask operation is metadata-only, not a lane or
+            # pixel/cache lock. Keep it ordered with new visual mask metadata.
+            self.visual.fence_snapshot(snapshot, projection)
+            self.visual.mask_snapshot(snapshot, snapshot.get("table_context"))
+            if snapshot.get("native_timing") is not None:
+                snapshot["native_timing"]["api_snapshot_at_unix_ms"] = int(self.state.wall() * 1000)
+        return snapshot
 
     def authorizes(self, session_id, instance_id):
         if instance_id != self.instance_id:
@@ -1978,17 +2027,22 @@ class ManualSessionFeed:
         # A native first request can precede the next passive tail tick. Joining
         # an already approved private receipt does not spawn/select a source.
         self.poll()
+        sample = self._owner_sample()
         with self.lock:
-            current = manual_capture.public_snapshot(root=self.root)
+            current, _ = self._owner_current(sample)
             return (session_id == self.session_id and self.stream_id is not None
                     and not self.failed and self._valid(current))
 
-    def poll(self):
+    def poll(self, *, sample=None):
+        if sample is None:
+            sample = self._owner_sample()
         with self.lock:
+            current, applicable = self._owner_current(sample)
+            if not applicable:
+                return
             self._flush_stops()
             if self.closed.is_set():
                 return
-            current = manual_capture.public_snapshot(root=self.root)
             sid = current["session_id"]
             if sid != self.session_id:
                 self._end("manual-session-replaced")
@@ -2089,7 +2143,7 @@ class ManualSessionFeed:
                         return
                 if len(self.pending) > MAX_RECORD:
                     raise ValueError("manual-feed-size")
-                latest = manual_capture.public_snapshot(root=self.root)
+                latest, _ = self._owner_current(self._owner_sample())
                 if not self._valid(latest):
                     self._end(latest.get("stop_reason") or "manual-session-ended")
                     self._flush_stops()
@@ -2151,13 +2205,19 @@ class ManualSessionFeed:
             self.visual.submit({**row, "capture_session_id": self.session_id}, self.stream_id,
                                self.state._target(row.get("identity")), self.state.version[1])
             return
+        previous_binding = self.state.target, self.state.version[1], self.state.capture["width"], self.state.capture["height"]
         self.state.ingest(row, session_id=self.stream_id)
+        binding = self.state.target, self.state.version[1], self.state.capture["width"], self.state.capture["height"]
+        if (not self.state.capture["fresh_capture"] or self.state.capture.get("epoch") is None
+                or previous_binding != binding):
+            self.visual.revoke("native-capture-unavailable")
 
     def ingest_live(self, session_id, row):
         """Publish one pipe record under the same approval and typed-feed guards."""
-        self.poll()
+        sample = self._owner_sample()
+        self.poll(sample=sample)
         with self.lock:
-            current = manual_capture.public_snapshot(root=self.root)
+            current = self.owner_receipt
             if (session_id != self.session_id or self.source_policy != "automatic-sustained"
                     or self.stream_id is None or not self._valid(current)):
                 with self.state.lock:
@@ -2169,15 +2229,24 @@ class ManualSessionFeed:
                 if row.get("event") == "manual_capture":
                     raise ValueError("unexpected-live-receipt")
                 self._ingest_row(row, current)
-                latest = manual_capture.public_snapshot(root=self.root)
-                if self._valid(latest):
-                    return True
-                self._end(latest.get("stop_reason") or "manual-session-ended")
+                stream = self.stream_id
             except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
                 self._failure(error, "live", row)
                 self.failed = True
                 self._end("manual-feed-failed")
                 manual_capture.fail_session(session_id, "feed-failed", root=self.root)
+                self._flush_stops()
+                return False
+        # Preserve the post-ingest owner-change fence, without filesystem receipt
+        # work under the ordered feed lock or three full snapshots per row.
+        sample = self._owner_sample()
+        with self.lock:
+            if session_id != self.session_id or stream != self.stream_id:
+                return False  # A predecessor completion cannot retire its successor.
+            latest, _ = self._owner_current(sample)
+            if self.stream_id is not None and self._valid(latest):
+                return True
+            self._end(latest.get("stop_reason") or "manual-session-ended")
             self._flush_stops()
             return False
 
@@ -2205,6 +2274,7 @@ class ManualSessionFeed:
 
     def stop(self):
         self.closed.set()
+        self.visual.revoke("manual-feed-stopped")
         try:
             self.visual.stop()
         finally:

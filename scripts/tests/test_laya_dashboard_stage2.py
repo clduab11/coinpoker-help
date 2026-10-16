@@ -50,6 +50,31 @@ class PartialTests(unittest.TestCase):
         self.assertEqual(snap["capture"]["generation"], 2)
         self.assertNotIn("PRIVATE", json.dumps(snap["capture"]))
 
+    def test_a2_native_timing_records_only_latest_admission_and_never_poll_renews_ingest(self):
+        source = self.record()
+        admitted = int(self.clock.wall() * 1000)
+        self.state.ingest({**source, "native_timing": {"ingested_at_unix_ms": 1}})
+        expected = {"schema_version": 1, "generation": 1, "epoch": 1,
+            "captured_at_ms": source["observation"]["captured_at_ms"],
+            "captured_at_unix_ms": source["captured_at_unix_ms"],
+            "emitted_at_unix_ms": source["emitted_at_unix_ms"], "ingested_at_unix_ms": admitted}
+        self.assertEqual(self.state.snapshot()["native_timing"], expected)
+        self.clock.value += .2
+        self.state.ingest(source)  # Duplicate bundle is suppressed, not a new ingestion clock.
+        self.assertEqual(self.state.snapshot()["native_timing"], expected)
+        self.state.ingest(self.record(0))  # Older partial cannot replace the current chain.
+        self.assertEqual(self.state.snapshot()["native_timing"], expected)
+        self.clock.value += 1
+        self.assertIsNone(self.state.snapshot()["native_timing"])
+
+    def test_a2_native_timing_does_not_survive_stream_replacement_or_explicit_invalidation(self):
+        source = self.record()
+        self.state.ingest(source)
+        self.state.ingest(self.scoped_invalidation(source))
+        self.assertIsNone(self.state.snapshot()["native_timing"])
+        self.state.begin_stream()
+        self.assertIsNone(self.state.snapshot()["native_timing"])
+
     def test_a1_acquisition_and_delivery_boundaries_are_independent(self):
         now = int(self.clock.wall() * 1000)
         for acquisition, delivery, expected in ((999, 2499, True), (1000, 0, False),
@@ -1500,7 +1525,7 @@ for (const match of html.matchAll(/<([a-z0-9]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g))
   item.className = item.attrs.class || ''; nodes.set(item.id, item);
 }
 nodes.get('history-filter').value = 'all';
-let wall = input.snapshot.capture.last_heartbeat_unix_ms, mono = 0, timer = 0;
+let wall = input.scenario === 'native-timing' ? input.snapshot.native_timing.api_snapshot_at_unix_ms : input.snapshot.capture.last_heartbeat_unix_ms, mono = 0, timer = 0;
 class MockDate extends Date { static now() { return wall; } }
 const document = { hidden: false, getElementById: id => { assert(nodes.has(id), `missing DOM id ${id}`); return nodes.get(id); },
   querySelectorAll: () => [...nodes.values()].filter(x => x.attrs.role === 'tab'),
@@ -1510,15 +1535,29 @@ const window = { setTimeout: () => ++timer, clearTimeout() {}, setInterval() {},
 const context = { document, window, Date: MockDate, performance: { now: () => mono }, Intl, URL, TextDecoder,
   AbortController, fetch: () => { throw Error('offline test: no network'); } };
 vm.createContext(context);
-vm.runInContext(source.replace(/\}\)\(\);\s*$/, 'globalThis.test = { normalizeSnapshot, acceptSnapshot, refreshClocks, suspend, resume, loadReference }; })();'), context);
+vm.runInContext(source.replace(/\}\)\(\);\s*$/, 'globalThis.test = { normalizeSnapshot, acceptSnapshot, refreshClocks, suspend, resume, loadReference, receipts: () => renderReceipts }; })();'), context);
 const test = context.test, value = x => test.normalizeSnapshot(x);
 const accept = raw => { const normalized = value(raw); assert(normalized); test.acceptSnapshot(normalized, 0); };
 const newer = (gen, seq) => { const raw = structuredClone(input.snapshot); raw.event_seq = seq;
   raw.capture.last_heartbeat_unix_ms = wall; const obs = raw.partial_observation || raw.observation;
   obs.generation = gen; obs.captured_at_unix_ms = wall - 500; obs.expires_at_unix_ms = wall + 1000; return raw; };
 const visible = () => nodes.get('monitor-readings').dataset.reading !== 'unknown';
+if (input.scenario === 'native-timing') accept(input.next_snapshot);
 accept(input.snapshot);
-if (input.scenario === 'render') {
+if (input.scenario === 'native-timing') {
+  const normalized = value(input.snapshot);
+  assert(normalized?.nativeTiming, 'real feed native timing chain rejected: ' + JSON.stringify({
+    timing: input.snapshot.native_timing, observation: normalized?.observation,
+    service: normalized?.service, capture: normalized?.capture, recording: normalized?.recording }));
+  const receipts = test.receipts().filter(row => row.field === 'pot_size' && row.status === 'current');
+  assert.equal(receipts.length, 1, 'native pot was not published exactly once: ' + JSON.stringify({
+    pot: nodes.get('amount-pot').textContent, receipts: test.receipts().filter(row => row.field === 'pot_size') }));
+  assert.deepEqual(JSON.parse(JSON.stringify(receipts[0].native_timing)), input.snapshot.native_timing);
+  assert.deepEqual(JSON.parse(JSON.stringify(receipts[0].capture)), JSON.parse(JSON.stringify(normalized.observation.captureRef)));
+  assert.equal(receipts[0].capture.service_instance_id, input.snapshot.server.instance_id);
+  assert.equal(receipts[0].capture.capture_session_id, input.snapshot.capture_session.session_id);
+  assert.equal(nodes.get('amount-pot').textContent, '123.45 chips');
+} else if (input.scenario === 'render') {
   assert(visible()); assert.equal(nodes.get('amount-pot').textContent, '123.45 chips');
   const seats = nodes.get('seat-readings').childNodes;
   assert.equal(seats.length, 6); assert.deepEqual(seats.map(s => s.dataset.seat), ['1','2','3','4','5','6']);

@@ -5,6 +5,10 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
+import time
+import hashlib
+import io
 import unittest
 from unittest.mock import Mock, patch
 
@@ -70,6 +74,8 @@ class FeedFailureTests(unittest.TestCase):
         self.visual.context.snapshot.return_value = None
         self.visual.snapshot.return_value = None
         self.visual.numeric.snapshot.return_value = None
+        self.visual.cached_snapshot.return_value = {"table_context": None, "visual_observation": None,
+                                                    "numeric_observation": None}
         self.visual.archive.directory = self.root / ".local/laya/events/offline"
         for name, options in (("public_snapshot", {"side_effect": lambda **_: copy.deepcopy(self.current)}),
                               ("fail_session", {"side_effect": self.fail_session}),
@@ -312,6 +318,228 @@ class FeedFailureTests(unittest.TestCase):
         self.assertIsNone(self.feed.failure_reason)
         self.fail_capture.assert_not_called()
 
+    def test_obsolete_native_invalidation_does_not_retire_independent_visual_lanes(self):
+        self.assertTrue(self.feed.ingest_live(SESSION, self.health()))
+        self.visual.revoke.reset_mock()
+        self.assertTrue(self.feed.ingest_live(SESSION, {"event": "observation_invalidated", "schema_version": 2,
+            "service_instance_id": INSTANCE, "source_policy": "automatic-sustained", "activity_state": "active",
+            "generation": 135, "epoch": 1, "identity": IDENTITY, "reason": "frame-unreadable",
+            "emitted_at_unix_ms": self.utc - 200}))
+        self.assertTrue(self.state.snapshot()["capture"]["fresh_capture"])
+        self.visual.revoke.assert_not_called()
+
+    def replace_binding(self, sid):
+        with self.feed.lock:
+            self.current["session_id"] = sid
+            self.feed.session_id = sid
+            self.state.begin_stream()
+            self.feed.stream_id = self.state.session_id
+            self.feed.snapshot()
+            return self.feed.stream_id
+
+    def test_slow_post_ingest_owner_sample_cannot_retire_replacement_binding(self):
+        entered, release = threading.Event(), threading.Event()
+        calls = [0]
+        outcome = []
+        def receipt(**kwargs):
+            calls[0] += 1
+            current = copy.deepcopy(self.current)
+            if calls[0] == 2:
+                entered.set()
+                release.wait(3)
+            return current
+        with patch.object(dashboard.manual_capture, "public_snapshot", side_effect=receipt):
+            thread = threading.Thread(target=lambda: outcome.append(self.feed.ingest_live(SESSION, self.health())))
+            thread.start()
+            self.assertTrue(entered.wait(2))
+            replacement = self.replace_binding("b" * 32)
+            self.visual.revoke.reset_mock()
+            release.set()
+            thread.join(3)
+        self.assertEqual(outcome, [False])
+        self.assertEqual(self.feed.stream_id, replacement)
+        self.visual.revoke.assert_not_called()
+
+    def test_slow_snapshot_owner_sample_cannot_retire_replacement_binding(self):
+        entered, release = threading.Event(), threading.Event()
+        calls = [0]
+        results = []
+        def receipt(**kwargs):
+            calls[0] += 1
+            current = copy.deepcopy(self.current)
+            if calls[0] == 1:
+                entered.set()
+                release.wait(3)
+            return current
+        with patch.object(dashboard.manual_capture, "public_snapshot", side_effect=receipt):
+            thread = threading.Thread(target=lambda: results.append(self.feed.snapshot()))
+            thread.start()
+            self.assertTrue(entered.wait(2))
+            replacement = self.replace_binding("b" * 32)
+            self.visual.revoke.reset_mock()
+            release.set()
+            thread.join(3)
+        self.assertEqual(self.feed.stream_id, replacement)
+        self.assertEqual(results[0]["capture_session"]["session_id"], "b" * 32)
+        self.visual.revoke.assert_not_called()
+
+    def test_authorizes_updates_owner_sample_cache_before_delayed_snapshot_fallback(self):
+        self.assertTrue(self.feed.ingest_live(SESSION, self.health()))
+        stream = self.feed.stream_id
+        entered, release = threading.Event(), threading.Event()
+        calls = [0]
+        def receipt(**kwargs):
+            calls[0] += 1
+            if calls[0] == 1:
+                old = copy.deepcopy(self.current)
+                entered.set()
+                release.wait(3)
+                return old
+            self.utc += 100
+            self.current["updated_at_unix_ms"] += 100
+            self.current["elapsed_ms"] += 100
+            return copy.deepcopy(self.current)
+        with patch.object(dashboard.manual_capture, "public_snapshot", side_effect=receipt):
+            thread = threading.Thread(target=self.feed.snapshot)
+            thread.start()
+            self.assertTrue(entered.wait(2))
+            try:
+                self.assertTrue(self.feed.authorizes(SESSION, INSTANCE))
+                self.visual.revoke.reset_mock()
+            finally:
+                release.set()
+                thread.join(3)
+        self.assertEqual(self.feed.stream_id, stream)
+        self.visual.revoke.assert_not_called()
+
+    def blocked_pipeline_responsiveness(self, stage):
+        worker = self.visual_type(self.root, INSTANCE, wall=self.state.wall, monotonic=self.state.monotonic)
+        self.feed.visual = worker
+        def finish():
+            worker.stop()
+            self.assertTrue(worker.shutdown_complete.wait(4))
+        self.addCleanup(finish)
+        from PIL import Image
+        buffer = io.BytesIO()
+        Image.new("RGB", (900, 686), "black").save(buffer, format="PNG")
+        png = buffer.getvalue()
+        directory = self.root / ".local/captures/utc-123-123456789-practice"
+        directory.mkdir(parents=True)
+        (directory / "live-frame-0.png").write_bytes(png)
+        row = failed_boundary_frame()
+        row["capture_directory"] = str(directory)
+        row["frame"].update(filename="live-frame-0.png", width=900, height=686,
+            sha256=hashlib.sha256(png).hexdigest(), png_bytes=len(png))
+        entered, release = threading.Event(), threading.Event()
+        pin = worker._pin
+        def blocked(*args, **kwargs):
+            entered.set()
+            release.wait(3)
+            return pin(*args, **kwargs)
+        self.assertTrue(self.feed.ingest_live(SESSION, self.health(frame_width=900, frame_height=686)))
+        from scripts.tests.test_laya_dashboard_stage2 import PartialTests
+        fixture = PartialTests()
+        fixture.clock = type("Clock", (), {"wall": lambda _: self.state.wall()})()
+        partial = fixture.record(138, service_instance_id=INSTANCE, source_policy="automatic-sustained", activity_state="active")
+        partial["observation"].update(identity=copy.deepcopy(IDENTITY),
+            captured_at_ms=row["frame"]["captured_at_monotonic_ms"] + 100)
+        partial["captured_at_unix_ms"] = self.utc - 100
+        partial["original_capture"] = {"schema_version": 1, "frame_index": 504, "width": 900, "height": 686,
+            "recording_session_id": "synthetic-native-original", "capture_session_id": SESSION, "native_source_id": "7",
+            "sha256": hashlib.sha256(png).hexdigest(), "source_utc_unix_ms": partial["captured_at_unix_ms"],
+            "captured_at_monotonic_ms": partial["observation"]["captured_at_ms"]}
+        append = self.state.ledger.append = Mock()
+        timings, results = {}, {}
+        from contextlib import ExitStack
+        import laya_visual
+        with ExitStack() as stack:
+            if stage == "png-read":
+                stack.enter_context(patch.object(worker, "_pin", side_effect=blocked))
+            elif stage == "hash":
+                digest = laya_visual.hashlib.sha256
+                def blocked_hash(*args, **kwargs):
+                    if threading.current_thread().name == "visual-ingress":
+                        entered.set()
+                        release.wait(3)
+                    return digest(*args, **kwargs)
+                stack.enter_context(patch.object(laya_visual.hashlib, "sha256", side_effect=blocked_hash))
+            elif stage == "comparison":
+                compare = laya_visual._region_checks
+                def blocked_compare(*args, **kwargs):
+                    entered.set()
+                    release.wait(3)
+                    return compare(*args, **kwargs)
+                def compare_submit(engine, frame, filename, scope, pinned):
+                    laya_visual._region_checks(pinned, pinned, [[0, 0, 2, 2]])
+                stack.enter_context(patch.object(laya_visual.VisualLanes, "submit_pinned", compare_submit))
+                stack.enter_context(patch.object(laya_visual, "_region_checks", side_effect=blocked_compare))
+            elif stage == "worker-error":
+                drop = worker._drop
+                def dropped(reason):
+                    drop(reason)
+                    if reason == "visual-worker-error":
+                        entered.set()
+                stack.enter_context(patch.object(worker, "_pin", side_effect=OSError("synthetic read error")))
+                stack.enter_context(patch.object(worker, "_drop", side_effect=dropped))
+            else:
+                project = worker._project
+                def blocked_project(*args):
+                    entered.set()
+                    release.wait(3)
+                    return project(*args)
+                stack.enter_context(patch.object(laya_visual.VisualLanes, "submit_pinned", return_value=None))
+                stack.enter_context(patch.object(worker, "_project", side_effect=blocked_project))
+            self.assertTrue(self.feed.ingest_live(SESSION, row))
+            self.assertTrue(entered.wait(1))
+            try:
+                for name, action in (("native_health", lambda: self.feed.ingest_live(SESSION,
+                        self.health(generation=137, frame_count=503, frame_width=900, frame_height=686))),
+                        ("native_partial", lambda: self.feed.ingest_live(SESSION, partial)),
+                        ("api_snapshot", self.feed.snapshot), ("stop", self.feed.stop)):
+                    returned = threading.Event()
+                    def invoke():
+                        started = time.perf_counter()
+                        results[name] = action()
+                        timings[name] = round((time.perf_counter() - started) * 1000, 3)
+                        returned.set()
+                    thread = threading.Thread(target=invoke)
+                    thread.start()
+                    self.assertTrue(returned.wait(.4), name + " blocked behind visual input")
+                    thread.join(1)
+                self.assertEqual(self.state.capture["frames"], 503)
+                self.assertIsNone(self.feed.failure_reason)
+                self.assertTrue(results["native_partial"])
+                admitted = [call.args[0] for call in append.call_args_list
+                            if call.args[0].get("event") == "partial_observation"]
+                self.assertEqual(admitted[-1]["disposition"], "admitted")
+                self.assertEqual(admitted[-1]["reason"], "accepted")
+                self.assertEqual(admitted[-1]["capture_session_id"], SESSION)
+                api = results["api_snapshot"]
+                self.assertEqual(api["partial_observation"]["pot_size"], 12345)
+                source = api["partial_observation"]["field_captures"]["pot_size"]
+                self.assertEqual(source["service_instance_id"], INSTANCE)
+                self.assertEqual(source["capture_session_id"], SESSION)
+                self.assertEqual(source["sha256"], partial["original_capture"]["sha256"])
+                self.assertEqual(api["native_timing"]["captured_at_ms"], partial["observation"]["captured_at_ms"])
+            finally:
+                release.set()
+        print("synthetic blocked-" + stage + " responsiveness ms=" + json.dumps(timings, sort_keys=True))
+
+    def test_real_ingress_read_block_does_not_block_native_health_api_or_stop(self):
+        self.blocked_pipeline_responsiveness("png-read")
+
+    def test_real_hash_block_does_not_block_native_health_api_or_stop(self):
+        self.blocked_pipeline_responsiveness("hash")
+
+    def test_real_comparison_block_does_not_block_native_health_api_or_stop(self):
+        self.blocked_pipeline_responsiveness("comparison")
+
+    def test_projection_block_does_not_block_native_health_api_or_stop(self):
+        self.blocked_pipeline_responsiveness("projection")
+
+    def test_worker_read_error_is_visual_diagnostic_without_native_feed_failure(self):
+        self.blocked_pipeline_responsiveness("worker-error")
+
     def test_injected_submit_exception_records_exact_cause_and_original_metadata(self):
         self.assertTrue(self.feed.ingest_live(SESSION, self.health()))
         self.visual.submit.side_effect = TypeError("int() argument must be a string, not 'dict'")
@@ -533,9 +761,6 @@ class FeedFailureTests(unittest.TestCase):
         self.assertIsNotNone(latest)
         worker = self.visual_type(dashboard.ROOT, INSTANCE, wall=lambda: self.utc / 1000)
         scope = latest["session_id"], latest["source_id"], latest["epoch"]
-        worker.scope = scope
-        worker.value = latest
-        worker.value_pixels = (directory / ("frame-%010d.png" % latest["sequence"])).read_bytes()
         self.feed.visual, self.feed.stream_id = worker, scope[0]
         self.state.session_id = scope[0]
         self.state.version = (136, 1)
@@ -555,14 +780,13 @@ class FeedFailureTests(unittest.TestCase):
                     self.assertEqual(row, failed_boundary_frame())
                 self.utc = row["frame"]["source_utc_unix_ms"] + 100
                 self.feed._ingest_row(row, {"activity_state": "verifying"})
-                self.assertEqual(worker.last_frame, frame["frame_index"])
+                self.assertEqual(worker.pending[0]["frame"]["frame_index"], frame["frame_index"])
                 count += 1
             self.assertEqual(count, 7)
-            self.assertEqual(worker.last_frame, 505)
-            self.assertGreaterEqual(thread.call_count, 2)
-            self.assertLessEqual(thread.call_count, 4)
+            self.assertEqual(worker.pending[0]["frame"]["frame_index"], 505)
+            self.assertEqual(thread.call_count, 1)  # One ingress pump; no callback-side lane reads.
         print("finite saved submit: visual_rows=%d, final_frame=%d, no recognition/threads" %
-              (count, worker.last_frame))
+              (count, worker.pending[0]["frame"]["frame_index"]))
 
 
 if __name__ == "__main__":

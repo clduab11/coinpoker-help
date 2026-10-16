@@ -5,13 +5,14 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from laya_evidence import EventEvidence
-from laya_visual import ContextWorker, VisualWorker, _current_region
+from laya_visual import ContextWorker, VisualLanes, _current_region
 
 
 class ContextWorkerTests(unittest.TestCase):
@@ -118,7 +119,7 @@ class ContextWorkerTests(unittest.TestCase):
         self.assertIsNone(self.worker.roster_for_frame(capture, self.png, []))
 
     def test_occlusion_masks_real_partial_projection_not_full_observation(self):
-        visual = VisualWorker(Path(self.temp.name), "other", wall=lambda: 10)
+        visual = VisualLanes(Path(self.temp.name), "other", wall=lambda: 10)
         self.addCleanup(visual.stop)
         visual.regions = {"regions": {"pot": [.4, .3, .6, .4]}}
         from laya_prep import box_px
@@ -132,7 +133,7 @@ class ContextWorkerTests(unittest.TestCase):
         self.assertEqual(state["field_statuses"]["pot_size"]["reason"], "occluded")
 
     def test_submit_pins_original_bytes_before_reused_mailbox_filename_changes(self):
-        visual = VisualWorker(Path(self.temp.name), "other", wall=lambda: 10)
+        visual = VisualLanes(Path(self.temp.name), "other", wall=lambda: 10)
         self.addCleanup(visual.stop)
         visual.thread = Mock(is_alive=Mock(return_value=False))
         visual.context.thread = Mock(is_alive=Mock(return_value=False))
@@ -204,6 +205,87 @@ class ContextWorkerTests(unittest.TestCase):
         self.assertEqual([e["capture"]["sequence"] for e in events], [1, 2])
         self.assertEqual(self.archive.snapshot()["frames"], 2)
         self.assertEqual(self.archive.read(events[1]["evidence_id"]), self.png)
+
+
+    def test_first_inflight_A_B_A_cannot_mutate_context_timeline_before_completion_gate(self):
+        self.worker.value = None
+        entered, release, completed = threading.Event(), threading.Event(), threading.Event()
+        observed = []
+        def read(image, capture, **kwargs):
+            if capture["sequence"] == 1:
+                entered.set()
+                release.wait(3)
+            return {"capture": capture, "role": "observing", "table_context_id": "synthetic",
+                    "seats": [], "evidence": {"role": {"bounds": [0, 0, 20, 30]}}}
+        def observe(value):
+            observed.append(value["capture"]["sequence"])
+            return {**value, "eventchanges": []}
+        self.worker.reader = SimpleNamespace(read=read)
+        self.worker.timeline = SimpleNamespace(observe=observe)
+        def log(capture, *args):
+            if capture["sequence"] == 3:
+                completed.set()
+        def frame(sequence):
+            return {"frame_index": sequence, "source_id": 1, "capture_session_id": "owner",
+                "captured_at_monotonic_ms": 200 + sequence, "source_utc_unix_ms": 9500 + sequence,
+                "sha256": "d" * 64, "width": 20, "height": 30}
+        with patch.object(self.worker, "_log_attempt", side_effect=log):
+            self.worker.submit(frame(1), self.png, self.scope, self.archive.directory / "live-frame-0.png")
+            self.assertTrue(entered.wait(2))
+            try:
+                self.worker.submit(frame(2), self.png, self.scope, self.archive.directory / "live-frame-1.png")
+                self.worker.submit(frame(3), self.png, self.scope, self.archive.directory / "live-frame-0.png")
+            finally:
+                release.set()
+            self.assertTrue(completed.wait(3))
+        self.worker.stop()
+        self.assertEqual(observed, [3])
+
+    def test_storage_window_supersession_cannot_publish_first_value_or_commit_timeline(self):
+        self.worker.value = None
+        stored, release, third_read, release_third, completed = (threading.Event() for _ in range(5))
+        class Timeline:
+            def __init__(self):
+                self.events = []
+            def observe(self, value):
+                self.events.append(value["capture"]["sequence"])
+                return {**value, "eventchanges": [{"type": "synthetic"}]}
+        self.worker.timeline = Timeline()
+        def read(image, capture, **kwargs):
+            if capture["sequence"] == 3:
+                third_read.set()
+                release_third.wait(3)
+            return {"capture": capture, "role": "observing", "table_context_id": "synthetic",
+                    "seats": [], "evidence": {"role": {"bounds": [0, 0, 20, 30]}}}
+        self.worker.reader = SimpleNamespace(read=read)
+        def record(png, capture, *args, **kwargs):
+            if capture["sequence"] == 1:
+                stored.set()
+                release.wait(3)
+            return {"event_id": capture["sequence"]}
+        def log(capture, *args):
+            if capture["sequence"] == 3:
+                completed.set()
+        def frame(sequence):
+            return {"frame_index": sequence, "source_id": 1, "capture_session_id": "owner",
+                "captured_at_monotonic_ms": 200 + sequence, "source_utc_unix_ms": 9500 + sequence,
+                "sha256": "d" * 64, "width": 20, "height": 30}
+        with patch.object(self.archive, "record", side_effect=record), patch.object(self.worker, "_log_attempt", side_effect=log):
+            self.worker.submit(frame(1), self.png, self.scope, self.archive.directory / "live-frame-0.png")
+            self.assertTrue(stored.wait(2))
+            try:
+                self.worker.submit(frame(2), self.png, self.scope, self.archive.directory / "live-frame-1.png")
+                self.worker.submit(frame(3), self.png, self.scope, self.archive.directory / "live-frame-0.png")
+                release.set()
+                self.assertTrue(third_read.wait(2))
+                self.assertIsNone(self.worker.value, "superseded A published during C's recognition")
+                self.assertEqual(self.worker.timeline.events, [])
+            finally:
+                release.set()
+                release_third.set()
+            self.assertTrue(completed.wait(3))
+        self.worker.stop()
+        self.assertEqual(self.worker.timeline.events, [3])
 
 
 if __name__ == "__main__":

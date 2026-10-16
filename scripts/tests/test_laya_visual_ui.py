@@ -11,7 +11,7 @@ NODE_UI, dashboard = stage2.NODE_UI, stage2.dashboard
 
 
 SCRIPT = NODE_UI.split("const visible = ()")[0].replace(
-    "suspend, resume, loadReference };", "suspend, resume, loadReference, normalizeVisual, captureHealthy };") + r"""
+    "loadReference,", "loadReference, normalizeVisual, captureHealthy,", 1) + r"""
 accept(input.snapshot);
 const panel = nodes.get('visual-panel');
 if (input.scenario === 'render' || input.scenario === 'table-render') {

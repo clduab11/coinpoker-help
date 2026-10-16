@@ -229,6 +229,93 @@ class ManualFeedTests(unittest.TestCase):
         self.assertTrue(self.feed.ingest_live(SESSION, self.live_row(self.fixture.record(generation=generation, **overrides))))
         return self.feed.snapshot()
 
+    def test_a2_api_timing_is_stamped_after_cached_composition_without_ingest_renewal(self):
+        self.sustained_session()
+        initial = self.live_reading()
+        original = initial["native_timing"]
+        deadline = self.state.partial_deadline
+        def compose(_):
+            self.clock.value += .1
+            return {"table_context": None, "visual_observation": None, "numeric_observation": None}
+        with patch.object(self.feed.visual, "cached_snapshot", side_effect=compose):
+            first, second = self.feed.snapshot(), self.feed.snapshot()
+        for snapshot in (first, second):
+            timing = snapshot["native_timing"]
+            self.assertEqual(timing["ingested_at_unix_ms"], original["ingested_at_unix_ms"])
+            self.assertEqual(timing["captured_at_unix_ms"], original["captured_at_unix_ms"])
+            self.assertEqual(set(timing), {"schema_version", "generation", "epoch", "captured_at_ms",
+                "captured_at_unix_ms", "emitted_at_unix_ms", "ingested_at_unix_ms", "api_snapshot_at_unix_ms"})
+            self.assertGreater(timing["api_snapshot_at_unix_ms"], timing["ingested_at_unix_ms"])
+        self.assertGreater(second["native_timing"]["api_snapshot_at_unix_ms"], first["native_timing"]["api_snapshot_at_unix_ms"])
+        self.assertEqual(self.state.partial_deadline, deadline)
+
+    def test_a2_real_feed_native_timing_reaches_first_dom_receipt(self):
+        from types import SimpleNamespace
+        service = SimpleNamespace(manual_feed=self.feed, state=self.state, inference_enabled=True,
+            experimental_bet_action=False, instance_id=INSTANCE, automatic_startup=None,
+            capture_controls=lambda receipt: None)
+        handler_type = srv.make_handler(None, "synthetic", {}, lambda *args: None, service=service)
+        def api():
+            responses = []
+            handler = object.__new__(handler_type)
+            handler.path, handler._local_request = "/api/state", lambda: True
+            handler._send = lambda status, value: responses.append((status, value))
+            handler.do_GET()
+            self.assertEqual(responses[0][0], 200)
+            return responses[0][1]
+        path = self.sustained_session()
+        status = capture.read_json(path / "status.json")
+        status["activity_state"] = "active"
+        capture.write_json(path / "status.json", status)
+        self.assertTrue(self.feed.ingest_live(SESSION, {**self.live_row(self.health(1)), "activity_state": "active"}))
+        before = api()
+        raw = self.fixture.record()
+        raw["original_capture"] = {"schema_version": 1, "frame_index": 1,
+            "width": self.state.capture["width"], "height": self.state.capture["height"],
+            "recording_session_id": "synthetic-native-original", "capture_session_id": SESSION, "native_source_id": "7",
+            "sha256": "d" * 64, "source_utc_unix_ms": raw["captured_at_unix_ms"],
+            "captured_at_monotonic_ms": raw["observation"]["captured_at_ms"]}
+        self.assertTrue(self.feed.ingest_live(SESSION, {**self.live_row(raw), "activity_state": "active"}))
+        snapshot = api()
+        self.assertIsNotNone(snapshot["partial_observation"])
+        self.assertIsNotNone(snapshot["native_timing"])
+        def node_only(args, *values, **kwargs):
+            if not args or args[0] != "node":
+                raise AssertionError("only offline Node fixture may start")
+            return REAL_POPEN(args, *values, **kwargs)
+        with patch.object(stage2.subprocess, "Popen", side_effect=node_only):
+            stage2.StaticUiTests().run_ui("native-timing", snapshot, before)
+
+    def test_a2_native_masks_are_applied_after_concurrent_native_snapshot_fallback(self):
+        self.sustained_session()
+        self.live_reading()
+        def compose(_):
+            self.state.ingest(self.health(2))
+            return {"table_context": None, "visual_observation": None, "numeric_observation": None,
+                    "visual_diagnostics": {"schema_version": 1, "namespaces": [{"namespace_id": "old"}]}}
+        def mask(snapshot, _):
+            snapshot["partial_observation"]["pot_size"] = None
+        with patch.object(self.feed.visual, "cached_snapshot", side_effect=compose), \
+                patch.object(self.feed.visual, "mask_snapshot", side_effect=mask):
+            snapshot = self.feed.snapshot()
+        self.assertIsNone(snapshot["partial_observation"]["pot_size"])
+        self.assertIsNotNone(snapshot["partial_observation"]["seats"][0]["displayed_stack"])
+        self.assertEqual(snapshot["visual_diagnostics"]["namespaces"], [])
+
+    def test_a2_final_native_lease_expiry_is_checked_without_event_seq_change(self):
+        self.sustained_session()
+        self.live_reading()
+        sequence = self.state.event_seq
+        def compose(_):
+            self.clock.value += 1.001
+            return {"table_context": None, "visual_observation": None, "numeric_observation": None}
+        with patch.object(self.feed.visual, "cached_snapshot", side_effect=compose):
+            snapshot = self.feed.snapshot()
+        self.assertEqual(self.state.event_seq, sequence)
+        self.assertTrue(snapshot["capture"]["fresh_capture"])
+        self.assertIsNone(snapshot["partial_observation"])
+        self.assertIsNone(snapshot["native_timing"])
+
     def test_sustained_pipe_can_publish_after_recording_ends_but_readings_still_expire(self):
         path = self.sustained_session()
         value = self.live_reading()

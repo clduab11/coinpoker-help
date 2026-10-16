@@ -4,6 +4,7 @@ import io
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
@@ -171,6 +172,40 @@ class NumericWorkerTests(unittest.TestCase):
         self.assertEqual(event["kind"], "visible-numeric-change")
         self.assertEqual(event["capture"]["sequence"], 1)
         self.assertEqual(self.archive.read(event["evidence_id"]), self.png)
+
+
+    def test_first_inflight_A_B_A_does_not_archive_or_sign_the_superseded_read(self):
+        self.worker.value = None
+        entered, release, completed = threading.Event(), threading.Event(), threading.Event()
+        def read(image, capture, **kwargs):
+            if capture["sequence"] == 1:
+                entered.set()
+                release.wait(3)
+            return self.result(capture)
+        self.worker.reader = SimpleNamespace(read=read)
+        record = self.archive.record
+        def archive(*args, **kwargs):
+            result = record(*args, **kwargs)
+            if args[1]["sequence"] == 3:
+                completed.set()
+            return result
+        def frame(sequence):
+            return {"frame_index": sequence, "source_id": 1, "capture_session_id": "owner",
+                "captured_at_monotonic_ms": 200 + sequence, "source_utc_unix_ms": 9500 + sequence,
+                "sha256": hashlib.sha256(self.png).hexdigest(), "width": 20, "height": 30}
+        with patch.object(self.archive, "record", side_effect=archive):
+            self.worker.submit(frame(1), self.png, self.scope, self.root / "live-frame-0.png")
+            self.assertTrue(entered.wait(2))
+            try:
+                changed = self.image.copy()
+                changed.putpixel((11, 11), (50, 100, 200))
+                self.worker.submit(frame(2), self.encode(changed), self.scope, self.root / "live-frame-1.png")
+                self.worker.submit(frame(3), self.png, self.scope, self.root / "live-frame-0.png")
+            finally:
+                release.set()
+            self.assertTrue(completed.wait(3), (self.worker.last_error, self.worker.last_timing, self.worker.pending))
+        self.worker.stop()
+        self.assertEqual([event["capture"]["sequence"] for event in self.archive.event_snapshot()], [3])
 
 
 if __name__ == "__main__":

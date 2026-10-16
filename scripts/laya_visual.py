@@ -8,11 +8,21 @@ from pathlib import Path
 import re
 import threading
 import time
+import uuid
+from collections import deque
+
+from laya_prep import box_px, load_regions
 
 MAX_AGE_MS = 1500
 MAX_PNG_BYTES = 8 * 1024 * 1024
 MAX_LOG_BYTES = 8 * 1024 * 1024
 CONTEXT_AGE_MS = 5000
+
+
+class _LaneProjection(dict):
+    def __init__(self, value, deadline):
+        super().__init__(value)
+        self.deadline = deadline
 
 
 def _capture(frame, scope, instance_id):
@@ -62,6 +72,7 @@ class NumericWorker:
         self.wall, self.monotonic = wall, monotonic
         self.lock = threading.RLock()
         self.wake, self.closed = threading.Event(), threading.Event()
+        self.busy = threading.Event()
         self.reader = self.thread = self.pending = self.latest = self.value = self.original = self.scope = None
         self.deadline = None
         self.invalidated = {}
@@ -111,6 +122,7 @@ class NumericWorker:
             if pending is None:
                 continue
             frame, png, scope, filename = pending
+            self.busy.set()
             capture = _capture(frame, scope, self.instance_id)
             received_wall = frame.get("_numeric_received_at_unix_ms")
             self.attempts += 1
@@ -134,10 +146,12 @@ class NumericWorker:
                              arrival_lag_ms=received_wall - capture["captured_at_unix_ms"] if received_wall is not None else None,
                              queue_lag_ms=started_wall - received_wall if received_wall is not None else None)
                 with self.lock:
-                    if scope != self.scope or self.closed.is_set():
+                    if (scope != self.scope or self.closed.is_set() or capture["sequence"] < self.first_watermark
+                            or self.monotonic() >= frame.get("_visual_deadline", float("inf"))):
                         continue
                     self.value, self.original = value, png
-                    self.deadline = self.monotonic() + (capture["captured_at_unix_ms"] + MAX_AGE_MS - now) / 1000
+                    self.deadline = min(frame.get("_visual_deadline", float("inf")),
+                        self.monotonic() + (capture["captured_at_unix_ms"] + MAX_AGE_MS - now) / 1000)
                     self.last_error = None
                 signature = tuple((f.get("status"), f.get("literal")) for f in self.fields(value))
                 if signature != self.last_signature:
@@ -153,12 +167,14 @@ class NumericWorker:
                     "queue_lag_ms": started_wall - received_wall if received_wall is not None else None,
                     "processing_ms": round((time.perf_counter() - started) * 1000, 2),
                     "completed_at_unix_ms": int(self.wall() * 1000), "error": self.last_error}
+                self.busy.clear()
 
     def snapshot(self, state, *, occluded_regions=()):
         with self.lock:
             if self.closed.is_set():
                 return None
             value, original, latest = copy.deepcopy(self.value), self.original, self.latest
+            deadline = self.deadline
             invalidated = dict(self.invalidated)
             first_watermark = self.first_watermark
             if value is None or latest is None or self.deadline is None:
@@ -186,7 +202,7 @@ class NumericWorker:
         for index, (field, unchanged) in enumerate(zip(fields, checks)):
             if not unchanged or frame.get("readability") == "unknown" or capture["sequence"] < max(first_watermark, invalidated.get(index, -1)):
                 field.update(value=None, literal=None, status="unknown", reason="numeric-region-changed-or-occluded")
-        return value
+        return _LaneProjection(value, deadline)
 
     def stop(self):
         self.closed.set()
@@ -201,6 +217,7 @@ class ContextWorker:
         self.root, self.instance_id, self.archive, self.wall = root, instance_id, archive, wall
         self.lock = threading.RLock()
         self.wake, self.closed = threading.Event(), threading.Event()
+        self.busy = threading.Event()
         self.pending = self.latest = self.value = self.original = self.scope = None
         self.reader = self.timeline = self.thread = None
         self.dropped = self.attempts = 0
@@ -211,6 +228,7 @@ class ContextWorker:
         self.monotonic, self.deadline = monotonic, None
         self.invalidated = {}
         self.pending_invalidations = set()
+        self.first_watermark = -1
 
     def submit(self, frame, png, scope, filename):
         frame = {**frame, "context_requested_at_unix_ms": int(self.wall() * 1000)}
@@ -220,7 +238,10 @@ class ContextWorker:
             if self.scope != scope:
                 self.scope, self.value, self.timeline = scope, None, None
                 self.invalidated, self.pending_invalidations, self.deadline = {}, set(), None
-            elif self.value is not None:
+                self.first_watermark = -1
+            if self.value is None:
+                self.first_watermark = frame["frame_index"]
+            else:
                 masks = frame.get("occluded_regions", [])
                 seats = self.value.get("seats", [])
                 role = (self.value.get("evidence") or {}).get("role") or {}
@@ -258,6 +279,7 @@ class ContextWorker:
             if pending is None:
                 continue
             frame, png, scope, filename = pending
+            self.busy.set()
             started = time.perf_counter()
             attempt_started = int(self.wall() * 1000)
             self.attempts += 1
@@ -289,21 +311,21 @@ class ContextWorker:
                                 break
                             result["profile"], popup_original = profile, popup_png
                 with self.lock:
-                    if scope != self.scope or self.closed.is_set():
+                    if (scope != self.scope or self.closed.is_set() or capture["sequence"] < self.first_watermark
+                            or self.monotonic() >= frame.get("_context_deadline", float("inf"))):
                         continue
                     if not 0 <= int(self.wall() * 1000) - capture["captured_at_unix_ms"] < CONTEXT_AGE_MS:
                         self.last_error = "context-expired-before-publication"
                         continue
-                    if self.timeline is None:
-                        self.timeline = ContextTimeline()
+                    staged_timeline = copy.deepcopy(self.timeline) if self.timeline is not None else ContextTimeline()
                     profile = result.get("profile")
                     latest_frame, latest_png, _ = self.latest
                     masks = list(latest_frame.get("occluded_regions", []))
                     if isinstance(profile, dict) and popup_original is None and profile.get("bounds"):
                         masks.append(profile["bounds"])
-                    if self.pending_invalidations and hasattr(self.timeline, "invalidate_fields"):
-                        self.timeline.invalidate_fields(list(self.pending_invalidations))
-                    self.pending_invalidations.clear()
+                    pending_invalidations = {key: self.invalidated.get(key, -1) for key in self.pending_invalidations}
+                    if pending_invalidations and hasattr(staged_timeline, "invalidate_fields"):
+                        staged_timeline.invalidate_fields(list(pending_invalidations))
                     seats = result.get("seats", [])
                     role = (result.get("evidence") or {}).get("role") or {}
                     caption = result.get("table_caption") or {}
@@ -333,7 +355,7 @@ class ContextWorker:
                         if not current_profile:
                             result["profile"] = None
                             result["profile_rejection"] = "panel-changed-before-import"
-                    value = self.timeline.observe(result)
+                    value = staged_timeline.observe(result)
                     value.update(schema_version=1, capture=capture,
                                  expires_at_unix_ms=capture["captured_at_unix_ms"] + CONTEXT_AGE_MS,
                                  requested_at_unix_ms=frame["context_requested_at_unix_ms"],
@@ -370,7 +392,9 @@ class ContextWorker:
                     if event:
                         value["last_event_id"] = event["event_id"]
                 with self.lock:
-                    if scope != self.scope or self.closed.is_set():
+                    if (scope != self.scope or self.closed.is_set() or capture["sequence"] < self.first_watermark
+                            or self.monotonic() >= frame.get("_context_deadline", float("inf"))
+                            or not 0 <= self.wall() * 1000 - capture["captured_at_unix_ms"] < CONTEXT_AGE_MS):
                         continue
                     if self.invalidated.get("role", -1) >= capture["sequence"]:
                         value.update(role="uncertain", hero_seat=None)
@@ -382,13 +406,18 @@ class ContextWorker:
                             stats["evidence_id"] = stats["capture"]["sha256"]
                         if self.invalidated.get(seat["seat"], -1) >= capture["sequence"]:
                             seat.update(occupancy="unknown", identity=None, stats=None, continuity="uncertain", status="unknown")
+                    self.timeline = staged_timeline
+                    self.pending_invalidations.difference_update(key for key, version in pending_invalidations.items()
+                        if self.invalidated.get(key, -1) == version)
                     self.value, self.original = value, png
-                    self.deadline = self.monotonic() + max(0, (capture["captured_at_unix_ms"] + CONTEXT_AGE_MS - self.wall() * 1000) / 1000)
+                    self.deadline = min(frame.get("_context_deadline", float("inf")),
+                        self.monotonic() + max(0, (capture["captured_at_unix_ms"] + CONTEXT_AGE_MS - self.wall() * 1000) / 1000))
                     self.last_error = None
             except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError) as error:
                 self.last_error = str(error)[:160]
             finally:
                 self._log_attempt(capture, frame["context_requested_at_unix_ms"], attempt_started, value)
+                self.busy.clear()
         if self.log is not None:
             self.log.close()
 
@@ -402,7 +431,7 @@ class ContextWorker:
                   "profile": (value or {}).get("profile"), "dropped_frames": self.dropped}
         try:
             line = json.dumps(record, allow_nan=False, separators=(",", ":")).encode() + b"\n"
-            if not self.log_complete or self.log_bytes + len(line) > MAX_LOG_BYTES:
+            if not self.log_complete or self.log_bytes + len(line) > getattr(self, "log_limit", MAX_LOG_BYTES):
                 self.log_complete = False
                 return
             if self.log is None:
@@ -421,11 +450,11 @@ class ContextWorker:
                 return None
             value, original = copy.deepcopy(self.value), self.original
             frame, png, scope = self.latest
-        capture = value["capture"]
-        with self.lock:
+            capture = value["capture"]
             if self.deadline is None:
                 self.deadline = self.monotonic() + max(0, (capture["captured_at_unix_ms"] + CONTEXT_AGE_MS - self.wall() * 1000) / 1000)
-            expired = self.monotonic() >= self.deadline or int(self.wall() * 1000) >= capture["captured_at_unix_ms"] + CONTEXT_AGE_MS
+            deadline = self.deadline
+            expired = self.monotonic() >= deadline or int(self.wall() * 1000) >= capture["captured_at_unix_ms"] + CONTEXT_AGE_MS
             if expired:
                 if self.value is not None and self.value["capture"] == capture:
                     self.value = None
@@ -458,7 +487,7 @@ class ContextWorker:
         value.setdefault("evidence", {}).update(complete=value["event_evidence"]["complete"],
                                                 log_complete=self.log_complete)
         value["occluded_regions"] = masks
-        return value
+        return _LaneProjection(value, deadline)
 
     def roster_for_frame(self, capture, png, masks):
         with self.lock:
@@ -488,32 +517,37 @@ class ContextWorker:
     def stop(self):
         self.closed.set()
         self.wake.set()
+        if self.thread is not None:
+            self.thread.join(timeout=3)
+            if self.thread.is_alive():
+                self.last_error = "context-shutdown-pending"
+                return False
         if self.reader is not None and hasattr(self.reader, "close"):
             try:
                 self.reader.close()
             except (OSError, ValueError, RuntimeError):
                 self.last_error = "context-close-failed"
-        if self.thread is not None:
-            self.thread.join(timeout=3)
-            if self.thread.is_alive():
-                self.last_error = "context-shutdown-pending"
+                return False
+        return True
 
 
-class VisualWorker:
+class VisualLanes:
     def __init__(self, root, instance_id, *, wall=time.time, monotonic=time.monotonic):
         self.root, self.instance_id, self.wall = Path(root).resolve(), instance_id, wall
         self.lock = threading.Lock()
         self.wake, self.closed = threading.Event(), threading.Event()
+        self.busy = threading.Event()
         self.pending = self.value = self.scope = self.last_frame = None
         self.dropped = 0
         self.board = self.actions = self.timeline = None
         self.log = None
         self.log_bytes = 0
+        self.log_complete = True
         self.last_error = None
         self.thread = None
         from laya_evidence import EventEvidence
         self.archive = EventEvidence(self.root, instance_id)
-        self.context = ContextWorker(self.root, instance_id, self.archive, wall=wall)
+        self.context = ContextWorker(self.root, instance_id, self.archive, wall=wall, monotonic=monotonic)
         self.numeric = NumericWorker(self.root, instance_id, self.archive, wall=wall, monotonic=monotonic)
         self.last_visual_signature = None
         self.latest_pixels = self.value_pixels = None
@@ -525,6 +559,7 @@ class VisualWorker:
         self.board_generation = 0
         self.revealed = None
         self.last_revealed_signature = None
+        self.first_watermark = -1
 
     def submit(self, row, session_id, source_id, epoch):
         frame = row.get("frame")
@@ -581,7 +616,14 @@ class VisualWorker:
             except OSError:
                 continue
         scope = session_id, source_id, epoch
+        self.submit_pinned(frame, filename, scope, png)
+
+    def submit_pinned(self, frame, filename, scope, png):
+        frame = {**frame, "_lane_managed": True}
+        sequence, captured = frame["frame_index"], frame["source_utc_unix_ms"]
         with self.lock:
+            if self.closed.is_set():
+                return
             ticket = (sequence, captured, frame["captured_at_monotonic_ms"])
             if self.scope == scope and self.last_ticket is not None and any(
                     new <= old for new, old in zip(ticket, self.last_ticket)):
@@ -591,7 +633,10 @@ class VisualWorker:
                 self.scope, self.last_frame = scope, None
                 self.board_last_seen, self.board_invalidated = [None] * 5, {}
                 self.deadline, self.expired = None, False
-            elif self.value is not None and self.value_pixels is not None:
+                self.first_watermark = -1
+            if self.value is None:
+                self.first_watermark = sequence
+            elif self.value_pixels is not None:
                 slots = self.value.get("board_slots", [])
                 checks = _region_checks(self.value_pixels, png, [s.get("bounds") for s in slots],
                                         frame.get("occluded_regions", []))
@@ -673,13 +718,8 @@ class VisualWorker:
                        capture["source_process_created_at_100ns"], image.size, cache_key[2])
         ticket = (capture["sequence"], capture["captured_at_unix_ms"], capture["captured_at_ms"])
         with self.lock:
-            if self.board_scope != board_scope:
-                self.board_scope, self.processed_ticket = board_scope, None
-                self.board_last_seen, self.board_invalidated = [None] * 5, {}
-                self.board_generation += 1
-            elif self.processed_ticket is not None and any(new <= old for new, old in zip(ticket, self.processed_ticket)):
+            if self.board_scope == board_scope and self.processed_ticket is not None and any(new <= old for new, old in zip(ticket, self.processed_ticket)):
                 raise ValueError("replayed-frame-receipt")
-            self.processed_ticket = ticket
         # Cache computation only. Identical PNGs with genuinely new original tickets
         # still receive their own clocks; replays cannot renew or confirm anything.
         if self.board_cache is None or self.board_cache[0] != cache_key:
@@ -728,29 +768,28 @@ class VisualWorker:
                             and not _current_region(png, png, seat[family].get("crop_bounds"), masks)):
                         seat[family].update(status="unknown", value=None, reason="client-popup-occlusion")
                         seat[family].pop("absence_evidence", None)
-        timeline = self.timeline.observe(actions, now_ms=frame["captured_at_monotonic_ms"])
+        with self.lock:
+            if frame.get("_lane_managed") and (self.closed.is_set() or scope != self.scope
+                    or capture["sequence"] < self.first_watermark
+                    or self.monotonic() >= frame.get("_visual_deadline", float("inf"))):
+                raise ValueError("superseded-or-expired-visual-work")
+            staged_timeline = copy.deepcopy(self.timeline)
+        timeline = staged_timeline.observe(actions, now_ms=frame["captured_at_monotonic_ms"])
         # Sightings are retained as diagnostics, never promoted to betting order.
         sightings = [{"sequence": event["occurrence"], "seat": event["seat"], "action": event["action"],
                       "captured_at_ms": event["capture"]["captured_at_ms"],
                       "street": event["street"], "order_status": event["order_status"]}
-                     for event in list(self.timeline.events)[-30:]
-                     if (event["capture"]["session_id"], event["capture"]["source_id"], event["capture"]["epoch"]) == scope]
+                      for event in list(staged_timeline.events)[-30:]
+                      if (event["capture"]["session_id"], event["capture"]["source_id"], event["capture"]["epoch"]) == scope]
+        stage = board_scope, ticket, staged_timeline, board_slots
         with self.lock:
-            changed = any(slot["card"] and old and slot["card"] != old["card"]
-                          for slot, old in zip(board_slots, self.board_last_seen))
-            if changed or board.get("empty_board_supported"):
-                # A contradiction retires the old board, not a guessed hand/phase.
-                if any(self.board_last_seen):
-                    self.board_generation += 1
-                self.board_last_seen = [None] * 5
-            for index, slot in enumerate(board_slots):
-                if slot["status"] == "provisional":
-                    self.board_last_seen[index] = copy.deepcopy(slot)
-                if ticket[0] > self.board_invalidated.get(index + 1, 0):
-                    self.board_invalidated.pop(index + 1, None)
-            board["board_generation"] = self.board_generation
-            board["last_seen"] = self._last_seen_board()
-        return {"schema_version": 1, "provisional": True, "quality_approved": False,
+            if frame.get("_lane_managed") and (self.closed.is_set() or scope != self.scope
+                    or capture["sequence"] < self.first_watermark
+                    or self.monotonic() >= frame.get("_visual_deadline", float("inf"))):
+                raise ValueError("superseded-or-expired-visual-work")
+            if not frame.get("_lane_managed"):
+                self._commit_board(board, stage)
+        value = {"schema_version": 1, "provisional": True, "quality_approved": False,
                 "human_reviewed": False, "service_instance_id": self.instance_id,
                 "session_id": session_id, "source_id": source_id, "epoch": epoch,
                 "sequence": frame["frame_index"], "captured_at_unix_ms": frame["source_utc_unix_ms"],
@@ -761,6 +800,33 @@ class VisualWorker:
                 "board_slots": board_slots, "board": board, "actions": actions, "revealed_cards": revealed,
                 "sightings": sightings, "gaps": timeline["gaps"], "dropped_frames": self.dropped,
                 "processing_ms": round((time.perf_counter() - started) * 1000, 2)}
+        if frame.get("_lane_managed"):
+            value["_visual_commit"] = stage
+        return value
+
+    def _commit_board(self, board, stage):
+        # Caller owns the lane lock; managed work commits with its public value.
+        board_scope, ticket, staged_timeline, board_slots = stage
+        if self.board_scope != board_scope:
+            self.board_scope, self.processed_ticket = board_scope, None
+            self.board_last_seen, self.board_invalidated = [None] * 5, {}
+            self.board_generation += 1
+        elif self.processed_ticket is not None and any(new <= old for new, old in zip(ticket, self.processed_ticket)):
+            raise ValueError("replayed-frame-receipt")
+        self.processed_ticket, self.timeline = ticket, staged_timeline
+        changed = any(slot["card"] and old and slot["card"] != old["card"]
+                      for slot, old in zip(board_slots, self.board_last_seen))
+        if changed or board.get("empty_board_supported"):
+            if any(self.board_last_seen):
+                self.board_generation += 1
+            self.board_last_seen = [None] * 5
+        for index, slot in enumerate(board_slots):
+            if slot["status"] == "provisional":
+                self.board_last_seen[index] = copy.deepcopy(slot)
+            if ticket[0] > self.board_invalidated.get(index + 1, 0):
+                self.board_invalidated.pop(index + 1, None)
+        board["board_generation"] = self.board_generation
+        board["last_seen"] = self._last_seen_board()
 
     def _project_board(self, board, slots):
         from laya_board import assemble_board
@@ -801,19 +867,34 @@ class VisualWorker:
             if pending is None:
                 continue
             frame, filename, scope, png = pending
+            self.busy.set()
             try:
                 value = self.process(frame, filename, scope, png)
-            except (OSError, ValueError, KeyError, TypeError, ImportError) as error:
+            except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError) as error:
                 value = None
                 self.last_error = type(error).__name__
             if self.closed.is_set():
+                self.busy.clear()
                 continue
             with self.lock:
-                if scope == self.scope and value is not None:
-                    self.value = value
-                    self.value_pixels = png
-                    remaining = max(0, value["expires_at_unix_ms"] - int(self.wall() * 1000)) / 1000
-                    self.deadline, self.expired = self.monotonic() + remaining, False
+                if (scope == self.scope and not self.closed.is_set() and value is not None
+                        and frame["frame_index"] >= self.first_watermark
+                        and self.monotonic() < frame.get("_visual_deadline", float("inf"))
+                        and 0 <= self.wall() * 1000 - frame["source_utc_unix_ms"] < MAX_AGE_MS):
+                    stage = value.pop("_visual_commit", None)
+                    try:
+                        if stage is not None:
+                            self._commit_board(value["board"], stage)
+                    except ValueError as error:
+                        self.last_error, value = str(error), None
+                    if value is not None:
+                        self.value = value
+                        self.value_pixels = png
+                        remaining = max(0, value["expires_at_unix_ms"] - int(self.wall() * 1000)) / 1000
+                        self.deadline, self.expired = min(frame.get("_visual_deadline", float("inf")),
+                            self.monotonic() + remaining), False
+                else:
+                    value = None
             if value is not None:
                 signature = json.dumps([(value.get("board") or {}).get("candidate_cards"),
                     [(s.get("sequence"), s.get("seat"), s.get("action")) for s in value.get("sightings", [])]], sort_keys=True)
@@ -842,21 +923,26 @@ class VisualWorker:
             if value is not None and frame.get("archival") is True:
                 # The native archival prefix is bounded; the log shares that lifetime.
                 try:
-                    if self.log is None:
-                        self.log = (filename.parent / "visual.jsonl").open("xb")
                     line = json.dumps(value, allow_nan=False, separators=(",", ":")).encode() + b"\n"
-                    if self.log_bytes + len(line) <= MAX_LOG_BYTES:
+                    if self.log_complete and self.log_bytes + len(line) <= getattr(self, "log_limit", MAX_LOG_BYTES):
+                        if self.log is None:
+                            self.archive.directory.mkdir(parents=True, exist_ok=True)
+                            self.log = (self.archive.directory / "visual.jsonl").open("xb")
                         self.log.write(line)
                         self.log.flush()
                         self.log_bytes += len(line)
+                    else:
+                        self.log_complete = False
                 except (OSError, ValueError):
-                    pass
+                    self.log_complete = False
+            self.busy.clear()
         if self.log is not None:
             self.log.close()
 
     def snapshot(self, state, *, occluded_regions=()):
         with self.lock:
             value = copy.deepcopy(self.value)
+            deadline = self.deadline
             original, latest = self.value_pixels, self.latest_pixels
             invalidated = dict(self.board_invalidated)
             history = self._last_seen_board()
@@ -931,15 +1017,15 @@ class VisualWorker:
         if slots:
             self._project_board(board, slots)
         value["current_uncertain"] = stale
-        return value
+        return _LaneProjection(value, deadline)
 
     def mask_snapshot(self, snapshot, context):
         """Suppress only covered API regions; do not change source leases/history."""
         masks = (context or {}).get("occluded_regions", [])
+        fields = (context or {}).get("covered_fields", ())
         observation = snapshot.get("partial_observation")
-        if not masks or not observation:
+        if not (masks or fields) or not observation:
             return
-        from laya_prep import box_px
         regions = getattr(self, "regions", {}).get("regions", {})
         width, height = (snapshot.get("capture") or {}).get("width"), (snapshot.get("capture") or {}).get("height")
         if not regions or type(width) is not int or type(height) is not int:
@@ -947,6 +1033,8 @@ class VisualWorker:
         statuses = observation.get("field_statuses", {})
 
         def covered(key):
+            if key in fields:
+                return True
             roi = regions.get(key)
             if not roi:
                 return False
@@ -973,9 +1061,17 @@ class VisualWorker:
                 seat.update(displayed_stack=None, displayed_stack_text=None)
                 unavailable("seats." + str(number) + ".displayed_stack")
 
-    def stop(self):
+    def revoke(self):
+        # Close every lane before any join, including a blocked recognizer/store.
         self.closed.set()
         self.wake.set()
+        self.context.closed.set()
+        self.context.wake.set()
+        self.numeric.closed.set()
+        self.numeric.wake.set()
+
+    def stop(self):
+        self.revoke()
         if self.thread is not None:
             self.thread.join(timeout=3)
         self.context.stop()
@@ -984,3 +1080,627 @@ class VisualWorker:
                 and (self.context.thread is None or not self.context.thread.is_alive())
                 and (self.numeric.thread is None or not self.numeric.thread.is_alive())):
             self.archive.close()
+
+
+_mask_native_snapshot = VisualLanes.mask_snapshot
+
+
+class _VisualProjection(dict):
+    """DTO plus a non-serialized completion stamp for the ordered feed fence."""
+    def __init__(self, value, binding, token, serial, leases):
+        super().__init__(value)
+        self.binding, self.token, self.serial = binding, token, serial
+        self.leases = leases
+
+
+class _VisualArchiveView:
+    """Serve only the active runtime index, including a final read-completion fence."""
+    def __init__(self, owner):
+        self.owner = owner
+
+    def read(self, evidence_id):
+        with self.owner.lock:
+            engine, token = self.owner.engine, self.owner.token
+            if engine is None or token is None or token.is_set():
+                return None
+            engine.archive_readers += 1
+            engine.archive_readers_done.clear()
+        try:
+            png = engine.archive.read(evidence_id)
+            with self.owner.lock:
+                return png if self.owner.engine is engine and self.owner.token is token and not token.is_set() else None
+        finally:
+            with self.owner.lock:
+                engine.archive_readers -= 1
+                if not engine.archive_readers:
+                    engine.archive_readers_done.set()
+            self.owner.wake.set()
+
+    def snapshot(self):
+        with self.owner.lock:
+            engine, token = self.owner.engine, self.owner.token
+        value = (engine.archive if engine is not None else self.owner._empty_archive).snapshot()
+        with self.owner.lock:
+            return value if self.owner.engine is engine and token is self.owner.token else self.owner._empty_archive.snapshot()
+
+    def event_snapshot(self):
+        with self.owner.lock:
+            engine, token = self.owner.engine, self.owner.token
+        events = engine.archive.event_snapshot() if engine is not None else []
+        with self.owner.lock:
+            return events if self.owner.engine is engine and token is self.owner.token and token is not None and not token.is_set() else []
+
+
+class VisualWorker:
+    """Bounded transport boundary around the three independent recognition lanes.
+
+    Only this pump reads mailbox paths or builds pixel-dependent projections.
+    Retired engines have isolated archives: their late files/logs are uncommitted
+    diagnostics, never indexed or served by a replacement engine. Python cannot
+    cancel a blocked reader; at most one retiring engine is retained, and further
+    work stays in the single replaceable slot until that engine actually exits.
+    """
+    def __init__(self, root, instance_id, *, wall=time.time, monotonic=time.monotonic):
+        self.root, self.instance_id = Path(root).resolve(), instance_id
+        try:
+            self.region_manifest = load_regions(self.root)
+        except (OSError, ValueError):
+            self.region_manifest = {}
+        self.wall, self.monotonic = wall, monotonic
+        self.lock = threading.Lock()
+        self.wake, self.closed = threading.Event(), threading.Event()
+        self.thread = self.pending = self.engine = self.retiring = None
+        self.binding = self.token = None
+        self.serial = self.validated = 0
+        self.executing = False
+        self.cache, self.leases = {}, {}
+        self.expired_captures = {}
+        self.last_seen = None
+        self.last_projection = None
+        self.counts, self.stages = {}, deque(maxlen=100)
+        self.retirement_reason = None
+        self.last_error = None
+        self._fingerprint = None
+        self._cleanup_started = False
+        self.shutdown_complete = threading.Event()
+        self.regions, self.mask_regions, self.mask_fields = self.region_manifest, [], set()
+        self.mask_mapping_incomplete = False
+        self.used_budget = {"bytes": 0, "frames": 0, "log_bytes": 0, "context_log_bytes": 0, "visual_log_bytes": 0}
+        self.storage_incomplete = {"archive": False, "context_log": False, "visual_log": False}
+        self.namespace_history = deque(maxlen=32)
+        self.namespace_overflow = 0
+        from laya_evidence import EventEvidence
+        self._empty_archive = EventEvidence(self.root, instance_id)
+        self._archive_view = _VisualArchiveView(self)
+
+    @property
+    def archive(self):
+        return self._archive_view
+
+    def _drop(self, reason):
+        self.counts[reason] = self.counts.get(reason, 0) + 1
+
+    def _retire(self, reason):
+        if self.token is not None:
+            self.token.set()
+        if self.engine is not None:
+            self.engine.revoke()
+            if len(self.namespace_history) == self.namespace_history.maxlen:
+                self.namespace_overflow += 1
+            self.namespace_history.append(self._namespace(self.engine, "retired-uncommitted", reason))
+            self.retiring, self.engine = self.engine, None
+        self.cache, self.leases = {}, {}
+        self.expired_captures = {}
+        self._fingerprint = None
+        self.validated = 0
+        self.retirement_reason = reason
+
+    def revoke(self, reason="retired-binding"):
+        with self.lock:
+            self._retire(reason)
+            self.token = self.pending = None
+            if reason != "native-capture-unavailable":
+                self.binding = None
+                self.last_seen = self.last_projection = None
+                self.regions, self.mask_regions, self.mask_fields = self.region_manifest, [], set()
+                self.mask_mapping_incomplete = False
+                self.namespace_history.clear()
+                self.namespace_overflow = 0
+        self.wake.set()
+
+    @staticmethod
+    def _metadata(row, session_id, source_id, epoch, now):
+        frame = row.get("frame")
+        if (not isinstance(frame, dict) or not source_id or not session_id
+                or type(epoch) is not int or epoch <= 0
+                or not isinstance(row.get("capture_session_id"), str) or not 0 < len(row["capture_session_id"]) <= 128):
+            return None
+        captured, sequence = frame.get("source_utc_unix_ms"), frame.get("frame_index")
+        if (type(captured) is not int or not 0 <= now - captured < MAX_AGE_MS
+                or type(sequence) is not int or not 0 < sequence < 2 ** 53
+                or any(type(frame.get(k)) is not int or not 0 < frame[k] < 2 ** 64
+                       for k in ("source_id", "source_process_created_at_100ns"))
+                or not isinstance(row.get("capture_directory"), str) or len(row["capture_directory"]) > 4096
+                or not isinstance(frame.get("sha256"), str) or not re.fullmatch(r"[a-f0-9]{64}", frame["sha256"])
+                or type(frame.get("png_bytes")) is not int or not 0 < frame["png_bytes"] <= MAX_PNG_BYTES
+                or not re.fullmatch(r"frame-[0-9]{10}\.png|live-frame-[01]\.png", str(frame.get("filename", "")))
+                or type(frame.get("captured_at_monotonic_ms")) is not int or frame["captured_at_monotonic_ms"] < 0
+                or any(type(frame.get(k)) is not int or not 1 <= frame[k] <= 4096 for k in ("width", "height"))
+                or not isinstance(frame.get("popup_frames", []), list) or len(frame.get("popup_frames", [])) > 4
+                or not isinstance(frame.get("occluded_regions", []), list) or len(frame.get("occluded_regions", [])) > 64):
+            return None
+        return (session_id, row.get("capture_session_id"), source_id, epoch,
+                frame.get("source_id"), frame.get("source_process_created_at_100ns"), frame["width"], frame["height"])
+
+    def submit(self, row, session_id, source_id, epoch):
+        now, received = int(self.wall() * 1000), self.monotonic()
+        row = row if isinstance(row, dict) else {}
+        copied = {"frame": copy.deepcopy(row.get("frame")), "capture_directory": row.get("capture_directory"),
+                  "capture_session_id": row.get("capture_session_id")}
+        binding = self._metadata(copied, session_id, source_id, epoch, now)
+        with self.lock:
+            if self.closed.is_set():
+                return
+            if binding is None:
+                # Unvalidated metadata is not proof that the pixels were unchanged.
+                self._retire("unvalidated-metadata")
+                self.pending = None
+                captured = (copied["frame"] or {}).get("source_utc_unix_ms") if isinstance(copied["frame"], dict) else None
+                self._drop("expired" if type(captured) is int and now - captured >= MAX_AGE_MS else "invalid-metadata")
+                return
+            frame = copied["frame"]
+            ticket = (frame["frame_index"], frame["source_utc_unix_ms"], frame["captured_at_monotonic_ms"])
+            if binding == self.binding and hasattr(self, "ticket") and any(n <= o for n, o in zip(ticket, self.ticket)):
+                self._retire("replayed-metadata")
+                self.pending = None
+                self._drop("invalid-metadata")
+                return
+            if binding != self.binding:
+                self._retire("binding-replaced")
+                self.binding, self.token, self.last_seen = binding, threading.Event(), None
+                self.last_projection = None
+                self.regions, self.mask_regions, self.mask_fields = self.region_manifest, [], set()
+                self.mask_mapping_incomplete = False
+                self.namespace_history.clear()
+                self.namespace_overflow = 0
+            elif self.pending is not None or self.executing:
+                self._drop("superseded")
+                self._retire("superseded-continuity")
+                self.token = threading.Event()
+            elif self.token is None or self.token.is_set():
+                self.token = threading.Event()
+            self.ticket = ticket
+            masks = frame.get("occluded_regions", [])
+            if all(isinstance(m, list) and len(m) == 4 and all(type(v) is int for v in m)
+                   and 0 <= m[0] < m[2] <= frame["width"] and 0 <= m[1] < m[3] <= frame["height"] for m in masks):
+                self.mask_regions = self._merge_masks(self.mask_regions, masks, frame["width"], frame["height"])
+            self.serial += 1
+            copied["frame"]["_visual_deadline"] = received + (captured_remaining := MAX_AGE_MS - (now - ticket[1])) / 1000
+            copied["frame"]["_context_deadline"] = received + (captured_remaining + CONTEXT_AGE_MS - MAX_AGE_MS) / 1000
+            self.pending = (copied, binding, self.token, self.serial, received)
+            if self.thread is None:
+                self.thread = threading.Thread(target=self._run, name="visual-ingress", daemon=True)
+                self.thread.start()
+        self.wake.set()
+
+    def _pin(self, row):
+        from laya_capture import private_path
+        from PIL import Image
+        directory = private_path(Path(row["capture_directory"]), root=self.root)
+        if (directory.parent != self.root / ".local/captures"
+                or not re.fullmatch(r"utc-[0-9]+-[0-9]{9}-practice", directory.name)):
+            raise ValueError("invalid-capture-path")
+        frame = row["frame"]
+        def read(metadata):
+            path = private_path(directory / metadata["filename"], root=self.root)
+            if path.parent != directory:
+                raise ValueError("invalid-capture-path")
+            # One bounded read from the original slot, never a later reopen downstream.
+            if path.stat().st_size != metadata["png_bytes"]:
+                raise ValueError("slot-overwritten/hash-mismatch")
+            with path.open("rb") as stream:
+                png = stream.read(metadata["png_bytes"] + 1)
+            if len(png) != metadata["png_bytes"] or hashlib.sha256(png).hexdigest() != metadata["sha256"]:
+                raise ValueError("slot-overwritten/hash-mismatch")
+            with Image.open(io.BytesIO(png)) as image:
+                if image.size != (metadata["width"], metadata["height"]):
+                    raise ValueError("frame-geometry-changed")
+                image.load()
+            return path, png
+        filename, png = read(frame)
+        frame["capture_session_id"] = row.get("capture_session_id")
+        # A mailbox is never an immutable archival original, regardless of flags.
+        if frame["filename"].startswith("live-"):
+            frame["archival"] = False
+        frame["_popup_inputs"] = []
+        for popup in frame.get("popup_frames", []):
+            if (not isinstance(popup, dict) or popup.get("parent_frame_index") != frame["frame_index"]
+                    or popup.get("non_atomic") is not True
+                    or type(popup.get("popup_index")) is not int or not 0 <= popup["popup_index"] < 4
+                    or not re.fullmatch(r"live-popup-[01]-[0-3]\.png", str(popup.get("filename", "")))
+                    or not re.fullmatch(r"[a-f0-9]{64}", str(popup.get("sha256", "")))
+                    or type(popup.get("png_bytes")) is not int or not 0 < popup["png_bytes"] <= MAX_PNG_BYTES
+                    or any(type(popup.get(k)) is not int or popup[k] < 0 for k in
+                           ("source_utc_unix_ms", "captured_at_monotonic_ms"))
+                    or not 0 <= self.wall() * 1000 - popup["source_utc_unix_ms"] < MAX_AGE_MS
+                    or any(type(popup.get(k)) is not int or not 1 <= popup[k] <= 4096 for k in ("width", "height"))):
+                raise ValueError("invalid-popup-metadata")
+            _, popup_png = read(popup)
+            frame["_popup_inputs"].append((popup, popup_png))
+        if self.monotonic() >= frame["_visual_deadline"] or not 0 <= self.wall() * 1000 - frame["source_utc_unix_ms"] < MAX_AGE_MS:
+            raise ValueError("expired")
+        return frame, filename, png
+
+    @staticmethod
+    def _alive(engine):
+        return getattr(engine, "archive_readers", 0) > 0 or any(worker.thread is not None and worker.thread.is_alive()
+                   for worker in (engine, engine.numeric, engine.context))
+
+    def _merge_masks(self, old, new, width, height):
+        masks = [list(m) for m in old]
+        masks.extend(list(m) for m in new if list(m) not in masks)
+        if len(masks) <= 64:
+            return masks
+        regions = self.regions.get("regions", {})
+        if not regions:
+            # Do not invent coverage when the ROI catalog itself is unavailable.
+            self.mask_mapping_incomplete = True
+            return masks[-64:]
+        keys = ["pot", *("board_slot_" + str(i) for i in range(1, 6)),
+                *("seat_" + str(i) + "_stack" for i in range(1, 7))]
+        for key in keys:
+            if key not in regions:
+                continue
+            l, t, r, b = box_px(regions[key], width, height)
+            if any(l < m[2] and r > m[0] and t < m[3] and b > m[1] for m in masks):
+                self.mask_fields.add(key)
+        return []
+
+    def _dispose(self, engine):
+        # Readers can own OS subprocesses. Dispose them before releasing the
+        # retirement slot, never as a final-reference side effect under lock.
+        try:
+            if engine.context.stop() is False:
+                raise RuntimeError("reader-close-failed")
+            engine.context.reader = None
+            engine.archive.close()
+        except (OSError, ValueError, RuntimeError):
+            with self.lock:
+                self.last_error = "visual-retirement-close-failed"
+            return False
+        with self.lock:
+            self.storage_incomplete["archive"] |= not engine.archive.complete
+            self.storage_incomplete["context_log"] |= not engine.context.log_complete
+            self.storage_incomplete["visual_log"] |= not engine.log_complete
+            for key, value in (("bytes", engine.archive.bytes), ("frames", len(engine.archive.receipts)),
+                               ("log_bytes", engine.archive.log_bytes), ("context_log_bytes", engine.context.log_bytes),
+                               ("visual_log_bytes", engine.log_bytes)):
+                self.used_budget[key] += value
+            for namespace in self.namespace_history:
+                if namespace["namespace_id"] == engine.archive.directory.name:
+                    namespace["workers_drained"] = True
+        return True
+
+    def _namespace(self, engine, status, reason=None):
+        binding = self.binding
+        return {"namespace_id": engine.archive.directory.name, "status": status,
+            "admitted_evidence": False, "semantics": "diagnostic-attempts-only; retirement freezes observed prefixes; late writes excluded",
+            "scope": {"service_instance_id": self.instance_id, "session_id": binding[0],
+                "capture_session_id": binding[1], "source_id": binding[2], "epoch": binding[3],
+                "width": binding[6], "height": binding[7]},
+            "sequence": engine.last_frame, "retirement_reason": reason,
+            "workers_drained": False, "frozen_prefix": status == "retired-uncommitted",
+            "visual_log": {"path": str((engine.archive.directory / "visual.jsonl").relative_to(self.root)),
+                "bytes": engine.log_bytes, "complete": engine.log_complete},
+            "context_log": {"path": str((engine.archive.directory / "context.jsonl").relative_to(self.root)),
+                "bytes": engine.context.log_bytes, "complete": engine.context.log_complete},
+            "archive": {"frames": len(engine.archive.receipts), "bytes": engine.archive.bytes,
+                "log_bytes": engine.archive.log_bytes, "complete": engine.archive.complete}}
+
+    def _state(self, binding):
+        session, owner, source, epoch, _, _, width, height = binding
+        return {"session_id": session, "server": {"instance_id": self.instance_id},
+                "capture_session": {"session_id": owner, "status": "capturing"},
+                "capture": {"fresh_capture": True, "source_id": source, "epoch": epoch, "width": width, "height": height}}
+
+    def _project(self, engine, binding, token, serial):
+        fingerprint = (id(engine.value), id(engine.context.value), id(engine.numeric.value),
+                       id(engine.latest_pixels), id(engine.archive.public))
+        if fingerprint == self._fingerprint:
+            return False
+        state = self._state(binding)
+        context = engine.context.snapshot(state)
+        masks = (context or {}).get("occluded_regions", [])
+        cache = {"table_context": context, "visual_observation": engine.snapshot(state, occluded_regions=masks),
+                 "numeric_observation": engine.numeric.snapshot(state, occluded_regions=masks),
+                 "event_evidence": engine.archive.snapshot(),
+                 "numeric_diagnostics": {"attempts": engine.numeric.attempts, "dropped_frames": engine.numeric.dropped,
+                    "error": engine.numeric.last_error, "last_timing": copy.deepcopy(engine.numeric.last_timing)},
+                 "context_diagnostics": {"attempts": engine.context.attempts, "dropped_frames": engine.context.dropped,
+                    "error": engine.context.last_error, "log_complete": engine.context.log_complete,
+                    "log_bytes": engine.context.log_bytes, "log_path": str((engine.archive.directory / "context.jsonl").relative_to(self.root))}}
+        leases = {key: getattr(cache[key], "deadline", None)
+                  for key in ("table_context", "visual_observation", "numeric_observation")}
+        with self.lock:
+            if not token.is_set() and self.engine is engine and serial == self.serial and serial == self.validated:
+                self.cache, self.leases = cache, leases
+                self._fingerprint = fingerprint
+                self.regions = getattr(engine, "regions", None) or self.region_manifest
+                if context is not None and context.get("capture", {}).get("sequence") == engine.last_frame:
+                    self.mask_regions = copy.deepcopy(masks)
+                    self.mask_fields.clear()
+                    self.mask_mapping_incomplete = False
+                else:
+                    self.mask_regions = self._merge_masks(self.mask_regions, masks, binding[6], binding[7])
+                board = (cache.get("visual_observation") or {}).get("board") or {}
+                if board.get("last_seen"):
+                    self.last_seen = copy.deepcopy(board["last_seen"])
+                    self.last_projection = cache["visual_observation"]
+                return True
+        return False
+
+    def _run(self):
+        while not self.closed.is_set():
+            self.wake.wait(.05)
+            self.wake.clear()
+            with self.lock:
+                retired = self.retiring
+            if retired is not None:
+                if self._alive(retired):
+                    continue
+                if not self._dispose(retired):
+                    continue
+                with self.lock:
+                    if self.retiring is retired:
+                        self.retiring = None
+            with self.lock:
+                pending, self.pending = self.pending, None
+                self.executing = pending is not None
+            if pending is not None:
+                row, binding, token, serial, received = pending
+                started = self.monotonic()
+                try:
+                    frame, filename, png = self._pin(row)
+                    with self.lock:
+                        if token.is_set() or serial != self.serial:
+                            self._drop("retired-binding" if token.is_set() else "superseded")
+                            continue
+                        engine = self.engine
+                    if engine is None:
+                        candidate = VisualLanes(self.root, self.instance_id, wall=self.wall, monotonic=self.monotonic)
+                        candidate.archive.directory = candidate.archive.directory / ("uncommitted-" + uuid.uuid4().hex)
+                        candidate.archive_readers = 0
+                        candidate.archive_readers_done = threading.Event()
+                        candidate.archive_readers_done.set()
+                        candidate.archive.max_bytes -= self.used_budget["bytes"]
+                        candidate.archive.max_frames -= self.used_budget["frames"]
+                        candidate.archive.max_log_bytes -= self.used_budget["log_bytes"]
+                        candidate.context.log_limit = max(0, MAX_LOG_BYTES - self.used_budget["context_log_bytes"])
+                        candidate.log_limit = max(0, MAX_LOG_BYTES - self.used_budget["visual_log_bytes"])
+                        if self.storage_incomplete["archive"]:
+                            candidate.archive.complete, candidate.archive.reason = False, "service-archive-incomplete"
+                        candidate.context.log_complete = not self.storage_incomplete["context_log"]
+                        candidate.log_complete = not self.storage_incomplete["visual_log"]
+                        candidate.archive._cache_status()
+                        with self.lock:
+                            if token.is_set() or serial != self.serial:
+                                candidate.revoke()
+                                self._drop("retired-binding")
+                                continue
+                            self.engine = engine = candidate
+                    # All comparisons and lane-facing locks are behind this boundary.
+                    engine.submit_pinned(frame, filename, (binding[0], binding[2], binding[3]), png)
+                    with self.lock:
+                        if not token.is_set() and serial == self.serial:
+                            self.validated = serial
+                except Exception as error:
+                    with self.lock:
+                        reason = str(error) if str(error) in ("slot-overwritten/hash-mismatch", "expired") else "visual-worker-error"
+                        self._drop(reason)
+                        self.last_error = type(error).__name__ + ":" + reason
+                        if self.token is token:
+                            self._retire(reason)
+                finally:
+                    with self.lock:
+                        self.executing = False
+                        self.stages.append({"sequence": row["frame"]["frame_index"],
+                            "queue_ms": round(max(0, started - received) * 1000, 3),
+                            "ingress_ms": round(max(0, self.monotonic() - started) * 1000, 3)})
+            with self.lock:
+                engine, binding, token, serial = self.engine, self.binding, self.token, self.serial
+            if engine is not None and token is not None and not token.is_set():
+                started = self.monotonic()
+                projected = False
+                try:
+                    projected = self._project(engine, binding, token, serial)
+                except Exception as error:
+                    with self.lock:
+                        self.last_error = type(error).__name__ + ":projection"
+                        self._drop("visual-worker-error")
+                        if self.engine is engine:
+                            self._retire("projection-failed")
+                finally:
+                    with self.lock:
+                        if projected:
+                            self.stages.append({"stage": "projection", "sequence": self.ticket[0],
+                                "duration_ms": round(max(0, self.monotonic() - started) * 1000, 3)})
+
+    def diagnostics(self):
+        with self.lock:
+            namespaces = copy.deepcopy(list(self.namespace_history))
+            if self.engine is not None:
+                namespaces.append(self._namespace(self.engine, "active"))
+            return {"schema_version": 1, "drops": dict(self.counts), "stages": list(self.stages), "pending": int(self.pending is not None),
+                    "executing": self.executing, "retirement_reason": self.retirement_reason,
+                    "error": self.last_error,
+                    "shutdown_pending": self.closed.is_set() and not self.shutdown_complete.is_set(),
+                    "shutdown_complete": self.shutdown_complete.is_set(), "retirement_pending": self.retiring is not None,
+                    "retired_archive_usage": dict(self.used_budget),
+                    "storage_incomplete": dict(self.storage_incomplete),
+                    "mask_mapping_incomplete": self.mask_mapping_incomplete,
+                    "namespaces": namespaces, "namespace_overflow_count": self.namespace_overflow,
+                    "archive_semantics": "active-runtime-index-only; retired uncommitted directories are inaccessible"}
+
+    def cached_snapshot(self, state):
+        with self.lock:
+            binding, token, serial, validated = self.binding, self.token, self.serial, self.validated
+            cache, leases = self.cache, self.leases
+            previous = self.last_projection
+        result = {"table_context": None, "visual_observation": None, "numeric_observation": None,
+                  "event_evidence": self._empty_archive.snapshot()}
+        if binding is not None and token is not None and not token.is_set():
+            current, receipt = state.get("capture") or {}, state.get("capture_session") or {}
+            expected = self._state(binding)
+            if (state.get("session_id") == binding[0] and receipt.get("session_id") == binding[1]
+                    and receipt.get("status") == "capturing" and current.get("fresh_capture")
+                    and (state.get("server") or {}).get("instance_id") == self.instance_id
+                    and all(current.get(k) == expected["capture"][k] for k in ("source_id", "epoch", "width", "height"))
+                    and serial == validated):
+                result.update(copy.deepcopy(cache))
+                for key, age in (("table_context", CONTEXT_AGE_MS), ("visual_observation", MAX_AGE_MS), ("numeric_observation", MAX_AGE_MS)):
+                    value = result.get(key)
+                    capture = (value or {}).get("capture") or value or {}
+                    if value is not None:
+                        identity = tuple(capture.get(k) for k in ("sequence", "captured_at_ms", "captured_at_unix_ms", "sha256"))
+                        expired = (leases.get(key) is None or self.monotonic() >= leases[key]
+                            or not 0 <= self.wall() * 1000 - capture.get("captured_at_unix_ms", 0) < age)
+                        with self.lock:
+                            if token is self.token and serial == self.serial:
+                                if expired and self._capture_identity(self.cache.get(key)) == identity:
+                                    self.expired_captures[key] = identity
+                                expired = expired or self.expired_captures.get(key) == identity
+                        if expired:
+                            result[key] = None
+            if (result["visual_observation"] is None and previous is not None
+                    and state.get("session_id") == binding[0] and receipt.get("session_id") == binding[1]
+                    and receipt.get("status") == "capturing"
+                    and current.get("source_id") == binding[2] and current.get("epoch") == binding[3]):
+                # Historical sightings remain explicitly separate from current
+                # cards while validation, recognition, or the original lease fails.
+                result["visual_observation"] = self._withhold_visual(copy.deepcopy(previous))
+        result["visual_diagnostics"] = self.diagnostics()
+        # Final token/sequence check after copying, without any pixel/cache lock.
+        with self.lock:
+            if token is not self.token or token is not None and token.is_set() or serial != self.serial:
+                for key in ("table_context", "visual_observation", "numeric_observation"):
+                    result[key] = None
+                result["event_evidence"] = self._empty_archive.snapshot()
+                for key in ("numeric_diagnostics", "context_diagnostics"):
+                    result.pop(key, None)
+                result["visual_diagnostics"]["namespaces"] = []
+        return _VisualProjection(result, binding, token, serial, leases)
+
+    @staticmethod
+    def _capture_identity(value):
+        if value is None:
+            return None
+        capture = value.get("capture") or value
+        return tuple(capture.get(k) for k in ("sequence", "captured_at_ms", "captured_at_unix_ms", "sha256"))
+
+    @staticmethod
+    def _withhold_visual(visual):
+        if visual is None:
+            return None
+        visual["current_uncertain"] = True
+        for slot in visual.get("board_slots", []):
+            slot.update(card=None, status="unknown", reason="visual-validation-pending-or-expired")
+        board = visual.get("board") or {}
+        board.update(candidate_cards=None, stage=None, empty_board_supported=False)
+        for slot in board.get("slots", []):
+            slot.update(card=None, status="unknown")
+        visual.update(actions=None, revealed_cards=None, sightings=[])
+        return visual
+
+    def fence_snapshot(self, snapshot, projection):
+        """Final metadata-only gate, ordered with feed submit/retirement."""
+        with self.lock:
+            binding, token, serial = self.binding, self.token, self.serial
+            current = (isinstance(projection, _VisualProjection) and projection.binding == binding
+                and projection.token is token and token is not None and not token.is_set()
+                and projection.serial == serial)
+        capture, receipt = snapshot.get("capture") or {}, snapshot.get("capture_session") or {}
+        same_scope = (binding is not None and snapshot.get("session_id") == binding[0]
+            and receipt.get("session_id") == binding[1] and receipt.get("status") == "capturing"
+            and (snapshot.get("server") or {}).get("instance_id") == self.instance_id
+            and (capture.get("source_id"), capture.get("epoch"), capture.get("width"), capture.get("height"))
+                == (binding[2], binding[3], binding[6], binding[7]))
+        if not current or not same_scope or not capture.get("fresh_capture"):
+            visual = snapshot.get("visual_observation")
+            original = (visual or {}).get("capture") or {}
+            historical = (same_scope and isinstance(projection, _VisualProjection) and projection.binding == binding
+                and (original.get("session_id"), original.get("capture_session_id"), original.get("source_id"),
+                     original.get("epoch")) == (binding[0], binding[1], binding[2], binding[3]))
+            snapshot.update(table_context=None, numeric_observation=None,
+                visual_observation=self._withhold_visual(visual) if historical else None,
+                event_evidence=self._empty_archive.snapshot())
+            for key in ("numeric_diagnostics", "context_diagnostics"):
+                snapshot.pop(key, None)
+            if isinstance(snapshot.get("visual_diagnostics"), dict):
+                snapshot["visual_diagnostics"]["namespaces"] = []
+            return
+        for key, age in (("table_context", CONTEXT_AGE_MS), ("visual_observation", MAX_AGE_MS), ("numeric_observation", MAX_AGE_MS)):
+            value = snapshot.get(key)
+            source = (value or {}).get("capture") or value or {}
+            if value is None:
+                continue
+            identity = tuple(source.get(k) for k in ("sequence", "captured_at_ms", "captured_at_unix_ms", "sha256"))
+            expired = (projection.leases.get(key) is None or self.monotonic() >= projection.leases[key]
+                or not 0 <= self.wall() * 1000 - source.get("captured_at_unix_ms", 0) < age)
+            with self.lock:
+                if serial == self.serial and token is self.token:
+                    if expired and self._capture_identity(self.cache.get(key)) == identity:
+                        self.expired_captures[key] = identity
+                    expired = expired or self.expired_captures.get(key) == identity
+            if expired:
+                snapshot[key] = self._withhold_visual(value) if key == "visual_observation" else None
+        with self.lock:
+            retired = token is not self.token or token.is_set() or serial != self.serial
+            replaced = binding != self.binding
+        if retired:
+            snapshot.update(table_context=None, numeric_observation=None,
+                visual_observation=None if replaced else self._withhold_visual(snapshot.get("visual_observation")),
+                event_evidence=self._empty_archive.snapshot())
+            for key in ("numeric_diagnostics", "context_diagnostics"):
+                snapshot.pop(key, None)
+            if isinstance(snapshot.get("visual_diagnostics"), dict):
+                snapshot["visual_diagnostics"]["namespaces"] = []
+
+    def mask_snapshot(self, snapshot, context):
+        with self.lock:
+            binding = self.binding
+            masks = copy.deepcopy(self.mask_regions)
+            fields = set(self.mask_fields)
+        current, receipt = snapshot.get("capture") or {}, snapshot.get("capture_session") or {}
+        if (binding is None or snapshot.get("session_id") != binding[0] or receipt.get("session_id") != binding[1]
+                or current.get("source_id") != binding[2] or current.get("epoch") != binding[3]
+                or [current.get("width"), current.get("height")] != [binding[6], binding[7]]):
+            return
+        _mask_native_snapshot(self, snapshot, {"occluded_regions": masks, "covered_fields": fields})
+
+    def stop(self):
+        self.closed.set()
+        self.revoke("stopped")
+        self.wake.set()
+        if self.thread is not None:
+            self.thread.join(timeout=.1)
+        # No timeout is represented as termination or archive closure.
+        def finish():
+            if self.thread is not None:
+                self.thread.join()
+            retired = self.retiring
+            if retired is not None:
+                for worker in (retired, retired.context, retired.numeric):
+                    if worker.thread is not None:
+                        worker.thread.join()
+                retired.archive_readers_done.wait()
+                if not self._dispose(retired):
+                    return
+                with self.lock:
+                    if self.retiring is retired:
+                        self.retiring = None
+            self.shutdown_complete.set()
+        with self.lock:
+            if self._cleanup_started:
+                return
+            self._cleanup_started = True
+        threading.Thread(target=finish, name="visual-retirement", daemon=True).start()
