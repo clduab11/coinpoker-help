@@ -28,6 +28,139 @@ def listing(value=None):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_capture_failure_optional_strict_private_and_public_projection(self):
+        row = {"event": "manual_capture", "version": 1, "mode": "capture-only",
+               "recording": {"recorded_frames": 0, "recorded_bytes": 0},
+               "capture_failures": 1, "stop_reason": "capture-failed"}
+        diagnostic = {"code": "foreign-overlap", "detail": "offender=(hwnd=0x123 pid=42 class=PRIVATE)"}
+        status = capture.default_snapshot()
+        self.assertIsNone(status.get("capture_failure_code"))
+        self.assertIsNone(capture._native_record({**row, "stop_reason": None}, status))
+        self.assertNotIn("capture_failure", status)
+        capture._native_record({**row, "capture_failure": diagnostic}, status)
+        self.assertEqual(status["capture_failure"], diagnostic)
+        for optional in ({}, {"capture_failure": None}):
+            capture._native_record({**row, "stop_reason": "operator-stop", **optional}, status)
+            self.assertEqual(status["capture_failure"], diagnostic)
+        path, value = self.session(capture_failure=diagnostic)
+        capture.write_json(path / "failure.json", {"reason": "feed-failed"})
+        public = capture.public_snapshot(root=self.root, current_ms=10_000)
+        self.assertEqual(public["capture_failure_code"], "foreign-overlap")
+        self.assertEqual(public["stop_reason"], "feed-failed")
+        self.assertNotIn("capture_failure", public)
+        self.assertNotIn("PRIVATE", json.dumps(public))
+        for invalid in [False, [], "foreign-overlap", {}, {"code": "unknown", "detail": "private"},
+                {"code": "foreign-overlap", "detail": "x", "hwnd": "0x123"},
+                {"code": "backend"}, {"code": "backend", "detail": 1},
+                *({"code": "backend", "detail": detail} for detail in [None, "x" * 1025, "\n", "\x7f", "\u202e"])]:
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    capture._native_record({**row, "capture_failure": invalid}, capture.default_snapshot())
+                capture.write_json(path / "status.json", {**value, "capture_failure": invalid})
+                rejected = capture.public_snapshot(root=self.root, current_ms=10_000)
+                self.assertEqual(rejected["stop_reason"], "receipt-invalid")
+                self.assertIsNone(rejected.get("capture_failure_code"))
+        for code in capture.CAPTURE_FAILURE_CODES:
+            failure = {"code": code, "detail": "x" * 1024}
+            capture._native_record({**row, "capture_failure": failure}, capture.default_snapshot())
+            capture.write_json(path / "status.json", {**value, "capture_failure": failure})
+            self.assertEqual(capture.public_snapshot(root=self.root, current_ms=10_000)["capture_failure_code"], code)
+        capture.write_json(path / "status.json", {**value, "capture_failure": None,
+            "capture_failure_code": "foreign-overlap", "detail": "PRIVATE"})
+        self.assertIsNone(capture.public_snapshot(root=self.root, current_ms=10_000)["capture_failure_code"])
+
+    def test_capture_failure_survives_later_supervisor_lifecycle_reason(self):
+        diagnostic = {"code": "stale-window", "detail": "private resize diagnostic"}
+        row = {"event": "manual_capture", "version": 1, "mode": "capture-only",
+               "recording": {"recorded_frames": 0, "recorded_bytes": 0}, "capture_failures": 1,
+               "capture_failure": diagnostic, "stop_reason": None}
+        with patch.object(capture, "MAX_LOG", len(json.dumps(row).encode()) + 2):
+            code, process, child, path, status = self.run_supervisor(row=[row,
+                {**row, "capture_failure": None}])
+        self.assertEqual(code, 1)
+        # Direct-file final drain already treats an over-cap archive as invalid.
+        self.assertEqual(status["stop_reason"], "receipt-invalid")
+        self.assertEqual(status["capture_failure"], diagnostic)
+        public = capture.public_snapshot(root=self.root)
+        self.assertEqual(public["capture_failure_code"], "stale-window")
+        self.assertEqual(public["stop_reason"], "receipt-invalid")
+        self.assertNotIn("private resize diagnostic", json.dumps(public))
+        self.assertEqual(capture.read_json(path / "run.json")["stop_reason"], "receipt-invalid")
+        child.terminate.assert_called_once()
+        process.assert_called_once()
+
+    def test_capture_failure_survives_split_final_drain_and_sustained_archive_cap(self):
+        for sustained in (False, True):
+            for complete in (False, True):
+                with self.subTest(sustained=sustained, complete=complete), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    binary = root / "target/debug/coinpoker.exe"
+                    binary.parent.mkdir(parents=True)
+                    binary.write_bytes(b"synthetic nonexecutable")
+                    diagnostic = {"code": "foreign-overlap", "detail": "offender=(hwnd=0x123 pid=42 class=PRIVATE)"}
+                    row = {"event": "manual_capture", "version": 2 if sustained else 1,
+                           "mode": "inference-enabled" if sustained else "capture-only",
+                           "source_policy": "automatic-sustained" if sustained else "manual",
+                           "activity_state": "verifying", "elapsed_ms": 0, "recording_end_reason": None,
+                           "recording": {"recorded_frames": 0, "recorded_bytes": 0}, "capture_failures": 1,
+                           "capture_failure": diagnostic, "stop_reason": "capture-failed"}
+                    data = json.dumps(row).encode() + (b"\n" if complete else b"")
+                    head, tail = data[:len(data) // 2], data[len(data) // 2:]
+                    child = Mock(stdout="stdout", stderr="stderr")
+                    child.poll.return_value = 0
+                    class Pipe:
+                        def __init__(self, stream):
+                            self.chunks = iter([head, tail] if stream == "stdout" else [])
+                            self.failed = capture.threading.Event()
+                            self.failure_reason = None
+                        def read(self):
+                            return next(self.chunks, b"")
+                        def finish(self):
+                            pass
+                    def start(command, **kwargs):
+                        if not sustained:
+                            kwargs["stdout"].write(head)
+                            kwargs["stdout"].flush()
+                            def exit_after_read():
+                                with Path(command[-1]).with_name("stdout.jsonl").open("ab") as stream:
+                                    stream.write(tail)
+                                child.poll.side_effect = None
+                                return 0
+                            child.poll.side_effect = exit_after_read
+                        return child
+                    with patch.object(capture.subprocess, "Popen", side_effect=start) as process, \
+                            patch.object(capture, "_PipeReader", Pipe), \
+                            patch.object(capture, "MAX_LOG", 32 if sustained else capture.MAX_LOG), \
+                            patch.object(capture.time, "monotonic", return_value=0), \
+                            patch.object(capture, "now_ms", return_value=10_000), \
+                            patch.object(capture, "inference_service", return_value={"instance_id": "b" * 32,
+                                "model_state": "ready", "acceptance_floors_loaded": True}):
+                        code = capture.supervise(window(), root=root, confirmed_at_unix_ms=10_000,
+                            mode=row["mode"], source_policy=row["source_policy"],
+                            automatic_assertion=capture.SUSTAINED_ASSERTION if sustained else None,
+                            inference_approval={"inference_assertion": capture.INFERENCE_ASSERTION,
+                                "service_instance_id": "b" * 32} if sustained else None,
+                            on_record=lambda *_: self.fail("terminal capture must not admit feed rows"), output=lambda _: None)
+                    self.assertEqual(code, 1)
+                    process.assert_called_once()
+                    child.terminate.assert_not_called()
+                    child.kill.assert_not_called()
+                    session_id = capture.read_json(root / capture.BASE / "current.json")["session_id"]
+                    path = capture.session_path(session_id, root=root)
+                    private = capture.read_json(path / "status.json")
+                    public = capture.public_snapshot(root=root, session_id=session_id, current_ms=10_000)
+                    run = capture.read_json(path / "run.json")
+                    self.assertEqual(private["stop_reason"], "capture-failed" if complete else "receipt-invalid")
+                    self.assertEqual(private.get("capture_failure"), diagnostic if complete else None)
+                    self.assertEqual(public["capture_failure_code"], "foreign-overlap" if complete else None)
+                    self.assertNotIn("PRIVATE", json.dumps(public))
+                    self.assertEqual(run["receipt_complete"], complete)
+                    if sustained:
+                        self.assertEqual((path / "stdout.jsonl").stat().st_size, 32)
+                        self.assertFalse(run["diagnostics_complete"])
+                        self.assertEqual(run["diagnostic_streams"]["stdout"]["bytes_seen"], len(data))
+
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="manual-capture-fixture-")
         self.addCleanup(self.temp.cleanup)

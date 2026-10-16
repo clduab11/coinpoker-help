@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ingest::capture::{CaptureSource, PlatformCapture, WindowInfo};
+use ingest::capture::{CaptureError, CaptureSource, PlatformCapture, WindowInfo};
 use ingest::recorder::{CaptureStamp, PrivateRecorder, RecorderConfig, RecorderStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,6 +16,59 @@ use crate::RunError;
 
 const MAX_SECONDS: u64 = 600;
 const MAX_FRAMES: u64 = 1_200;
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CaptureFailure {
+    pub(crate) code: &'static str,
+    pub(crate) detail: String,
+}
+
+// Explanatory only: these codes never decide source eligibility or recovery.
+pub(crate) fn capture_failure(error: &CaptureError) -> CaptureFailure {
+    let code = match error {
+        CaptureError::Backend(message) => message
+            .strip_prefix("selected window surface is obscured or ambiguous: cause=")
+            .and_then(|cause| cause.split_once(" offender=("))
+            .map_or("backend", |(cause, _)| match cause {
+                "foreign-overlap" => "foreign-overlap",
+                "popup-overlap" => "popup-overlap",
+                "nonpositive-geometry" => "nonpositive-geometry",
+                "popup-geometry" => "popup-geometry",
+                "popup-limit" => "popup-limit",
+                "center-mismatch" => "center-mismatch",
+                "window-geometry-query-failed" => "window-geometry-query-failed",
+                "cloak-query-failed" => "cloak-query-failed",
+                "selected-not-enumerated" => "selected-not-enumerated",
+                _ => "backend",
+            }),
+        CaptureError::UnsupportedPlatform => "unsupported-platform",
+        CaptureError::UnsupportedWindowsVersion => "unsupported-windows-version",
+        CaptureError::WindowNotFound(_) => "window-not-found",
+        CaptureError::ConfigurationRequired => "configuration-required",
+        CaptureError::AmbiguousWindows => "ambiguous-windows",
+        CaptureError::StaleWindow { .. } => "stale-window",
+        CaptureError::NoWindowSelected => "no-window-selected",
+        CaptureError::PermissionDenied => "permission-denied",
+    };
+    let message = match error {
+        CaptureError::Backend(message) => std::borrow::Cow::Borrowed(message.as_str()),
+        _ => std::borrow::Cow::Owned(error.to_string()),
+    };
+    CaptureFailure {
+        code,
+        detail: message
+            .chars()
+            .take(1024)
+            .map(|character| {
+                if character.is_ascii_graphic() || character == ' ' {
+                    character
+                } else {
+                    '?'
+                }
+            })
+            .collect(),
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -203,14 +256,17 @@ fn emit_status(
     elapsed_ms: u64,
     reason: Option<&str>,
     capture_failures: u64,
+    capture_failure: Option<&CaptureFailure>,
+    emit: &mut impl FnMut(&serde_json::Value) -> Result<(), RunError>,
 ) -> Result<(), RunError> {
     let snapshot = recorder.handle().snapshot();
-    crate::live::emit(&json!({
+    emit(&json!({
         "event": "manual_capture", "version": 1, "mode": "capture-only",
         "elapsed_ms": elapsed_ms, "stop_reason": reason,
         "recording_end_reason": effective_recording_end_reason(reason, snapshot.recording_status),
         "recording": snapshot,
         "capture_failures": capture_failures,
+        "capture_failure": capture_failure,
         "capture_directory": recorder.session_path(),
         "latest_frame": recorder.last_receipt(),
         "updated_at_unix_ms": unix_ms()
@@ -224,6 +280,7 @@ fn capture_loop(
     stop: &Path,
     elapsed: impl Fn() -> u64,
     mut wait: impl FnMut(),
+    mut emit: impl FnMut(&serde_json::Value) -> Result<(), RunError>,
 ) -> Result<(), RunError> {
     let mut recorder = PrivateRecorder::new(
         root,
@@ -235,6 +292,7 @@ fn capture_loop(
     )?;
     let mut selected: Option<WindowInfo> = None;
     let mut capture_failures = 0;
+    let mut failure = None;
     let source_id = RandomState::new().hash_one((approval.source.process_id, approval.source.hwnd));
     let mut next_frame_ms = 0;
     let reason = loop {
@@ -302,8 +360,9 @@ fn capture_loop(
                     recorder.record(&frame, stamp);
                     next_frame_ms = capture_ms + 500;
                 }
-                Err(ingest::capture::CaptureError::StaleWindow { .. }) => {
+                Err(error @ CaptureError::StaleWindow { .. }) => {
                     capture_failures += 1;
+                    failure = Some(capture_failure(&error));
                     let resized = match source.discover() {
                         Ok(listing) => listing.windows,
                         Err(_) => break "source-unavailable",
@@ -332,8 +391,9 @@ fn capture_loop(
                     }
                     selected = Some(matches[0].clone());
                 }
-                Err(_) => {
+                Err(error) => {
                     capture_failures += 1;
+                    failure = Some(capture_failure(&error));
                     break "capture-failed";
                 }
             }
@@ -345,11 +405,25 @@ fn capture_loop(
         ) {
             break reason;
         }
-        emit_status(&recorder, elapsed(), None, capture_failures)?;
+        emit_status(
+            &recorder,
+            elapsed(),
+            None,
+            capture_failures,
+            failure.as_ref(),
+            &mut emit,
+        )?;
         wait();
     };
     source.reset();
-    emit_status(&recorder, elapsed(), Some(reason), capture_failures)?;
+    emit_status(
+        &recorder,
+        elapsed(),
+        Some(reason),
+        capture_failures,
+        failure.as_ref(),
+        &mut emit,
+    )?;
     Ok(())
 }
 
@@ -428,6 +502,7 @@ pub fn run(args: &[String]) -> Result<(), RunError> {
         &parent.join("STOP"),
         || started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
         || std::thread::sleep(Duration::from_millis(100)),
+        crate::live::emit,
     )
 }
 

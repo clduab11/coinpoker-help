@@ -51,6 +51,13 @@ REASONS = {"operator-stop", "duration-limit", "frame-limit", "disk-limit", "reco
             "child-stop-unconfirmed", "inference-failed", "publication-failed", "model-not-ready", "feed-failed",
             "table-activity-unconfirmed", "automatic-discovery-timeout"}
 STATUSES = {"idle", "capturing", "stopped", "failed", "interrupted"}
+CAPTURE_FAILURE_CODES = {
+    "foreign-overlap", "popup-overlap", "nonpositive-geometry", "popup-geometry", "popup-limit",
+    "center-mismatch", "window-geometry-query-failed", "cloak-query-failed", "selected-not-enumerated",
+    "backend", "unsupported-platform", "unsupported-windows-version", "window-not-found",
+    "configuration-required", "ambiguous-windows", "stale-window", "no-window-selected", "permission-denied",
+}
+MAX_CAPTURE_FAILURE_DETAIL = 1024
 
 
 def utc():
@@ -266,6 +273,7 @@ def default_snapshot():
             "session_id": None, "elapsed_ms": 0, "max_duration_ms": MAX_SECONDS * 1000,
             "max_frames": MAX_FRAMES, "remaining_ms": MAX_SECONDS * 1000,
             "recorded_frames": 0, "recorded_bytes": 0, "capture_failures": 0,
+            "capture_failure_code": None,
             "gap_count": 0, "max_gap_ms": None, "estimated_missed_samples": 0,
             "distinct_opportunities": 0, "target_opportunities": TARGET, "opportunity_deficit": TARGET,
             "labels": "DRAFT", "human_review": "PENDING", "suggestions_enabled": False,
@@ -360,6 +368,9 @@ def public_snapshot(*, root=ROOT, session_id=None, current_ms=None):
         if reason is not None and reason not in REASONS:
             raise ValueError("invalid-status")
         result["stop_reason"] = reason
+        failure = _capture_failure(value.get("capture_failure"))
+        if failure is not None:
+            result["capture_failure_code"] = failure["code"]
         current_ms = now_ms() if current_ms is None else current_ms
         age = current_ms - result["updated_at_unix_ms"]
         # Sustained anti-replay compares the owner's monotonic sample, not UTC
@@ -394,6 +405,17 @@ def public_snapshot(*, root=ROOT, session_id=None, current_ms=None):
     return result
 
 
+def _capture_failure(value):
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != {"code", "detail"}
+            or not isinstance(value["code"], str) or value["code"] not in CAPTURE_FAILURE_CODES
+            or not isinstance(value["detail"], str) or len(value["detail"]) > MAX_CAPTURE_FAILURE_DETAIL
+            or any(not " " <= character <= "~" for character in value["detail"])):
+        raise ValueError("invalid-capture-failure")
+    return dict(value)
+
+
 def _native_record(row, status):
     sustained = status.get("source_policy") == "automatic-sustained"
     if (not isinstance(row, dict) or row.get("event") != "manual_capture"
@@ -402,6 +424,7 @@ def _native_record(row, status):
         raise ValueError("invalid-native-receipt")
     if row.get("source_policy", "manual") != status.get("source_policy", "manual"):
         raise ValueError("invalid-native-policy")
+    failure = _capture_failure(row.get("capture_failure"))
     activity = row["activity_state"] if status.get("source_policy") in AUTOMATIC_POLICIES else row.get("activity_state", "active")
     if activity not in {"idle", "verifying", "active"}:
         raise ValueError("invalid-native-activity")
@@ -439,6 +462,8 @@ def _native_record(row, status):
     reason = row.get("stop_reason")
     if reason is not None and reason not in REASONS:
         raise ValueError("invalid-native-reason")
+    if failure is not None:
+        status["capture_failure"] = failure
     return reason
 
 

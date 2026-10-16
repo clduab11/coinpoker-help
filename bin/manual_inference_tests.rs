@@ -451,6 +451,9 @@ impl CaptureSource for Source {
             "title" => state.window.title = Some("replacement".into()),
             "minimized" => state.window.on_screen = false,
             "capture-failure" => return Err(CaptureError::PermissionDenied),
+            "capture-overlap" => return Err(CaptureError::Backend("selected window surface is obscured or ambiguous: cause=foreign-overlap offender=(hwnd=0x1) reference=(hwnd=0x2)".into())),
+            "capture-overlap-inflight" if state.captures == 4 => return Err(CaptureError::Backend("selected window surface is obscured or ambiguous: cause=popup-overlap offender=(hwnd=0x1) reference=(hwnd=0x2)".into())),
+            "capture-backend" => return Err(CaptureError::Backend("unrecognized backend\nprivate".into())),
             "stop-during-capture" => fs::write(&self.stop, "synthetic stop").unwrap(),
             "duration-during-capture" => self.time.0.set(600_000),
             "slow-capture" | "auto-slow-selection" => self.time.0.set(self.time.now_ms() + 200),
@@ -612,6 +615,7 @@ impl InferencePort<ui::widgets::DecisionView> for Worker {
         &mut self,
     ) -> Result<Option<Completion<ui::widgets::DecisionView>>, InferenceFailure> {
         if self.case == "slow-worker"
+            || self.case == "capture-overlap-inflight" && self.time.now_ms() < 1500
             || self.case == "late-worker" && self.time.now_ms() < 6_000
             || self.state.borrow().job.as_ref().is_some_and(|job| {
                 self.time.now_ms() < job.ticket.captured_at_ms + self.state.borrow().job_ms
@@ -1089,6 +1093,7 @@ fn sustained_ended_evidence_still_rejects_source_capture_and_clock_failures() {
         ("closed", "source-changed"),
         ("discovery-failure", "source-unavailable"),
         ("capture-failure", "capture-failed"),
+        ("capture-overlap", "capture-failed"),
         ("invalid-frame", "capture-failed"),
         ("stop-during-capture", "operator-stop"),
         ("utc-rollback", "capture-failed"),
@@ -1140,6 +1145,15 @@ fn sustained_ended_evidence_still_rejects_source_capture_and_clock_failures() {
         assert_eq!(source.terminal, Some(reason), "{case}");
         assert!(source.last_capture_timing().is_none());
         assert_eq!(source.recorder.handle().snapshot(), frozen);
+        let failure_code = match case {
+            "capture-failure" => Some("permission-denied"),
+            "capture-overlap" => Some("foreign-overlap"),
+            _ => None,
+        };
+        assert_eq!(
+            source.progress(Some(reason))["capture_failure"]["code"].as_str(),
+            failure_code
+        );
         state.borrow_mut().case = "sustained-provenance";
         state.borrow_mut().window = approval.source.clone();
         time.0.set(601_000);
@@ -1149,6 +1163,10 @@ fn sustained_ended_evidence_still_rejects_source_capture_and_clock_failures() {
         assert!(
             source.capture().is_err(),
             "failure cannot retry capture {case}"
+        );
+        assert_eq!(
+            source.progress(Some(reason))["capture_failure"]["code"].as_str(),
+            failure_code
         );
     }
 }
@@ -2516,6 +2534,44 @@ fn manual_inference_terminal_sources_never_rearm_or_infer_unsaved_pixels() {
         assert!(events
             .iter()
             .any(|event| event["event"] == "observation_invalidated" && event["reason"] == reason));
+    }
+}
+
+#[test]
+fn capture_failure_inference_progress_keeps_diagnostic_and_discards_queued_partials() {
+    for (case, expected) in [
+        ("capture-failure", "permission-denied"),
+        ("capture-overlap", "foreign-overlap"),
+        ("capture-overlap-inflight", "popup-overlap"),
+        ("capture-backend", "backend"),
+    ] {
+        let (root, events, source, worker) = exercise(case);
+        let progress: Vec<_> = events
+            .iter()
+            .filter(|event| event["event"] == "manual_capture")
+            .collect();
+        assert!(progress.first().unwrap()["capture_failure"].is_null());
+        let terminal = progress.last().unwrap();
+        assert_eq!(terminal["capture_failure"]["code"], expected, "{case}");
+        assert_eq!(terminal["capture_failures"], 1);
+        assert_eq!(terminal["stop_reason"], "capture-failed");
+        assert!(!terminal["capture_failure"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains('\n'));
+        assert!(events.iter().all(|event| !matches!(
+            event["event"].as_str(),
+            Some("partial_observation" | "observation" | "table" | "decision")
+        )));
+        if case == "capture-overlap-inflight" {
+            assert_eq!(source.borrow().captures, 4);
+            assert_eq!(worker.borrow().starts.len(), 1);
+            assert_eq!(rows(root.path()).len(), 3);
+        } else {
+            assert_eq!(source.borrow().captures, 1);
+            assert!(worker.borrow().starts.is_empty());
+            assert!(rows(root.path()).is_empty());
+        }
     }
 }
 

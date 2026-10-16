@@ -1,5 +1,67 @@
 use super::*;
 
+#[test]
+fn capture_failure_classifies_only_exact_surface_causes_and_bounds_private_detail() {
+    use ingest::capture::CaptureError;
+    for code in [
+        "foreign-overlap",
+        "popup-overlap",
+        "nonpositive-geometry",
+        "popup-geometry",
+        "popup-limit",
+        "center-mismatch",
+        "window-geometry-query-failed",
+        "cloak-query-failed",
+        "selected-not-enumerated",
+    ] {
+        let text = format!("selected window surface is obscured or ambiguous: cause={code} offender=(hwnd=0x1) reference=(hwnd=0x2)");
+        let failure = capture_failure(&CaptureError::Backend(text.clone()));
+        assert_eq!(failure.code, code);
+        assert_eq!(failure.detail, text);
+    }
+    for text in [
+        "foreign-overlap",
+        "cause=foreign-overlap offender=(hwnd=0x1)",
+        "selected window surface is obscured or ambiguous: cause=foreign-overlap-extra offender=(hwnd=0x1)",
+        "selected window surface is obscured or ambiguous: cause=unknown offender=(hwnd=0x1)",
+        "selected window surface is obscured or ambiguous: cause=foreign-overlap\n offender=(hwnd=0x1)",
+    ] {
+        assert_eq!(capture_failure(&CaptureError::Backend(text.into())).code, "backend");
+    }
+    let failure = capture_failure(&CaptureError::Backend(format!(
+        "\n\r\t\0\x1b\x7f\u{202e}{}",
+        "x".repeat(2000)
+    )));
+    assert_eq!(failure.code, "backend");
+    assert_eq!(failure.detail.len(), 1024);
+    assert!(failure.detail.starts_with("???????"));
+    assert!(failure
+        .detail
+        .bytes()
+        .all(|byte| (b' '..=b'~').contains(&byte)));
+    for (error, code) in [
+        (CaptureError::UnsupportedPlatform, "unsupported-platform"),
+        (
+            CaptureError::UnsupportedWindowsVersion,
+            "unsupported-windows-version",
+        ),
+        (
+            CaptureError::WindowNotFound("private".into()),
+            "window-not-found",
+        ),
+        (
+            CaptureError::ConfigurationRequired,
+            "configuration-required",
+        ),
+        (CaptureError::AmbiguousWindows, "ambiguous-windows"),
+        (CaptureError::StaleWindow { hwnd: 1 }, "stale-window"),
+        (CaptureError::NoWindowSelected, "no-window-selected"),
+        (CaptureError::PermissionDenied, "permission-denied"),
+    ] {
+        assert_eq!(capture_failure(&error).code, code);
+    }
+}
+
 fn temp_root() -> tempfile::TempDir {
     tempfile::Builder::new()
         .prefix("coinpoker-capture-test-")
@@ -310,6 +372,7 @@ struct FakeSource {
     resize: bool,
     replace_after_capture: bool,
     stale_first: bool,
+    capture_error: Option<CaptureError>,
 }
 
 impl CaptureSource for FakeSource {
@@ -333,6 +396,9 @@ impl CaptureSource for FakeSource {
     }
     fn capture(&mut self) -> Result<ingest::capture::Frame, ingest::capture::CaptureError> {
         self.captures += 1;
+        if let Some(error) = self.capture_error.take() {
+            return Err(error);
+        }
         if self.stale_first && self.captures == 1 {
             return Err(ingest::capture::CaptureError::StaleWindow {
                 hwnd: self.windows[0].hwnd,
@@ -366,6 +432,7 @@ fn manual_capture_fake_source_count_resize_and_stop_are_one_shot() {
             resize: matches!(case, "resize" | "stale_resize"),
             replace_after_capture: case == "replacement_after",
             stale_first: case.starts_with("stale_"),
+            capture_error: None,
         };
         let clock = std::cell::Cell::new(if case == "time" { 600_000 } else { 0 });
         if case == "stop" {
@@ -374,6 +441,7 @@ fn manual_capture_fake_source_count_resize_and_stop_are_one_shot() {
         if case == "replacement" {
             source.windows[0].hwnd += 1;
         }
+        let mut events = Vec::new();
         capture_loop(
             &mut source,
             &approval,
@@ -381,8 +449,16 @@ fn manual_capture_fake_source_count_resize_and_stop_are_one_shot() {
             &root.join("STOP"),
             || clock.get(),
             || clock.set(clock.get() + 500),
+            |event| {
+                events.push(event.clone());
+                Ok(())
+            },
         )
         .unwrap();
+        assert_eq!(
+            events.last().unwrap()["capture_failure"]["code"].as_str(),
+            case.starts_with("stale_").then_some("stale-window")
+        );
         assert_eq!(
             source.captures,
             match case {
@@ -417,5 +493,32 @@ fn manual_capture_fake_source_count_resize_and_stop_are_one_shot() {
                 0
             );
         }
+    }
+}
+
+#[test]
+fn capture_failure_capture_only_progress_preserves_cause_without_retry_or_saved_pixels() {
+    for (error, expected) in [
+        (CaptureError::Backend("selected window surface is obscured or ambiguous: cause=foreign-overlap offender=(hwnd=0x1) reference=(hwnd=0x2)".into()), "foreign-overlap"),
+        (CaptureError::Backend("unknown backend".into()), "backend"),
+        (CaptureError::PermissionDenied, "permission-denied"),
+    ] {
+        let root = temp_root();
+        let approval = approval();
+        let mut source = FakeSource {
+            windows: vec![approval.source.clone()], captures: 0, selected: vec![], resize: false,
+            replace_after_capture: false, stale_first: false, capture_error: Some(error),
+        };
+        let mut events = Vec::new();
+        capture_loop(&mut source, &approval, root.path(), &root.path().join("STOP"), || 0,
+            || panic!("capture failure must not wait or retry"),
+            |event| { events.push(event.clone()); Ok(()) }).unwrap();
+        assert_eq!(source.captures, 1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["capture_failure"]["code"], expected);
+        assert_eq!(events[0]["capture_failures"], 1);
+        assert_eq!(events[0]["stop_reason"], "capture-failed");
+        assert_eq!(events[0]["recording"]["recorded_frames"], 0);
+        assert!(events[0]["latest_frame"].is_null());
     }
 }

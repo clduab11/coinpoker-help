@@ -26,8 +26,8 @@ use ingest::vlm::VlmConfig;
 use serde_json::{json, Value};
 
 use crate::manual_capture::{
-    budget_reason, effective_recording_end_reason, find_approved_window, recording_end_reason,
-    Approval, SourcePolicy,
+    budget_reason, capture_failure, effective_recording_end_reason, find_approved_window,
+    recording_end_reason, Approval, CaptureFailure, SourcePolicy,
 };
 use crate::{Pipeline, RunError};
 
@@ -181,6 +181,7 @@ struct ManualSource<'a, S, C> {
     last_check_ms: u64,
     terminal: Option<&'static str>,
     capture_failures: u64,
+    capture_failure: Option<CaptureFailure>,
     source_id: u64,
     activity: ActivityGate,
     live_frame_index: u64,
@@ -230,6 +231,7 @@ impl<'a, S: CaptureSource, C: Clock> ManualSource<'a, S, C> {
             last_check_ms: clock.now_ms(),
             terminal: None,
             capture_failures: 0,
+            capture_failure: None,
             source_id: RandomState::new()
                 .hash_one((approval.source.process_id, approval.source.hwnd)),
             activity: ActivityGate::new(approval.source_policy),
@@ -308,6 +310,7 @@ impl<'a, S: CaptureSource, C: Clock> ManualSource<'a, S, C> {
             "elapsed_ms":self.clock.now_ms(), "stop_reason":reason,
             "recording_end_reason":effective_recording_end_reason(reason, snapshot.recording_status),
             "recording":snapshot, "capture_failures":self.capture_failures,
+            "capture_failure":self.capture_failure,
             "capture_directory":self.recorder.session_path(), "latest_frame":self.recorder.last_receipt(),
             "live_frame":self.live_frame,
             "updated_at_unix_ms":self.now_unix_ms()})
@@ -386,7 +389,9 @@ impl<S: CaptureSource, C: Clock> CaptureSource for ManualSource<'_, S, C> {
         let mut frame = match self.inner.capture() {
             Ok(frame) => frame,
             Err(error) => {
-                eprintln!("approved source capture failed: {error}");
+                let failure = capture_failure(&error);
+                eprintln!("approved source capture failed: {}", failure.detail);
+                self.capture_failure = Some(failure);
                 self.capture_failures += 1;
                 if matches!(error, CaptureError::StaleWindow { .. }) {
                     let resized = self.current_window()?;
