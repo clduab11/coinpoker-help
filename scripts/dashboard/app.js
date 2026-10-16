@@ -377,6 +377,19 @@
     "below-floor": "Below floor", stale: "Stale", occluded: "Occluded", "insufficient-context": "Insufficient context" };
   const MODEL_STATES = ["disabled", "loading", "ready", "failed"];
   const CAPTURE_STATES = ["idle", "starting", "verifying", "active", "unavailable", "disconnected", "blocked"];
+  const CAPTURE_FAILURE_LABELS = {
+    "foreign-overlap": "overlap on the table", "popup-overlap": "overlap on a related popup",
+    "nonpositive-geometry": "capture visibility geometry was invalid", "popup-geometry": "popup geometry was invalid",
+    "popup-limit": "too many related popup surfaces", "center-mismatch": "capture visibility was unverified",
+    "window-geometry-query-failed": "Windows could not verify surface geometry",
+    "cloak-query-failed": "Windows could not verify surface visibility",
+    "selected-not-enumerated": "the selected surface was absent from the window listing",
+    backend: "capture backend failure", "unsupported-platform": "unsupported capture platform",
+    "unsupported-windows-version": "unsupported Windows capture version", "window-not-found": "capture window not found",
+    "configuration-required": "capture selection was not configured", "ambiguous-windows": "capture selection was ambiguous",
+    "stale-window": "capture source changed", "no-window-selected": "no capture window selected",
+    "permission-denied": "Windows denied capture access"
+  };
   const AUTOMATIC_LABELS = { "waiting-model": "Waiting for model", searching: "Searching for table",
     verifying: "Verifying table activity", active: "Waiting for table receipt",
     stopped: "Automatic observation stopped", failed: "Automatic observation failed",
@@ -531,6 +544,16 @@
     if (previous?.signature !== signature) {
       receipt = { field, seat, value, status: state, capture,
         published_at_unix_ms: Date.now(), published_at_monotonic_ms: performance.now() };
+      const observation = snapshot?.observation, current = activeLease?.observation;
+      const timing = snapshot?.nativeTiming;
+      if (state === "current" && /^(?:pot_size|seats\.[1-6]\.displayed_stack)$/.test(field) &&
+          timing && current?.partial && observation?.partial &&
+          ["generation", "epoch", "captured"].every(key => current[key] === observation[key]) &&
+          captureInScope(capture) && JSON.stringify(capture) === JSON.stringify(observation.captureRef) &&
+          timing.api_snapshot_at_unix_ms <= receipt.published_at_unix_ms) {
+        // The API stamp is snapshot completion, not wire-send; never retrofit an existing first publication.
+        receipt.native_timing = { ...timing };
+      }
       renderedFields.set(field, { signature, receipt });
       renderReceipts.push(receipt);
       if (renderReceipts.length > RENDER_RECEIPT_LIMIT) { renderReceipts.shift(); droppedRenderReceipts += 1; }
@@ -991,6 +1014,22 @@
       (!capture.capture_session_id || capture.capture_session_id === value.recording?.session);
   }
 
+  function normalizeNativeTiming(value, observation, scope, capturedMono) {
+    const keys = ["schema_version", "generation", "epoch", "captured_at_ms", "captured_at_unix_ms",
+      "emitted_at_unix_ms", "ingested_at_unix_ms", "api_snapshot_at_unix_ms"];
+    const capture = observation?.captureRef;
+    if (!record(value) || value.schema_version !== 1 || !keys.every(key => integer(value[key])) ||
+        !observation?.partial || !captureInScope(capture, scope) ||
+        value.generation !== observation.generation || value.epoch !== observation.epoch ||
+        value.epoch !== capture.epoch || value.captured_at_unix_ms !== observation.captured ||
+        value.captured_at_unix_ms !== capture.captured_at_unix_ms || value.captured_at_ms !== capture.captured_at_ms ||
+        capture.generation !== undefined && capture.generation !== value.generation ||
+        capturedMono != null && (!integer(capturedMono) || capturedMono !== value.captured_at_ms) ||
+        value.captured_at_unix_ms > value.emitted_at_unix_ms || value.emitted_at_unix_ms > value.ingested_at_unix_ms ||
+        value.ingested_at_unix_ms > value.api_snapshot_at_unix_ms || value.api_snapshot_at_unix_ms > Date.now()) return null;
+    return Object.fromEntries(keys.map(key => [key, value[key]]));
+  }
+
   function originalFor(observation, field) {
     if (!observation) return null;
     if (Object.hasOwn(observation.fieldCaptures, field)) {
@@ -1200,6 +1239,7 @@
       tableContext: normalizeTableContext(value.table_context)
     };
     const observation = result.observation;
+    result.nativeTiming = normalizeNativeTiming(value.native_timing, observation, result, value.partial_observation?.captured_at_ms);
     if (observation && !observation.partial) {
       observation.analysisQualified = !!(result.service && result.source === "live" && result.modelState === "ready" &&
         result.inferenceEnabled !== false && observation.experimental &&
@@ -2068,6 +2108,7 @@
       "source-unavailable", "source-changed", "capture-failed", "child-exited", "child-failed", "native-stalled", "receipt-invalid",
       "log-limit", "supervisor-error", "status-stale", "child-stop-unconfirmed", "inference-failed", "publication-failed",
       "model-not-ready", "feed-failed", "table-activity-unconfirmed", "automatic-discovery-timeout"], null);
+    result.captureFailureCode = allowed(value.capture_failure_code, Object.keys(CAPTURE_FAILURE_LABELS), null);
     if (sourcePolicy === "automatic-sustained") {
       const evidence = value.evidence;
       const evidenceKeys = ["status", "stop_reason", "elapsed_ms", "max_duration_ms", "max_frames", "max_bytes", "recorded_frames", "recorded_bytes"];
@@ -2305,7 +2346,15 @@
     if (recovery) {
       const stopReason = recorder?.stopReason || startupTerminal && startup.stopReason ||
         sustained && recordingLease?.session === recorder.session && recordingLease.stopReason;
-      text("monitor-stop", `${startupTerminal ? AUTOMATIC_LABELS[startup.status] : terminal ? `Session ${recorder.status}` : sustained ? "Session closed" : "Session budget closed"}${stopReason ? `: ${stopReason}` : "; stop reason unavailable"}. Current and last-read amounts cleared.${previousSession ? ` ${previousSession}` : ""}`);
+      const diagnostic = terminal && CAPTURE_FAILURE_LABELS[recorder?.captureFailureCode];
+      const recentDiagnostic = diagnostic && integer(receiptTime) && receiptTime > 0 &&
+        receiptTime <= Date.now() + 500 && sourceAge({ kind: "receipt", session_id: recorder.session,
+          captured_at_unix_ms: receiptTime }) < 60000;
+      const recentFailure = recentDiagnostic && stopReason === "capture-failed";
+      const remedy = recentFailure && recorder.captureFailureCode === "foreign-overlap" ? " Uncover the table before restarting." :
+        recentFailure && recorder.captureFailureCode === "popup-overlap" ? " Clear the popup overlap before restarting." : "";
+      const clearing = diagnostic ? ` Readings cleared. ${recentDiagnostic ? "Last" : "Previous"} capture diagnostic: ${diagnostic}.${remedy}` : " Current and last-read amounts cleared.";
+      text("monitor-stop", `${startupTerminal ? AUTOMATIC_LABELS[startup.status] : terminal ? `Session ${recorder.status}` : sustained ? "Session closed" : "Session budget closed"}${stopReason ? `: ${stopReason}` : "; stop reason unavailable"}.${clearing}${previousSession && !diagnostic ? ` ${previousSession}` : ""}`);
     } else if (needsLauncher) text("monitor-stop", "Manual controls not configured. Relaunch with -ManualStart to enable Start monitor.");
     if (needsLauncher) {
       text("monitor-launch-mode", sustained ? "Sustained manual-start mode: observation continues until stopped; evidence limits end recording only." :

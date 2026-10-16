@@ -25,13 +25,28 @@ def fixture(scenario):
         "status": "unavailable", "can_start": False, "can_stop": False}
     if scenario != "provisional":
         raw["numeric_observation"] = None
-        raw["partial_observation"] = copy.deepcopy(value.native) if scenario == "native" else None
-    if scenario not in {"native", "provisional", "pending-stop"}:
+        raw["partial_observation"] = copy.deepcopy(value.native) if scenario in {"native", "native-timing"} else None
+    if scenario == "native-timing":
+        partial = raw["partial_observation"]
+        partial["captured_at_ms"] = 1000
+        partial["capture"] = {"kind": "frame", "service_instance_id": raw["server"]["instance_id"],
+            "session_id": raw["session_id"], "capture_session_id": raw["capture_session"]["session_id"],
+            "source_id": raw["capture"]["source_id"], "epoch": partial["epoch"], "sequence": raw["capture"]["frames"],
+            "captured_at_ms": 1000, "captured_at_unix_ms": partial["captured_at_unix_ms"],
+            "sha256": "f" * 64, "width": raw["capture"]["width"], "height": raw["capture"]["height"]}
+        raw["native_timing"] = {"schema_version": 1, "generation": partial["generation"], "epoch": partial["epoch"],
+            "captured_at_ms": 1000, "captured_at_unix_ms": partial["captured_at_unix_ms"],
+            "emitted_at_unix_ms": now - 400, "ingested_at_unix_ms": now - 200, "api_snapshot_at_unix_ms": now - 10}
+    if scenario not in {"native", "native-timing", "provisional", "pending-stop"}:
         raw["capture"].update(state="unavailable", fresh_capture=False)
         raw["capture_session"].update(status="idle", session_id=None, activity_state="idle")
     if scenario == "previous":
         raw["capture_session"].update(status="stopped", session_id="a" * 32,
             stop_reason="operator-stop", updated_at_unix_ms=now - 86_400_000)
+    if scenario in {"capture-failure", "previous-capture-failure"}:
+        raw["capture_session"].update(status="stopped", session_id="a" * 32,
+            stop_reason="capture-failed", capture_failure_code="foreign-overlap",
+            updated_at_unix_ms=now - (86_400_000 if scenario == "previous-capture-failure" else 0))
     if scenario == "pending-start":
         raw["capture_control"].update(enabled=True, status="available", can_start=True)
     if scenario == "pending-stop":
@@ -107,12 +122,21 @@ def check_case(browser, out, viewport, forced, scenario, assets, csp):
             expect(page.locator("#monitor-stop")).to_be_visible()
             expect(page.locator("#monitor-stop")).to_contain_text("Previous session receipt")
             assert page.locator("#source-status").get_attribute("data-tone") != "okay"
-        elif scenario in {"native", "provisional"}:
+        elif scenario in {"capture-failure", "previous-capture-failure"}:
+            expect(page.locator("#monitor-stop")).to_be_visible()
+            if scenario == "capture-failure":
+                expect(page.locator("#monitor-stop")).to_contain_text("Last capture diagnostic")
+                expect(page.locator("#monitor-stop")).to_contain_text("Uncover the table")
+            else:
+                expect(page.locator("#monitor-stop")).to_contain_text("Previous capture diagnostic")
+                expect(page.locator("#monitor-empty")).to_contain_text("Previous session receipt")
+                expect(page.locator("#monitor-stop")).not_to_contain_text("Uncover the table")
+        elif scenario in {"native", "native-timing", "provisional"}:
             expect(page.locator("#amount-pot")).to_be_visible()
             expect(page.locator("#amount-pot")).to_have_attribute("data-reading",
-                "current" if scenario == "native" else "provisional")
+                "provisional" if scenario == "provisional" else "current")
             displayed = page.locator("#amount-pot").inner_text().strip()
-            if scenario == "native":
+            if scenario != "provisional":
                 assert displayed.endswith(" chips"), "native amount must declare chip units"
                 displayed = displayed.removesuffix(" chips")
                 expected = Decimal(raw["partial_observation"]["pot_size"]) / 100
@@ -122,6 +146,11 @@ def check_case(browser, out, viewport, forced, scenario, assets, csp):
             if scenario == "provisional":
                 expect(page.locator("#pot-reason")).to_be_visible()
                 expect(page.locator("#pot-reason")).to_contain_text("Provisional")
+            if scenario == "native-timing":
+                receipts = page.evaluate("() => window.coinpokerMonitor.renderReceipts().receipts.filter(r => r.field === 'pot_size' && r.status === 'current')")
+                assert len(receipts) == 1, "repeated API polls must not create new first-current receipts"
+                assert receipts[0].get("native_timing") == raw["native_timing"], "stage timing must bind the original native capture"
+                result["synthetic_native_timing"] = receipts[0]["native_timing"]
             page.screenshot(path=str(out / f"{name}-reading.png"), full_page=True)
             page.clock.run_for(1700)
             assert page.locator("#amount-pot").get_attribute("data-reading") not in {"current", "provisional"}
@@ -155,7 +184,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--channel", default=None, help="Installed browser channel, e.g. msedge or chrome")
     parser.add_argument("--output-dir", type=Path, default=None, help="New directory; existing outputs are refused")
-    parser.add_argument("--scenario", action="append", choices=("idle", "disconnect-first", "previous", "native", "provisional", "pending-start", "pending-stop"),
+    parser.add_argument("--scenario", action="append", choices=("idle", "disconnect-first", "previous", "native", "native-timing", "provisional", "pending-start", "pending-stop", "capture-failure", "previous-capture-failure"),
                         help="Run only selected scenarios; repeatable, defaults to all")
     args = parser.parse_args(argv)
     sys.path.insert(0, str(ROOT))
@@ -182,7 +211,7 @@ def main(argv=None):
             try:
                 for width, height in ((800, 600), (375, 812), (1280, 800)):
                     for forced in (False, True):
-                        for scenario in args.scenario or ("idle", "disconnect-first", "previous", "native", "provisional", "pending-start", "pending-stop"):
+                        for scenario in args.scenario or ("idle", "disconnect-first", "previous", "native", "native-timing", "provisional", "pending-start", "pending-stop", "capture-failure", "previous-capture-failure"):
                             result = check_case(browser, out, {"width": width, "height": height}, forced, scenario, assets, CSP)
                             report["cases"].append(result)
                             print(json.dumps(result), flush=True)

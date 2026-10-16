@@ -27,7 +27,63 @@ const readingsCleared = () => {
 for (const [id, expected] of Object.entries(input.expected || {})) {
   assert(nodes.get(id).textContent.includes(expected), `${id}: ${nodes.get(id).textContent}`);
 }
-if (input.scenario === 'literal') {
+if (input.scenario.startsWith('native-timing')) {
+  const journal = () => window.monitorRenderReceipts.read().receipts;
+  const pot = () => journal().filter(row => row.field === 'pot_size').at(-1);
+  const numeric = journal().filter(row => row.status === 'current' &&
+    /^(pot_size|seats\.[1-6]\.displayed_stack)$/.test(row.field));
+  if (input.scenario !== 'native-timing-source') {
+    assert.equal(nodes.get('amount-pot').dataset.reading, 'current', 'telemetry is not admission');
+    assert.equal(nodes.get('amount-pot').textContent, '123.45 chips');
+    assert(numeric.length >= 2);
+  }
+  if (input.scenario === 'native-timing-source') {
+    const raw = structuredClone(input.snapshot); delete raw.native_timing;
+    assert.equal(JSON.stringify(value(raw)), JSON.stringify(value(input.snapshot)));
+    for (const row of journal()) assert(!row.native_timing);
+  } else if (input.scenario === 'native-timing-invalid-variants') {
+    const variants = [...input.variants];
+    for (const key of Object.keys(input.snapshot.native_timing)) {
+      for (const bad of [NaN, Infinity, -Infinity]) variants.push({...input.snapshot.native_timing, [key]: bad});
+      const missing = {...input.snapshot.native_timing}; delete missing[key]; variants.push(missing);
+    }
+    for (const timing of variants) {
+      const raw = structuredClone(input.snapshot); raw.native_timing = timing;
+      const normalized = value(raw); assert(normalized, 'optional telemetry cannot veto snapshot');
+      assert.equal(normalized.nativeTiming, null, JSON.stringify(timing));
+    }
+    for (const bad of [true, '10000', -1, 1.5, NaN, Infinity, input.snapshot.partial_observation.captured_at_ms + 1]) {
+      const raw = structuredClone(input.snapshot); raw.partial_observation.captured_at_ms = bad;
+      const normalized = value(raw); assert(normalized); assert.equal(normalized.nativeTiming, null);
+    }
+  } else if (input.scenario === 'native-timing-valid') {
+    for (const row of numeric) assert.deepEqual(JSON.parse(JSON.stringify(row.native_timing)), input.snapshot.native_timing);
+    assert.deepEqual(JSON.parse(JSON.stringify(pot().capture)), input.snapshot.partial_observation.capture);
+    assert.equal(pot().published_at_unix_ms, wall);
+    const first = JSON.stringify(pot()), count = journal().length;
+    wall += 100; mono += 100;
+    const next = structuredClone(input.snapshot); next.event_seq += 1;
+    next.native_timing.api_snapshot_at_unix_ms = wall;
+    accept(next); test.refreshClocks();
+    assert.equal(JSON.stringify(pot()), first); assert.equal(journal().length, count);
+    assert.equal(nodes.get('amount-pot').dataset.publishedAtUnixMs, String(wall - 100));
+    wall += 901; mono += 901; test.refreshClocks();
+    assert.notEqual(nodes.get('amount-pot').dataset.reading, 'current');
+    assert(!pot().native_timing, 'retained and unknown publications never carry native timing');
+  } else if (input.scenario === 'native-timing-late') {
+    assert(!pot().native_timing);
+    const first = JSON.stringify(pot()), count = journal().length;
+    const next = structuredClone(input.snapshot); next.event_seq += 1; next.native_timing = input.timing;
+    wall += 100; mono += 100; accept(next);
+    assert.equal(JSON.stringify(pot()), first); assert.equal(journal().length, count);
+  } else if (input.scenario === 'native-timing-cached-field') {
+    assert(!pot().native_timing);
+    assert.equal(pot().capture.sequence, input.snapshot.partial_observation.field_captures.pot_size.sequence);
+    assert(numeric.some(row => row.field !== 'pot_size' && row.native_timing));
+  } else {
+    for (const row of numeric) assert(!row.native_timing, JSON.stringify(row));
+  }
+} else if (input.scenario === 'literal') {
   assert.equal(nodes.get('amount-pot').textContent, '123.45');
   assert(nodes.get('seat-readings').childNodes[0].textContent.includes('1.0'));
   assert(nodes.get('seat-readings').childNodes[2].textContent.includes('Occluded'));
@@ -2419,6 +2475,81 @@ class CompanionUiTests(unittest.TestCase):
         original = {**context["capture"], "sequence": 9, "sha256": "a" * 64}
         self.snapshot["partial_observation"]["capture"] = original
         self.run_ui("context-receipts")
+
+    def timing_session(self):
+        context = self.context_session()
+        partial = self.snapshot["partial_observation"]
+        original = {**context["capture"], "sequence": 9, "sha256": "a" * 64,
+                    "captured_at_unix_ms": partial["captured_at_unix_ms"], "generation": partial["generation"]}
+        partial.update(capture=original, captured_at_ms=original["captured_at_ms"])
+        partial["field_captures"] = {}
+        self.snapshot["capture"]["generation"] = partial["generation"]
+        for seat in partial["seats"]:
+            seat["displayed_stack"] = seat["seat"] * 100
+        captured = partial["captured_at_unix_ms"]
+        self.snapshot["native_timing"] = {"schema_version": 1, "generation": partial["generation"],
+            "epoch": partial["epoch"], "captured_at_ms": original["captured_at_ms"],
+            "captured_at_unix_ms": captured, "emitted_at_unix_ms": captured + 100,
+            "ingested_at_unix_ms": captured + 200, "api_snapshot_at_unix_ms": captured + 300}
+        return self.snapshot["native_timing"]
+
+    def test_native_timing_matches_new_current_numeric_receipts_without_poll_or_lease_renewal(self):
+        self.timing_session()
+        self.run_ui("native-timing-valid")
+
+    def test_native_timing_missing_or_late_is_non_gating_and_never_retrofills_first_dom(self):
+        timing = self.timing_session()
+        del self.snapshot["native_timing"]
+        self.run_ui("native-timing-late", timing=timing)
+
+    def test_native_timing_strict_clock_schema_and_ticket_matching_is_optional(self):
+        self.timing_session()
+        baseline = copy.deepcopy(self.snapshot)
+        invalid = [(key, bad) for key in baseline["native_timing"] for bad in (None, True, "1", -1, 1.5, 2**53)]
+        timing = baseline["native_timing"]
+        invalid += [("schema_version", 2), ("generation", timing["generation"] + 1),
+            ("epoch", timing["epoch"] + 1), ("captured_at_ms", timing["captured_at_ms"] + 1),
+            ("captured_at_unix_ms", timing["captured_at_unix_ms"] + 1),
+            ("emitted_at_unix_ms", timing["captured_at_unix_ms"] - 1),
+            ("ingested_at_unix_ms", timing["emitted_at_unix_ms"] - 1),
+            ("api_snapshot_at_unix_ms", timing["ingested_at_unix_ms"] - 1),
+            ("api_snapshot_at_unix_ms", baseline["capture"]["last_heartbeat_unix_ms"] + 1)]
+        # Check all variants in one Node process, without 60+ subprocess startups.
+        self.snapshot = baseline
+        variants = [{**timing, key: bad} for key, bad in invalid]
+        self.run_ui("native-timing-invalid-variants", variants=variants)
+
+    def test_native_timing_equal_stage_clocks_are_valid_millisecond_boundaries(self):
+        timing = self.timing_session()
+        for key in ("emitted_at_unix_ms", "ingested_at_unix_ms", "api_snapshot_at_unix_ms"):
+            timing[key] = timing["captured_at_unix_ms"]
+        self.run_ui("native-timing-valid")
+
+    def test_native_timing_uses_exact_capture_monotonic_when_partial_has_no_mono(self):
+        self.timing_session()
+        del self.snapshot["partial_observation"]["captured_at_ms"]
+        self.run_ui("native-timing-valid")
+
+    def test_native_timing_never_borrows_latest_bundle_for_older_or_different_field_source(self):
+        self.timing_session()
+        original = self.snapshot["partial_observation"]["capture"]
+        for update in ({"sequence": 8}, {"sha256": "b" * 64}, {"captured_at_unix_ms": original["captured_at_unix_ms"] - 1},
+                       {"captured_at_ms": original["captured_at_ms"] - 1}, {"generation": original["generation"] - 1}):
+            with self.subTest(update=update):
+                self.snapshot["partial_observation"]["field_captures"]["pot_size"] = {**original, **update}
+                self.run_ui("native-timing-cached-field")
+
+    def test_native_timing_source_ref_contradictions_do_not_change_admitted_numbers(self):
+        self.timing_session()
+        baseline = copy.deepcopy(self.snapshot)
+        for key, bad in (("service_instance_id", "other"), ("session_id", "other"),
+                         ("capture_session_id", "other"), ("source_id", "1" * 16),
+                         ("epoch", 99), ("width", baseline["capture"]["width"] + 1),
+                         ("captured_at_unix_ms", baseline["partial_observation"]["captured_at_unix_ms"] - 1)):
+            with self.subTest(key=key):
+                self.snapshot = copy.deepcopy(baseline)
+                self.snapshot["partial_observation"]["capture"][key] = bad
+                self.run_ui("native-timing-source")
 
     def test_separate_popup_stats_keep_child_original_and_validate_parent_table_crosswalk(self):
         self.context_session()
