@@ -73,6 +73,33 @@ Outstanding operator actions: (1) spot check the 20 board crops in
 uncovered, for the bounded Phase 0b p0/theme probe; (3) later, seated Phase 4a captures
 and the separate GPU-training GO.
 
+## Phase 0b result (2026-10-25, live six-seat table)
+
+Capture is healthy again: 489 frames at **958x728** (new geometry), 0 capture failures,
+0 gaps, `readability: full` — the 2026-10-14 TABLE CLOSED / surface-occluded blocker did
+not reproduce. The near-black appearance was a client graphics glitch cleared by restart:
+measured felt is green (fraction 0.78 -> 1.00 across sampled frames), matching the frozen
+72-frame set. p0 screen classification on the live client is **0.9792** (47/48 frames
+`poker_table` at or above the initial floor 0.8, confidence 0.9731-1.0000, `ev_board_area`
+48/48, p95 452 ms), so p0 does not fail on the current client.
+
+Nothing is admitted, for two fail-closed reasons. First, `bin/live.rs:176` sets
+`quality_approved` from `ingest::laya::calibrated()`, which reads
+`crates/ingest/assets/laya/question-set.json` where thresholds are `{"initial": 0.8,
+"calibrated": false}`; with it false every snapshot is `GapReason::UnvalidatedSource`
+(238 of 238 accepted captures, `coverage.unvalidated_captures: 238`,
+`history.state: partial`). Second, the native child wrote 21,001,152 bytes of stdout
+against `MAX_LOG = 20 MiB` (`scripts/laya_capture.py:40,839,851`), so the session ended
+`receipt-invalid` / `status: failed` with `distinct_opportunities: 0`; the volume comes
+from a `history` event on every frame that embeds the whole accumulated gap list.
+
+Only the CPU tooltip lane admitted provisionally (`pot_size` `"0.12"` once,
+`seats.2/4/6.displayed_stack` intermittently). Receipt:
+`.local/laya/probe/phase0b-20261025/PHASE0B-RECEIPT.md`. The 489 frames are a usable
+current-theme corpus seed. Roadmap consequence: A5 cannot be attempted until Phase 4b
+supplies fitted floors and promotes calibration behind a real Gate F pass, and the
+`history` emission is bounded.
+
 Phase 4b tooling now exists and its first run is recorded. `it2_build.py` turns
 adjudicated labels into it1-schema examples from the tracked question set and refuses
 anything observation-only labels cannot support; `it2_dump.py` dumps logits without
