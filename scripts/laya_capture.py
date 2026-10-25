@@ -37,7 +37,11 @@ MAX_SECONDS = 600
 MAX_FRAMES = 1200
 TARGET = 20
 MAX_RECORD = 16 * 1024
-MAX_LOG = 20 * 1024 * 1024
+# Bounded diagnostic-text budget for the native child's stdout/stderr. A full
+# 600 s bounded session measures ~27 MB of private telemetry, so the previous
+# 20 MiB forced a `receipt-invalid` stop at ~475 s; 64 MiB keeps a hard bound
+# with headroom. Trim the telemetry, never the bound, to lower it again.
+MAX_LOG = 64 * 1024 * 1024
 MAX_FEED_RECORD = 256 * 1024
 MAX_BYTES = 1024 * 1024 * 1024
 MAX_COUNTER = 2**53 - 1

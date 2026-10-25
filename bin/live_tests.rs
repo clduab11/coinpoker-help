@@ -889,7 +889,9 @@ fn history_delta_reconstructs_the_same_bounded_view_as_a_snapshot() {
 
 #[test]
 fn a_long_session_stays_bounded_where_full_reemission_would_exceed_the_log_cap() {
-    // The supervisor's diagnostic cap: `MAX_LOG` in scripts/laya_capture.py.
+    // The budget `MAX_LOG` enforced in scripts/laya_capture.py when the 2026-10-25
+    // session failed. The supervisor's budget is larger now, but unbounded
+    // re-emission is still the defect this test guards.
     const MAX_LOG: usize = 20 * 1024 * 1024;
     let mut history = AdmittedHistory::new().unwrap();
     let (ticket, record) = history_source();

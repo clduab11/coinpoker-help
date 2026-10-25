@@ -90,15 +90,26 @@ Nothing is admitted, for two fail-closed reasons. First, `bin/live.rs:176` sets
 (238 of 238 accepted captures, `coverage.unvalidated_captures: 238`,
 `history.state: partial`). Second, the native child wrote 21,001,152 bytes of stdout
 against `MAX_LOG = 20 MiB` (`scripts/laya_capture.py:40,839,851`), so the session ended
-`receipt-invalid` / `status: failed` with `distinct_opportunities: 0`; the volume comes
-from a `history` event on every frame that embeds the whole accumulated gap list.
+`receipt-invalid` / `status: failed` with `distinct_opportunities: 0`; the volume came
+from a `history` event on every frame that embedded the whole accumulated gap list.
+
+That `history` defect is fixed: a record now carries a monotonic cursor delta, with a
+complete view only at a bounded cadence or on target change, and no ledger event is
+dropped or truncated. Re-measured on the live client on 2026-10-25
+(`.local/laya/manual-capture/7e680a5179b1446c987765af01430cde`), `history` fell from
+9,519,066 bytes (45% of a 21.0 MB stream) to 887,885 bytes (4.2%): 633 records, only 4
+of them complete views. The stream still reached 20,993,748 bytes at 475 s, now led by
+`perception_diagnostics` (506 records, 14,141,778 bytes, 67%) and `partial_observation`
+(4,038,476 bytes, 19%), so the operator authorized raising the diagnostic budget to
+64 MiB (`scripts/laya_capture.py:40`). That raises a hard text bound only; it changes no
+admission, calibration or accuracy gate and adds no decision-path latency. Trimming that
+private telemetry is the follow-up that would let the budget come back down.
 
 Only the CPU tooltip lane admitted provisionally (`pot_size` `"0.12"` once,
 `seats.2/4/6.displayed_stack` intermittently). Receipt:
 `.local/laya/probe/phase0b-20261025/PHASE0B-RECEIPT.md`. The 489 frames are a usable
-current-theme corpus seed. Roadmap consequence: A5 cannot be attempted until Phase 4b
-supplies fitted floors and promotes calibration behind a real Gate F pass, and the
-`history` emission is bounded.
+current-theme corpus seed. Roadmap consequence: A5 still cannot be attempted until
+Phase 4b supplies fitted floors and promotes calibration behind a real Gate F pass.
 
 Phase 4b tooling now exists and its first run is recorded. `it2_build.py` turns
 adjudicated labels into it1-schema examples from the tracked question set and refuses

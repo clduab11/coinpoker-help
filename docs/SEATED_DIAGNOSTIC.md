@@ -466,9 +466,10 @@ Partial Pot/stack/board fields remain visible independently of hero/control fail
    The browser receives no HWND/title, pixels, hashes, raw answers or private paths.
 
 The native worker retains bounded active/latest work; the feed rejects oversized
-records, more than 1 MiB of unread backlog or a log over 20 MiB instead of replaying
-old work as current. Session/service identity, source identity, source timestamp,
-absolute expiry and monotonic deadlines cannot be renewed by file/poll activity.
+records, more than 1 MiB of unread backlog or a log over the diagnostic budget
+(`MAX_LOG`, 64 MiB) instead of replaying old work as current. Session/service
+identity, source identity, source timestamp, absolute expiry and monotonic deadlines
+cannot be renewed by file/poll activity.
 Stop, source replacement, budget expiry, model/recorder/feed error and shutdown
 invalidate pending output; a stopped session cannot rearm. The current service
 supports the explicit session-bound stop request below, but has no HTTP start/mark
