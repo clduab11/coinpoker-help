@@ -124,6 +124,33 @@ accuracy is. it2 training needs current-theme pixels and seated hero/control dat
 local dataset contains, so no GPU time is spent yet. Receipt:
 `.local/laya/dataset/it2-baseline/PHASE4B-READINESS.md`.
 
+Gate F was re-executed at `6e2d16d` (2026-10-25T22:18Z) on the same frozen held-out split
+and returned the identical verdict and criteria: board raw accuracy 0.40 over 30 units with
+zero admitted at threshold 1.0, hero UNMEASURED, screen precision 1.00 at coverage 0.875,
+worst p95 776.1 ms. Nothing was promoted; `question-set.json` still reads
+`{"initial": 0.8, "calibrated": false}`. Receipt:
+`.local/laya/dataset/it2-baseline/PHASE4B-GATEF-20261025T2218Z.md`. That receipt also
+records a harness provenance defect: `it2_gatef.py` does not log `--labels`, and the labels
+document it loads is never used (correctness comes from the dump's own `label` field).
+
+Two follow-ups were executed the same day. `perception_diagnostics` no longer repeats the
+same capability-absent seat row six times per frame: a field with no registry is journaled
+once at table level (`seat: null`), removing 60 rows from every record without hiding which
+fields are missing (`crates/ingest/src/laya/partial.rs`). Measured at the same 957x727
+geometry, the record fell from 27,995 bytes average / 28,176 bytes maximum to 18,765 /
+18,973 — about 33%, or ~7.1 MB across the 772 diagnostics records of the 600 s run. That
+alone would not have fit 600 s inside the old 20 MiB budget; it reduces the stream, it does
+not replace the budget decision. And `receipt_complete` now means "the native text receipt
+was captured completely" — orderly stop plus a fully drained stream — instead of "the
+supervisor never reaped the child", which no bounded session could satisfy (the
+`--manual-inference` child publishes no terminal record, so `native_terminal` is always
+false there). `forced_stop` keeps the unacknowledged-evidence-tail question and the new
+`stop_acknowledged` reports whether the child published its own stop reason
+(`docs/SEATED_DIAGNOSTIC.md`). First live receipt under the new rule: session
+`2912b4589da44b519fbee7bf7a7b9988`, `receipt_complete: true`, `forced_stop: true`,
+`stop_acknowledged: false`, `operator-stop`, `diagnostics_complete: true`,
+`cap_exceeded: false`, 3,673,607 bytes, 0 dropped, not truncated.
+
 A4's live preflight, the independently verified A5 sustained run, B-track seated inputs
 and real-pixel experimental advice acceptance remain. No A5/B3 acceptance is claimed here.
 
