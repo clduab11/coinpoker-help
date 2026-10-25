@@ -560,16 +560,19 @@ pub fn assemble_partial(
             status,
             reason,
         );
-        for field in UNSUPPORTED_SEAT_FIELDS {
-            record(
-                &mut fields,
-                field,
-                Some(seat),
-                None,
-                Status::Unknown,
-                Reason::Unsupported,
-            );
-        }
+    }
+    // A capability-absent seat field is table-wide: record it once for the table
+    // instead of once per seat. The private journal still names every field that
+    // has no registry; it just stops repeating the same row six times per frame.
+    for field in UNSUPPORTED_SEAT_FIELDS {
+        record(
+            &mut fields,
+            field,
+            None,
+            None,
+            Status::Unknown,
+            Reason::Unsupported,
+        );
     }
     view.refresh_verified_fields();
     diagnostics.fields = fields.clone();

@@ -113,6 +113,34 @@ fn assemble(
 }
 
 #[test]
+fn unsupported_seat_capabilities_are_recorded_once_per_field_not_once_per_seat() {
+    let passes = scripts();
+    let (partial, diagnostics, _) = assemble(&passes, None);
+    assert!(partial.is_some());
+    let fields = ingest::partial::UNSUPPORTED_SEAT_FIELDS;
+    let unsupported: Vec<_> = diagnostics
+        .fields
+        .iter()
+        .filter(|field| {
+            field.reason == DiagnosticReason::Unsupported && fields.contains(&field.field)
+        })
+        .collect();
+    assert_eq!(unsupported.len(), fields.len());
+    assert!(unsupported
+        .iter()
+        .all(|field| field.seat.is_none() && field.board_slot.is_none()));
+    for (index, field) in unsupported.iter().enumerate() {
+        assert!(
+            !unsupported[..index]
+                .iter()
+                .any(|other| other.field == field.field),
+            "each capability-absent field appears once: {:?}",
+            field.field
+        );
+    }
+}
+
+#[test]
 fn rejected_role_and_all_cards_preserve_independent_pot_and_six_stacks() {
     let mut passes = scripts();
     passes

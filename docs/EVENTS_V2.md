@@ -586,7 +586,9 @@ derivedevents/positions/math, not independently accepted amounts.
 
 `perception_diagnostics` is bounded, closed-vocabulary PRIVATE journaling only,
 including obsolete zero-lease outcomes, exactcrops/floors/answers and eligibility
-versusadmission. Unmeasuredtimings null; no pixels/prompts/names/fingerprints in
+versusadmission. Capability-absent seat fields are journaled once per field with
+`seat: null` rather than once per seat, so the payload stays bounded without hiding
+which fields lack a registry. Unmeasuredtimings null; no pixels/prompts/names/fingerprints in
 browserstate. Browser gets only sanitized amount/scene status markers. Exactly
 Monitor/Reference. Offline506Rust/207Python-Node regressions andclippy passed;
 realwarmtotal latency/perception/humanacceptance remainpending. The earlier
