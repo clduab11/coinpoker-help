@@ -73,6 +73,19 @@ Outstanding operator actions: (1) spot check the 20 board crops in
 uncovered, for the bounded Phase 0b p0/theme probe; (3) later, seated Phase 4a captures
 and the separate GPU-training GO.
 
+Phase 4b tooling now exists and its first run is recorded. `it2_build.py` turns
+adjudicated labels into it1-schema examples from the tracked question set and refuses
+anything observation-only labels cannot support; `it2_dump.py` dumps logits without
+writing into any checkpoint directory; `it2_gatef.py` evaluates the roadmap's Gate F
+criteria and never treats an unmeasured criterion as a pass. On it1 over the frozen
+held-out split, Gate F is **FAIL**: board raw accuracy 0.40 over 30 slot units with zero
+admitted at the fitted threshold 1.0, screen classification precision 1.00 at coverage
+0.875 (green-felt set), hero accuracy UNMEASURED with no hero units in any local dataset,
+and worst-pass p95 776 ms inside the 5,000 ms budget. Latency is not the blocker; board
+accuracy is. it2 training needs current-theme pixels and seated hero/control data that no
+local dataset contains, so no GPU time is spent yet. Receipt:
+`.local/laya/dataset/it2-baseline/PHASE4B-READINESS.md`.
+
 A4's live preflight, the independently verified A5 sustained run, B-track seated inputs
 and real-pixel experimental advice acceptance remain. No A5/B3 acceptance is claimed here.
 
