@@ -47,10 +47,34 @@ recording closes:
 pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ManualStart
 ```
 
-A4 integrated freeze/live preflight and the independently verified A5 sustained
-run remain. B-track independent board labelling/calibration, seated inputs and
-real-pixel experimental advice acceptance also remain; no A5/B3 acceptance is
-claimed here.
+## Practical Play Roadmap Status (2026-10-25)
+
+The practical-play roadmap is `.kilo/plans/1792898610348-practical-play-roadmap.md`.
+Phase 0a and Phase 1 are committed. Phase 2 (A4) freeze identity is collected in
+`.local/preflight/` for the reviewed checkpoint; its live preflight (source identity,
+geometry, theme, bounded inference smokes) waits on the Phase 0b table being open and
+unobscured. Phase 3 is complete as evidence, not as an acceptance: the 72-frame
+`observing-20261010-v2-staging` set was inventoried (72 frames, 67 unique hashes,
+identity 72/72), labelled by two independent agents (agreement 355/360 board slots,
+427/432 stack cells), pixel-adjudicated on all 6 disputed frames, and frozen into
+fit/calibration/held-out manifests for the **older green-felt client**, with no seated
+hero cards. A third-pass check of the 20-crop spot-check sample found 1 black-suit
+error, so the labels are not clean and remain `training_eligible:false` pending the
+operator spot check. B2.1 diagnosed the board floor of 1.0 from the saved logits: the
+`card:p2_board` unit is `min(p_rank,p_suit)` after temperature scaling and its
+calibration-split precision tops out at 0.976 against a 0.99 target, so `pick_threshold`
+returns 1.0 and admits nothing, while raw board accuracy is 0.905/0.928/0.960 per split.
+The branch decision is **retraining (it2)**, not calibration-only; floors and the
+`zero-confident-is-failure` rule stay unchanged. Receipts are under
+`.local/laya/datasets/observing-20261010-v2-staging/human-review-20261025/`.
+
+Outstanding operator actions: (1) spot check the 20 board crops in
+`human-review-20261025/spot-check/board-pack.json`; (2) open one CoinPoker table,
+uncovered, for the bounded Phase 0b p0/theme probe; (3) later, seated Phase 4a captures
+and the separate GPU-training GO.
+
+A4's live preflight, the independently verified A5 sustained run, B-track seated inputs
+and real-pixel experimental advice acceptance remain. No A5/B3 acceptance is claimed here.
 
 ## Historical Handoff (2026-10-12/13)
 
