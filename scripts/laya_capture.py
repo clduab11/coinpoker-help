@@ -55,6 +55,10 @@ REASONS = {"operator-stop", "duration-limit", "frame-limit", "disk-limit", "reco
             "child-stop-unconfirmed", "inference-failed", "publication-failed", "model-not-ready", "feed-failed",
             "table-activity-unconfirmed", "automatic-discovery-timeout"}
 STATUSES = {"idle", "capturing", "stopped", "failed", "interrupted"}
+# Stops the supervisor itself requests or observes as an orderly end of evidence.
+# `receipt_complete` treats these as complete once the stream is fully accounted for;
+# anything else (child-failed, source-changed, receipt-invalid, ...) never is.
+ORDERLY_STOPS = {"operator-stop", "duration-limit", "frame-limit"}
 CAPTURE_FAILURE_CODES = {
     "foreign-overlap", "popup-overlap", "nonpositive-geometry", "popup-geometry", "popup-limit",
     "center-mismatch", "window-geometry-query-failed", "cloak-query-failed", "selected-not-enumerated",
@@ -780,12 +784,27 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
         try:
             if (path / "approval.json").is_file():
                 stop_session(session_id, root=root)
-                status.update(status="stopped" if reason in {"operator-stop", "duration-limit", "frame-limit"} else "failed",
+                status.update(status="stopped" if reason in ORDERLY_STOPS else "failed",
                               activity_state="idle", stop_reason=reason or "supervisor-error", updated_at_unix_ms=now_ms())
                 write_json(path / "status.json", {**status, "capture_directory": capture_directory, "latest_frame": latest})
         except (OSError, ValueError):
             # Receipt failure must never skip termination of the owned child.
             reason = "supervisor-error"
+        if child is not None and not sustained:
+            # Read the whole tail before judging the stop: a terminal record or a
+            # partial line written during wind-down must be seen, not guessed at.
+            try:
+                if (path / "stdout.jsonl").stat().st_size > MAX_LOG:
+                    raise ValueError("log-limit")
+                with (path / "stdout.jsonl").open("rb") as reader:
+                    reader.seek(read_offset)
+                    for block in iter(lambda: reader.read(256 * 1024), b""):
+                        consume(block)
+            except (OSError, ValueError, KeyError, TypeError):
+                receipt_valid = False
+                diagnostics_complete = diagnostic_accounting_complete = False
+                if reason != "feed-failed":
+                    reason = "receipt-invalid"
         if child is not None and native_terminal and child.poll() is None:
             try:
                 exit_code = child.wait(timeout=0.2)
@@ -839,13 +858,6 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
                     if any(pipe.failed.is_set() for pipe in pipes):
                         diagnostics_complete = False
                         raise ValueError("pipe-failed")
-                else:
-                    if (path / "stdout.jsonl").stat().st_size > MAX_LOG:
-                        raise ValueError("log-limit")
-                    with (path / "stdout.jsonl").open("rb") as reader:
-                        reader.seek(read_offset)
-                        for block in iter(lambda: reader.read(256 * 1024), b""):
-                            consume(block)
                 if pending:
                     raise ValueError("partial-native-tail")
             except (OSError, ValueError, KeyError, TypeError):
@@ -864,7 +876,7 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
                 except OSError:
                     diagnostics_complete = diagnostic_accounting_complete = False
         reason = reason or "supervisor-error"
-        status.update(status="stopped" if reason in {"operator-stop", "duration-limit", "frame-limit"} else "failed",
+        status.update(status="stopped" if reason in ORDERLY_STOPS else "failed",
                       activity_state="idle", stop_reason=reason,
                        elapsed_ms=int((time.monotonic() - started) * 1000), updated_at_unix_ms=now_ms())
         service_diagnostics = {"state": "unknown"}
@@ -881,8 +893,10 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
                 write_json(path / "run.json", {"command": command, "cwd": str(Path(root).resolve()),
                            "started_utc": started_utc, "ended_utc": utc(), "exit_code": exit_code,
                            "stdout": "stdout.jsonl", "stderr": "stderr.txt", "forced_stop": forced,
-                             "stop_reason": reason, "receipt_complete": native_terminal and not pending and not forced
-                             and receipt_valid and exit_code is not None and reason != "child-stop-unconfirmed"
+                             "stop_acknowledged": native_terminal,
+                             "stop_reason": reason, "receipt_complete": not pending and receipt_valid
+                             and exit_code is not None and reason != "child-stop-unconfirmed"
+                             and (native_terminal or reason in ORDERLY_STOPS)
                              and not any(pipe.failed.is_set() for pipe in pipes),
                              "diagnostics_complete": diagnostics_complete,
                              "diagnostics_scope": "native-child stdout/stderr",
@@ -896,7 +910,7 @@ def supervise(source, *, confirmed_at_unix_ms, root=ROOT, max_seconds=MAX_SECOND
                              "child_pid": child.pid if child is not None and type(child.pid) is int else None,
                             "transport_failures": {name: pipe.failure_reason for name, pipe in zip(("stdout", "stderr"), pipes)
                                                    if getattr(pipe, "failure_reason", None) is not None},
-                            "loss_note": "Sampling is not complete action history. Forced stop may leave an unacknowledged PNG or manifest tail."}, exclusive=True)
+                            "loss_note": "Sampling is not complete action history. receipt_complete covers the native text streams only; forced_stop means a reaped child may have left an unacknowledged PNG or manifest tail."}, exclusive=True)
         finally:
             if reason != "child-stop-unconfirmed":
                 lock.unlink()

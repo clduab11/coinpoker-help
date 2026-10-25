@@ -343,6 +343,28 @@ Evidence: `.local/laya/train/automatic-inference-20261012/retry-5-clock-aligned-
 postrun gate timing estimate uses diagnostic emission UTC; it is not an exact
 near-boundary timing measurement or an extra inference run.
 
+## Receipt completeness semantics (2026-10-25)
+
+`run.json.receipt_complete` answers one question: was the native text receipt captured
+completely? It requires no pending (partial) line, no rejected or oversized line, no pipe
+failure, a known exit code and an orderly stop — `operator-stop`, `duration-limit` or
+`frame-limit`. The wind-down now drains the tail before judging the stop, so a terminal
+record or a partial line written during shutdown is observed rather than assumed.
+
+It no longer requires that the supervisor avoided reaping the child. Every bounded session
+ends because the supervisor stops it, so that condition made the field permanently false.
+Two stricter facts stay separate and are always reported:
+
+| Field | Meaning |
+|---|---|
+| `forced_stop` | The supervisor had to terminate the owned child (`terminate`/`kill`). A reaped child may have left an unacknowledged PNG or manifest tail. |
+| `stop_acknowledged` | The child published a terminal record carrying its own `stop_reason` before winding down. The `--manual-inference` path does not currently emit one, so this is false for those sessions. |
+
+A consumer that needs the stricter guarantee — no unacknowledged evidence tail — must
+check `forced_stop == false` or `stop_acknowledged == true`. `receipt_complete` never
+claims that PNG or manifest evidence is complete, and it never overrides a rejected,
+oversized or partial stream.
+
 ## Launch without collection
 
 Run these commands from the repository root on the already provisioned host:

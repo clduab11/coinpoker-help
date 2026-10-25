@@ -715,6 +715,11 @@ class CaptureTests(unittest.TestCase):
         for field in ("started_utc", "ended_utc", "exit_code", "stdout", "stderr", "command"):
             self.assertIn(field, receipt)
         self.assertTrue(receipt["forced_stop"])
+        # An orderly supervisor-requested stop with a fully drained stream is a
+        # complete text receipt even though this child had to be reaped and never
+        # published a terminal record. The stricter facts stay visible.
+        self.assertFalse(receipt["stop_acknowledged"])
+        self.assertTrue(receipt["receipt_complete"])
         self.assertEqual(capture.public_snapshot(root=self.root)["opportunity_deficit"], 20)
 
     def test_private_provenance_binds_unchanged_strict_approval_and_actual_executable(self):
