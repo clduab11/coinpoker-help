@@ -795,6 +795,27 @@ class CaptureTests(unittest.TestCase):
         process.assert_called_once()
         child.terminate.assert_called_once()
 
+    def test_a_bounded_history_view_fits_the_feed_record_limit(self):
+        # The emitter sends one bounded observer view (or a short delta) instead of
+        # re-serializing the whole ledger, so no `history` line can trip the
+        # inference-enabled feed record limit and void an otherwise sound receipt.
+        events = [{"event": "gap", "event_sequence": n, "reason": "unvalidated_source",
+                   "hand_id": None, "street": None,
+                   "capture": {"session_id": 11, "table_id": 22, "sequence": n,
+                               "captured_at_ms": 1_700_000_000_000 + n, "ticket": n}}
+                  for n in range(1, 201)]
+        row = {"schema_version": 2, "event": "history", "history_since": 0, "history_through": 200,
+               "history_snapshot": True, "history_omitted": 0, "emitted_at_unix_ms": 1_700_000_000_000,
+               "summary": {"session_id": 11, "table_id": 22, "hand_id": None, "gaps": 200,
+                           "counts": {"folds": 0, "checks": 0, "calls": 0, "bets": 0, "raises": 0},
+                           "occupants": [], "events": events,
+                           "coverage": {"complete": False, "ordered_prefix": False, "recording": True,
+                                        "accepted_captures": 200, "unvalidated_captures": 200,
+                                        "partial_hands": 0, "event_limit": 10_000}}}
+        encoded = json.dumps(row, separators=(",", ":")).encode()
+        self.assertLess(len(encoded), capture.MAX_FEED_RECORD)
+        self.assertLess(len(encoded), capture.MAX_LOG)
+
     def test_ctrl_c_and_stop_sentinel_terminate_without_restart(self):
         for kwargs in ({"interrupt": True}, {"sentinel": True}, {"sentinel": True, "timeout": True}):
             code, process, child, _, status = self.run_supervisor(**kwargs)

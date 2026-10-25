@@ -632,6 +632,58 @@ class StateTests(unittest.TestCase):
         self.assertEqual(history["events"][-1]["kind"], "gap")
         self.assertNotIn("PRIVATE", json.dumps(history))
 
+    def history_row(self, sequences, *, since, through, snapshot, omitted=0):
+        return {"schema_version": 2, "event": "history", "history_since": since,
+                "history_through": through, "history_snapshot": snapshot, "history_omitted": omitted,
+                "summary": {"events": [{"event": "gap", "event_sequence": n} for n in sequences],
+                            "counts": {}}}
+
+    def history_sequences(self):
+        return [event["sequence"] for event in self.state.snapshot()["history"]["events"]]
+
+    def test_history_deltas_reconstruct_the_prefix_a_complete_view_would_give(self):
+        self.state.ingest(self.history_row([1, 2, 3], since=0, through=3, snapshot=True))
+        self.state.ingest(self.history_row([4, 5], since=3, through=5, snapshot=False))
+        self.assertEqual(self.history_sequences(), [1, 2, 3, 4, 5])
+        # A later complete view replaces the reconstructed prefix.
+        self.state.ingest(self.history_row([6], since=0, through=6, snapshot=True))
+        self.assertEqual(self.history_sequences(), [6])
+
+    def test_history_delta_without_a_cursor_never_merges_into_the_retained_prefix(self):
+        self.state.ingest(self.history_row([1, 2], since=0, through=2, snapshot=True))
+        prefix = self.state.snapshot()["history"]
+        for incomplete in (
+                {"schema_version": 2, "event": "history", "history_snapshot": False,
+                 "summary": {"events": [{"event": "gap", "event_sequence": 3}], "counts": {}}},
+                {"schema_version": 2, "event": "history", "history_snapshot": False,
+                 "history_since": 2,
+                 "summary": {"events": [{"event": "gap", "event_sequence": 3}], "counts": {}}}):
+            with self.subTest(incomplete=incomplete):
+                self.state.ingest(incomplete)
+                snapshot = self.state.snapshot()
+                self.assertEqual(snapshot["history"]["events"], prefix["events"])
+                self.assertEqual(snapshot["message"], "invalid-history-record")
+
+    def test_history_record_that_could_not_carry_every_event_replaces_the_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ledger.jsonl"
+            self.state.begin_stream(path)
+            self.state.ingest(self.history_row(list(range(1, 201)), since=0, through=200, snapshot=True))
+            self.state.ingest(self.history_row(list(range(202, 402)), since=200, through=401,
+                                               snapshot=True, omitted=1))
+            self.assertEqual(self.history_sequences(), list(range(202, 402)))
+            self.state.end_stream()
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual([row["history"]["omitted"] for row in rows
+                              if row["event"] == "history" and "omitted" in row["history"]], [1])
+
+    def test_history_view_keeps_only_the_newest_bounded_events(self):
+        self.state.ingest(self.history_row(list(range(41, 241)), since=0, through=240,
+                                           snapshot=True, omitted=40))
+        self.assertEqual(self.history_sequences(), list(range(41, 241)))
+        self.state.ingest(self.history_row(list(range(241, 246)), since=240, through=245, snapshot=False))
+        self.assertEqual(self.history_sequences(), list(range(46, 246)))
+
     def test_private_ledger_keeps_sanitized_role_changes_without_a_new_session(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"

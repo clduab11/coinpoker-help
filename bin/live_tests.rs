@@ -611,6 +611,10 @@ fn admitted_observation_emits_one_opaque_gap_summary_after_successful_write() {
     assert_eq!(gap["capture"]["sequence"], 1);
     assert_eq!(gap["capture"]["captured_at_ms"], ticket.captured_at_ms);
     assert_eq!(gap["capture"]["ticket"], history.sequence);
+    assert_eq!(written[1]["history_snapshot"], true);
+    assert_eq!(written[1]["history_since"], 0);
+    assert_eq!(written[1]["history_through"], 1);
+    assert_eq!(written[1]["history_omitted"], 0);
     let json = written[1].to_string();
     for private in [
         SENTINEL,
@@ -626,7 +630,7 @@ fn admitted_observation_emits_one_opaque_gap_summary_after_successful_write() {
         );
     }
     assert_eq!(
-        history_record(&history.observer, 12_345)["emitted_at_unix_ms"],
+        history_record(&mut history, 12_345)["emitted_at_unix_ms"],
         12_345
     );
 
@@ -801,7 +805,11 @@ fn invalidation_blocks_old_sources_without_fabricating_another_capture() {
             && !summary.coverage.complete
             && !summary.coverage.ordered_prefix
     );
-    let record = history_record(&history.observer, 12_345);
+    let record = history_record(&mut history, 12_345);
+    // The new window is a new table, so the cursor cannot extend across it.
+    assert_eq!(record["history_snapshot"], true);
+    assert_eq!(record["history_since"], 1);
+    assert_eq!(record["history_through"], 3);
     assert_eq!(record["summary"]["events"][1]["event"], "gap");
     assert_eq!(record["summary"]["events"][1]["reason"], "identity_changed");
     assert_eq!(record["summary"]["events"][2]["event_sequence"], 3);
@@ -809,6 +817,208 @@ fn invalidation_blocks_old_sources_without_fabricating_another_capture() {
     assert_eq!(
         record["summary"]["events"][2]["reason"],
         "unvalidated_source"
+    );
+}
+
+#[test]
+fn history_delta_reconstructs_the_same_bounded_view_as_a_snapshot() {
+    let mut history = AdmittedHistory::new().unwrap();
+    let (ticket, record) = history_source();
+    let clock = HistoryClock(std::cell::Cell::new(0));
+    let config = RuntimeConfig::default();
+    let mut merged: Vec<u64> = Vec::new();
+    let mut deltas = 0u32;
+    let mut snapshots = 0u32;
+    for index in 1..=300u64 {
+        let mut next = ticket.clone();
+        next.generation = ticket.generation + index;
+        next.captured_at_ms = ticket.captured_at_ms + index;
+        clock.0.set(next.captured_at_ms + 1);
+        emit_with_history(
+            &record,
+            Some(&next),
+            &mut history,
+            &clock,
+            &config,
+            &mut |value| {
+                if value["event"] == "history" {
+                    assert_eq!(value["history_omitted"], 0);
+                    if value["history_snapshot"] == true {
+                        merged.clear();
+                        snapshots += 1;
+                    } else {
+                        deltas += 1;
+                    }
+                    for event in value["summary"]["events"].as_array().unwrap() {
+                        merged.push(event["event_sequence"].as_u64().unwrap());
+                    }
+                    assert_eq!(
+                        value["history_through"].as_u64().unwrap(),
+                        merged.last().copied().unwrap_or(0),
+                        "the cursor is exactly the newest delivered event"
+                    );
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+    assert!(
+        snapshots >= 2 && deltas >= 200,
+        "{snapshots} snapshots, {deltas} deltas"
+    );
+    assert!(
+        merged.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "deltas extend one contiguous ascending run"
+    );
+    let view: Vec<u64> = history
+        .observer
+        .summary()
+        .events
+        .iter()
+        .map(|event| event.event_sequence)
+        .collect();
+    assert_eq!(view.len(), MAX_EVENT_VIEW);
+    assert!(merged.len() >= view.len());
+    assert_eq!(
+        merged[merged.len() - view.len()..].to_vec(),
+        view,
+        "merged deltas reconstruct the bounded view a snapshot would give"
+    );
+}
+
+#[test]
+fn a_long_session_stays_bounded_where_full_reemission_would_exceed_the_log_cap() {
+    // The supervisor's diagnostic cap: `MAX_LOG` in scripts/laya_capture.py.
+    const MAX_LOG: usize = 20 * 1024 * 1024;
+    let mut history = AdmittedHistory::new().unwrap();
+    let (ticket, record) = history_source();
+    let clock = HistoryClock(std::cell::Cell::new(0));
+    let config = RuntimeConfig::default();
+    let mut bounded = 0usize;
+    let mut naive = 0usize;
+    for index in 1..=700u64 {
+        let mut next = ticket.clone();
+        next.generation = ticket.generation + index;
+        next.captured_at_ms = ticket.captured_at_ms + index;
+        clock.0.set(next.captured_at_ms + 1);
+        emit_with_history(
+            &record,
+            Some(&next),
+            &mut history,
+            &clock,
+            &config,
+            &mut |value| {
+                if value["event"] == "history" {
+                    bounded += value.to_string().len() + 1;
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        // What the pre-fix emitter wrote after this same admission.
+        naive += json!({"schema_version": 2, "event": "history",
+            "summary": history.observer.summary(), "emitted_at_unix_ms": 0})
+        .to_string()
+        .len()
+            + 1;
+    }
+    assert!(
+        naive > MAX_LOG,
+        "the unbounded re-emission would have blown the cap: {naive} bytes"
+    );
+    assert!(
+        bounded < MAX_LOG / 5,
+        "a bounded session stays well inside the cap: {bounded} bytes"
+    );
+    assert!(bounded * 10 < naive);
+    println!("BOUNDED_HISTORY_BYTES={bounded} UNBOUNDED_HISTORY_BYTES={naive} MAX_LOG={MAX_LOG}");
+}
+
+#[test]
+fn history_snapshot_on_target_change_and_bounded_cadence() {
+    let mut history = AdmittedHistory::new().unwrap();
+    let (ticket, record) = history_source();
+    let clock = HistoryClock(std::cell::Cell::new(0));
+    let config = RuntimeConfig::default();
+    let mut snapshots = Vec::new();
+    for index in 1..=(5 + u64::from(HISTORY_SNAPSHOT_INTERVAL) + 1) {
+        let mut next = ticket.clone();
+        next.generation = ticket.generation + index;
+        next.captured_at_ms = ticket.captured_at_ms + index;
+        if index >= 5 {
+            // A resize keeps the approved identity; a new window is a new table,
+            // so the consumer's cursor belongs to the old one from here on.
+            next.identity.hwnd += 1;
+        }
+        clock.0.set(next.captured_at_ms + 1);
+        emit_with_history(
+            &record,
+            Some(&next),
+            &mut history,
+            &clock,
+            &config,
+            &mut |value| {
+                if value["event"] == "history" {
+                    assert_eq!(value["history_omitted"], 0);
+                    if value["history_snapshot"] == true {
+                        snapshots.push(index);
+                    }
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        snapshots,
+        vec![1, 5, 5 + u64::from(HISTORY_SNAPSHOT_INTERVAL) + 1],
+        "a complete view opens the session, follows a target change, and repeats on cadence"
+    );
+}
+
+#[test]
+fn history_reports_events_a_single_record_cannot_carry() {
+    let mut history = AdmittedHistory::new().unwrap();
+    let (ticket, record) = history_source();
+    let clock = HistoryClock(std::cell::Cell::new(0));
+    let config = RuntimeConfig::default();
+    let mut first = ticket.clone();
+    first.generation = ticket.generation + 1;
+    first.captured_at_ms = ticket.captured_at_ms + 1;
+    clock.0.set(first.captured_at_ms + 1);
+    let mut written = Vec::new();
+    emit_with_history(
+        &record,
+        Some(&first),
+        &mut history,
+        &clock,
+        &config,
+        &mut |value| {
+            written.push(value.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(written[1]["history_snapshot"], true);
+    assert_eq!(written[1]["history_through"], 1);
+    // More events than one bounded view can hold arrive before the next emission.
+    for index in 2..=(MAX_EVENT_VIEW as u64 + 2) {
+        let mut next = ticket.clone();
+        next.generation = ticket.generation + index;
+        next.captured_at_ms = ticket.captured_at_ms + index;
+        assert!(history.record_admission(&next, next.captured_at_ms + 1, &config));
+    }
+    let record = history_record(&mut history, 12_345);
+    assert_eq!(record["history_snapshot"], true);
+    assert_eq!(record["history_through"], MAX_EVENT_VIEW as u64 + 2);
+    assert_eq!(
+        record["history_omitted"], 1,
+        "a full view that cannot hold every pending event says so"
+    );
+    assert_eq!(
+        record["summary"]["events"].as_array().unwrap().len(),
+        MAX_EVENT_VIEW
     );
 }
 

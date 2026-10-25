@@ -687,6 +687,9 @@ class DashboardState:
         self.identity_configured = False
         self.recording_incomplete = False
         self.message = "Waiting for a visible CoinPoker table."
+        # Raw ledger events reconstructed from `history` records: a delta appends,
+        # a complete view replaces. Only the sanitized projection is public.
+        self.history_events = []
         self.history = {"state": "unavailable", "events": [], "counts": {}, "gaps": 0,
                         "ledger": {"enabled": False, "complete": True}}
         self.ledger = PrivateLedger()
@@ -732,6 +735,7 @@ class DashboardState:
             self.capture.update(state="starting", fresh_capture=False, frames=0, recorded_frames=0,
                                  recording_enabled=False, recorded_bytes=0, recording_status="disabled",
                                   recording_complete=False, epoch=None, last_heartbeat_unix_ms=None)
+            self.history_events = []
             self.history = {"state": "unavailable", "events": [], "counts": {}, "gaps": 0,
                             "ledger": {"enabled": ledger_path is not None, "complete": True}}
             if ledger_path is True:
@@ -1571,30 +1575,47 @@ class DashboardState:
                 if not isinstance(summary, dict):
                     self._invalidate("invalid-history-record")
                     return
+                # A record carrying a cursor is a delta unless it declares a complete
+                # view; a legacy record without cursor fields is a complete view.
+                snapshot = record.get("history_snapshot")
+                snapshot = True if snapshot is None else snapshot is True
+                omitted = integer(record.get("history_omitted"))
+                if not snapshot and (
+                        omitted is None or integer(record.get("history_since")) is None):
+                    # A delta without a cursor, or without its omission count, is not
+                    # reconstructible; never merge it into the retained prefix.
+                    self._invalidate("invalid-history-record")
+                    return
                 events = summary.get("events", [])
+                events = [item for item in events if isinstance(item, dict)] if isinstance(events, list) else []
+                if snapshot or omitted:
+                    # A complete view replaces the prefix. So does a record that could
+                    # not carry every pending event: its own view is all it vouches for.
+                    self.history_events = events
+                else:
+                    self.history_events = self.history_events + events
+                self.history_events = self.history_events[-200:]
                 sanitized = []
-                if isinstance(events, list):
-                    for item in events[-200:]:
-                        if isinstance(item, dict):
-                            kind = item.get("event")
-                            kind = kind if isinstance(kind, str) else None
-                            detail = item.get("action") if isinstance(item.get("action"), dict) else item
-                            action = detail.get("kind") if kind == "action" else None
-                            seat = integer(detail.get("seat"), 5)
-                            ordinal = integer(detail.get("preflop_raise_ordinal"), MAX_EVENTS)
-                            if (ordinal is None or ordinal < 2 or action not in ("bet", "raise")
-                                    or item.get("street") != "preflop" or detail.get("trusted") is not True
-                                    or detail.get("full_raise") is not True or detail.get("forced") != "voluntary"):
-                                ordinal = None
-                            sanitized.append({"kind": {"action": "action", "hand_started": "boundary",
-                                                       "movement": "boundary", "hand_outcome": "hand"}.get(kind, "gap"),
-                                              "reason": code(item.get("reason"), "unknown-evidence"),
-                                              "sequence": integer(item.get("event_sequence")),
-                                              "seat": seat + 1 if seat is not None else None,
-                                               "amount": integer(detail.get("amount")),
-                                               "all_in": detail.get("all_in") if type(detail.get("all_in")) is bool else None,
-                                               "preflop_raise_ordinal": ordinal,
-                                               "action": action if action in ACTIONS else None})
+                for item in self.history_events:
+                    kind = item.get("event")
+                    kind = kind if isinstance(kind, str) else None
+                    detail = item.get("action") if isinstance(item.get("action"), dict) else item
+                    action = detail.get("kind") if kind == "action" else None
+                    seat = integer(detail.get("seat"), 5)
+                    ordinal = integer(detail.get("preflop_raise_ordinal"), MAX_EVENTS)
+                    if (ordinal is None or ordinal < 2 or action not in ("bet", "raise")
+                            or item.get("street") != "preflop" or detail.get("trusted") is not True
+                            or detail.get("full_raise") is not True or detail.get("forced") != "voluntary"):
+                        ordinal = None
+                    sanitized.append({"kind": {"action": "action", "hand_started": "boundary",
+                                               "movement": "boundary", "hand_outcome": "hand"}.get(kind, "gap"),
+                                      "reason": code(item.get("reason"), "unknown-evidence"),
+                                      "sequence": integer(item.get("event_sequence")),
+                                      "seat": seat + 1 if seat is not None else None,
+                                       "amount": integer(detail.get("amount")),
+                                       "all_in": detail.get("all_in") if type(detail.get("all_in")) is bool else None,
+                                       "preflop_raise_ordinal": ordinal,
+                                       "action": action if action in ACTIONS else None})
                 counts = summary.get("counts", {})
                 if not isinstance(counts, dict):
                     counts = {}
@@ -1616,6 +1637,10 @@ class DashboardState:
                 saved["history"] = {"state": "partial", "events": sanitized,
                                     "counts": normalized_counts,
                                     "gaps": self.history["gaps"]}
+                if omitted:
+                    # The producer could not carry every pending event in one record.
+                    # The retained prefix is what this record vouched for, nothing more.
+                    saved["history"]["omitted"] = omitted
             elif event == "decision":
                 lease = self._partial_lease(record)
                 ticket = self._ticket(record.get("observation"))

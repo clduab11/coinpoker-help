@@ -18,7 +18,7 @@ use ingest::runtime::{
 use ingest::screen::parse_screen_output;
 #[cfg(test)]
 use ingest::vlm::VlmBackend;
-use opponent_model::observer::{Capture, Evidence, Id, Observer, Snapshot};
+use opponent_model::observer::{Capture, Evidence, Id, Observer, Snapshot, MAX_EVENT_VIEW};
 use opponent_model::observing::{Frame as ObservingFrame, Reading, Tracker as ObservingTracker};
 use serde_json::json;
 
@@ -417,6 +417,10 @@ pub(crate) fn event_record(
     Ok(Some(record))
 }
 
+/// Emissions between complete `history` views. A delta keeps each record small
+/// without truncating the observer ledger or dropping its events.
+const HISTORY_SNAPSHOT_INTERVAL: u32 = 64;
+
 /// Source-current snapshots do not grant unvalidated action or seat evidence trust.
 pub(crate) struct AdmittedHistory {
     observer: Observer,
@@ -429,6 +433,12 @@ pub(crate) struct AdmittedHistory {
     minimum_epoch: u64,
     partial_sequence: u64,
     last_partial: Option<Ticket>,
+    /// Highest ledger `event_sequence` already delivered to the consumer.
+    history_since: u64,
+    /// Delta emissions since the last complete view.
+    history_emissions: u32,
+    /// `(session, table, hand)` the consumer's events belong to.
+    history_key: Option<(Option<Id>, Option<Id>, Option<Id>)>,
 }
 
 impl AdmittedHistory {
@@ -446,6 +456,9 @@ impl AdmittedHistory {
             minimum_epoch: 0,
             partial_sequence: 0,
             last_partial: None,
+            history_since: 0,
+            history_emissions: 0,
+            history_key: None,
         })
     }
 
@@ -635,9 +648,56 @@ impl AdmittedHistory {
     }
 }
 
-fn history_record(observer: &Observer, emitted_at_unix_ms: u64) -> serde_json::Value {
-    json!({"schema_version":2,"event":"history","summary":observer.summary(),
-        "emitted_at_unix_ms":emitted_at_unix_ms})
+/// One bounded `history` record. The observer ledger is never truncated: a
+/// complete view is sent at a bounded cadence or when the target changes, and
+/// every other record carries exactly the ledger events appended since the
+/// previous record. `history_omitted` reports any events a single record could
+/// not carry, so no gap is silent.
+fn history_record(history: &mut AdmittedHistory, emitted_at_unix_ms: u64) -> serde_json::Value {
+    let since = history.history_since;
+    let (mut summary, pending_start, pending) = {
+        let observer = &history.observer;
+        let summary = observer.summary();
+        let start = observer
+            .events()
+            .partition_point(|event| event.event_sequence <= since);
+        (summary, start, observer.events().len() - start)
+    };
+    let key = (summary.session_id, summary.table_id, summary.hand_id);
+    let snapshot = history.history_key != Some(key)
+        || history.history_emissions >= HISTORY_SNAPSHOT_INTERVAL
+        || pending > MAX_EVENT_VIEW;
+    let through = if snapshot {
+        summary
+            .events
+            .last()
+            .map_or(since, |event| event.event_sequence)
+    } else {
+        history
+            .observer
+            .events()
+            .last()
+            .map_or(since, |event| event.event_sequence)
+    };
+    let omitted = if snapshot {
+        pending.saturating_sub(summary.events.len()) as u64
+    } else {
+        0
+    };
+    if !snapshot {
+        // A delta is exactly the contiguous run appended after the cursor.
+        summary.events = history.observer.events()[pending_start..].to_vec();
+    }
+    history.history_since = through;
+    history.history_key = Some(key);
+    history.history_emissions = if snapshot {
+        0
+    } else {
+        history.history_emissions.saturating_add(1)
+    };
+    json!({"schema_version":2,"event":"history","summary":summary,
+        "history_since":since,"history_through":through,"history_snapshot":snapshot,
+        "history_omitted":omitted,"emitted_at_unix_ms":emitted_at_unix_ms})
 }
 
 pub(crate) fn emit_with_history(
@@ -662,14 +722,14 @@ pub(crate) fn emit_with_history(
             if ticket
                 .is_some_and(|ticket| history.record_admission(ticket, clock.now_ms(), config)) =>
         {
-            sink(&history_record(&history.observer, unix_ms()?))?;
+            sink(&history_record(history, unix_ms()?))?;
         }
         Some("partial_observation") => {
             if let (Some(ticket), Some(value)) = (ticket, partial) {
                 if history.record_partial(ticket, value, clock.now_ms(), config) {
                     // Independent readings never replace the public history prefix
                     // with a second, shorter ledger.
-                    sink(&history_record(&history.observer, unix_ms()?))?;
+                    sink(&history_record(history, unix_ms()?))?;
                 }
             }
         }
@@ -679,7 +739,7 @@ pub(crate) fn emit_with_history(
                     history.record_source(ticket, clock.now_ms(), config, true)
                 }) =>
         {
-            sink(&history_record(&history.observer, unix_ms()?))?;
+            sink(&history_record(history, unix_ms()?))?;
         }
         _ => {}
     }
