@@ -1901,6 +1901,119 @@ class IntegrationTests(unittest.TestCase):
             request._send.assert_called_once_with(403, {"error": "local-origin-required"})
 
 
+class BrowserDtoTests(unittest.TestCase):
+    def popup_capture(self):
+        parent = {"service_instance_id": "service", "session_id": "feed", "capture_session_id": "owner",
+                  "source_id": "source", "epoch": 3, "sequence": 10, "captured_at_ms": 1000,
+                  "captured_at_unix_ms": 2000, "sha256": "a" * 64, "width": 900, "height": 700}
+        return {**parent, "sequence": 11, "captured_at_ms": 1002, "captured_at_unix_ms": 2002,
+                "sha256": "b" * 64, "width": 300, "height": 200, "parent_capture": parent,
+                "popup_index": 0, "non_atomic": True,
+                "popup_window": {"hwnd": "0xPRIVATE-HWND", "owner_hwnd": "0xPRIVATE-OWNER",
+                    "root_owner_hwnd": "0xPRIVATE-ROOT", "process_id": 1234,
+                    "process_created_at_100ns": 987654321, "window_class": "PRIVATE-CLASS",
+                    "relative_bounds": [1, 2, 300, 200]}}
+
+    def test_recursive_projection_deep_copies_and_allowlists_only_opaque_binding(self):
+        capture = self.popup_capture()
+        original = {"outer": [{"capture": capture}]}
+        before = copy.deepcopy(original)
+        projected = srv.project_browser_snapshot(original)
+        self.assertEqual(original, before)
+        self.assertIsNot(projected, original)
+        self.assertIsNot(projected["outer"][0]["capture"], capture)
+        self.assertIsNot(projected["outer"][0]["capture"]["parent_capture"], capture["parent_capture"])
+
+        def check(value):
+            if isinstance(value, dict):
+                self.assertFalse({"hwnd", "owner_hwnd", "root_owner_hwnd", "process_id",
+                                  "process_created_at_100ns", "window_class"} & set(value))
+                if "binding_id" in value:
+                    self.assertEqual(set(value), {"binding_id"})
+                    self.assertRegex(value["binding_id"], r"^[0-9a-f]{64}$")
+                for child in value.values():
+                    check(child)
+            elif isinstance(value, list):
+                for child in value:
+                    check(child)
+
+        check(projected)
+        self.assertNotIn("PRIVATE", json.dumps(projected))
+
+    def test_binding_is_stable_across_capture_receipts_and_scoped_to_popup_process_identity(self):
+        first = self.popup_capture()
+        second = copy.deepcopy(first)
+        second.update(sequence=99, captured_at_ms=9000, captured_at_unix_ms=10000, sha256="c" * 64)
+        second["parent_capture"].update(sequence=98, captured_at_ms=8998, captured_at_unix_ms=9998, sha256="d" * 64)
+        bind = lambda value: srv.project_browser_snapshot({"capture": value})["capture"]["popup_window"]["binding_id"]
+        self.assertEqual(bind(first), bind(second))
+        for key, value in (("process_created_at_100ns", 987654322), ("hwnd", "0xREUSED-HWND"),
+                           ("process_id", 4321), ("owner_hwnd", "0xOTHER")):
+            with self.subTest(key=key):
+                changed = copy.deepcopy(first)
+                changed["popup_window"][key] = value
+                self.assertNotEqual(bind(first), bind(changed))
+        changed = copy.deepcopy(first)
+        changed["service_instance_id"] = "other-service"
+        self.assertNotEqual(bind(first), bind(changed))
+
+
+class EvidenceHttpTests(unittest.TestCase):
+    def setUp(self):
+        from laya_evidence import EventEvidence
+
+        self.temp = tempfile.TemporaryDirectory(prefix="laya-evidence-http-")
+        self.addCleanup(self.temp.cleanup)
+        self.archive = EventEvidence(Path(self.temp.name), "service")
+        self.addCleanup(self.archive.close)
+        self.png = png()
+        capture = {"service_instance_id": "service", "session_id": "feed", "source_id": "source",
+                   "epoch": 1, "sequence": 1, "captured_at_unix_ms": 1000,
+                   "sha256": hashlib.sha256(self.png).hexdigest(), "width": 4, "height": 3}
+        self.event = self.archive.record(self.png, capture, "role", [])
+        self.service = srv.Service(ALIAS)
+        snapshot = self.service.state.snapshot()
+        snapshot["capture_session"] = srv.manual_capture.default_snapshot()
+        snapshot["table_context"] = {"seats": [{"stats": {"capture": BrowserDtoTests().popup_capture()}}]}
+        self.service.manual_feed = SimpleNamespace(snapshot=lambda: copy.deepcopy(snapshot),
+            visual=SimpleNamespace(archive=self.archive))
+        self.httpd = srv.BoundedHTTPServer(("127.0.0.1", 0), srv.make_handler(None, ALIAS, {}, None, self.service))
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+
+    def request(self, path):
+        request = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, path))
+        try:
+            response = urllib.request.urlopen(request, timeout=2)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            return response.status, response.read(), response.headers
+
+    def test_evidence_route_serves_only_hash_confined_png(self):
+        evidence_id = self.event["evidence_id"]
+        status, data, headers = self.request("/api/evidence/" + evidence_id)
+        self.assertEqual((status, data, headers["Content-Type"]), (200, self.png, "image/png"))
+        for path in ("/api/evidence/" + "0" * 64, "/api/evidence/../" + evidence_id + ".png",
+                     "/api/evidence/%2e%2e%2f" + evidence_id + ".png",
+                     "/api/evidence/%252e%252e%252f" + evidence_id + ".png"):
+            with self.subTest(path=path):
+                status, payload, _ = self.request(path)
+                self.assertEqual(status, 404)
+                self.assertEqual(json.loads(payload), {"error": "evidence-unavailable"})
+
+    def test_http_state_is_the_recursive_browser_projection(self):
+        status, data, _ = self.request("/api/state")
+        self.assertEqual(status, 200)
+        value = json.loads(data)
+        popup = value["table_context"]["seats"][0]["stats"]["capture"]["popup_window"]
+        self.assertEqual(set(popup), {"binding_id"})
+        self.assertNotIn("PRIVATE", data.decode())
+
+
 class HttpTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

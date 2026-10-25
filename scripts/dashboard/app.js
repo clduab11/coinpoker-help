@@ -364,6 +364,12 @@
   const MAX_LEASE_MS = 5000;
   const SUSTAINED_RECEIPT_MAX_MS = 3000;
   const MAX_RESPONSE_BYTES = 256 * 1024;
+  const POLL_FAILURE_TEXT = Object.freeze({
+    timeout: "Monitor request timed out. Waiting for a fresh reading.",
+    unreachable: "Monitor service unreachable. Waiting for a fresh reading.",
+    "http-rejection": "Monitor rejected the state request. Waiting for a fresh reading.",
+    "invalid-snapshot": "Monitor returned an invalid snapshot. Waiting for a fresh reading."
+  });
   const ACTIONS = ["fold", "check", "call", "bet", "raise", "all_in"];
   const ACTION_NAMES = { fold: "Fold", check: "Check", call: "Call", bet: "Bet", raise: "Raise", all_in: "All-in" };
   const CONTROL_NAMES = { ...ACTION_NAMES, raise: "Raise (re-raise)" };
@@ -621,12 +627,28 @@
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   }
 
+  function pollFailure(category) {
+    const error = new Error(category);
+    error.category = category;
+    return error;
+  }
+
   async function getJson(path, controller) {
-    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let expired = false;
+    const timeout = window.setTimeout(() => { expired = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
+    let response;
     try {
-      const response = await fetch(path, { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
-      if (!response.ok) throw new Error("unavailable");
-      return await readJson(response);
+      try {
+        response = await fetch(path, { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
+      } catch {
+        throw pollFailure(expired ? "timeout" : "unreachable");
+      }
+      if (!response.ok) throw pollFailure("http-rejection");
+      try {
+        return await readJson(response);
+      } catch {
+        throw pollFailure(expired ? "timeout" : "invalid-snapshot");
+      }
     } finally {
       window.clearTimeout(timeout);
     }
@@ -986,16 +1008,12 @@
       const parent = parentOnly ? null : normalizeCaptureRef(value.parent_capture, true);
       const popup = value.popup_window;
       if (!parent || value.non_atomic !== true || !integer(value.popup_index) || value.popup_index > 3 || !record(popup) ||
-          ["service_instance_id", "session_id", "source_id", "epoch", "capture_session_id"].some(key => parent[key] !== result[key]) ||
-          !["hwnd", "owner_hwnd", "root_owner_hwnd"].every(key => opaqueId(popup[key])) ||
-          !integer(popup.process_id) || popup.process_id === 0 || typeof popup.window_class !== "string" || popup.window_class.length > 128) return null;
+          Object.keys(popup).length !== 1 || !opaqueId(popup.binding_id) ||
+          ["service_instance_id", "session_id", "source_id", "epoch", "capture_session_id"].some(key => parent[key] !== result[key])) return null;
       result.parent_capture = parent;
       result.popup_index = value.popup_index;
       result.non_atomic = true;
-      result.popup_window = Object.fromEntries(["hwnd", "owner_hwnd", "root_owner_hwnd", "process_id", "window_class"].map(key => [key, popup[key]]));
-      if (Array.isArray(popup.relative_bounds) && popup.relative_bounds.length === 4 && popup.relative_bounds.every(Number.isSafeInteger)) {
-        result.popup_window.relative_bounds = [...popup.relative_bounds];
-      }
+      result.popup_window = { binding_id: popup.binding_id };
     }
     return result;
   }
@@ -2460,8 +2478,9 @@
     if (wasActive) announce("Table reading and analysis cleared.");
   }
 
-  function disconnected() {
+  function disconnected(category = null) {
     const reason = activeLease || retainedNumbers.size || numericLease || visualLease || contextLease ? "stale" : clearReason;
+    const diagnostic = Object.hasOwn(POLL_FAILURE_TEXT, category) ? POLL_FAILURE_TEXT[category] : null;
     connected = false;
     clearContext();
     clearVisual();
@@ -2470,8 +2489,8 @@
     recoveryAfterSequence = Math.max(recoveryAfterSequence, highestSequence);
     clearObservation(reason);
     renderHistory(snapshot ? snapshot.history : null);
-    text("monitor-empty", "Table disconnected. Waiting for a fresh reading.");
-    announce("Table disconnected. Analysis unavailable.");
+    text("monitor-empty", diagnostic || "Table disconnected. Waiting for a fresh reading.");
+    announce(diagnostic ? `${diagnostic} Analysis unavailable.` : "Table disconnected. Analysis unavailable.");
   }
 
   function updateHeartbeat(value) {
@@ -2721,12 +2740,14 @@
       if (version !== lifecycle || document.hidden) return;
       const value = normalizeSnapshot(raw);
       if (!value) {
-        disconnected();
+        disconnected("invalid-snapshot");
         return;
       }
       acceptSnapshot(value, performance.now() - started);
-    } catch {
-      if (version === lifecycle && !document.hidden) disconnected();
+    } catch (error) {
+      if (version === lifecycle && !document.hidden) {
+        disconnected(error && Object.hasOwn(POLL_FAILURE_TEXT, error.category) ? error.category : "unreachable");
+      }
     } finally {
       if (pollController === controller) pollController = null;
       if (version === lifecycle) schedulePoll(Math.max(0, POLL_MS - (performance.now() - started)));

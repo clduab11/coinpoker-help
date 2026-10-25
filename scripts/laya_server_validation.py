@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import math
@@ -63,6 +64,30 @@ SCENE_QUESTIONS = {
     "acting": ("Does visible acting evidence identify this seat as the current actor?", ["yes", "no", "unknown"]),
 }
 MAX_ACCEPTANCE_REPORT = 64 * 1024
+POPUP_BINDING_SCOPE_KEYS = ("service_instance_id", "session_id", "capture_session_id", "source_id",
+                            "native_source_id", "epoch", "generation", "source_process_created_at_100ns")
+
+
+def project_browser_snapshot(snapshot):
+    """Deep-copy a state DTO, replacing private popup identities with scoped opaque bindings."""
+    projected = copy.deepcopy(snapshot)
+
+    def visit(value):
+        if isinstance(value, dict):
+            scope = {key: value.get(key) for key in POPUP_BINDING_SCOPE_KEYS}
+            for key, child in value.items():
+                if key == "popup_window":
+                    identity = json.dumps({"scope": scope, "popup_window": child}, sort_keys=True,
+                        ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
+                    value[key] = {"binding_id": hashlib.sha256(identity).hexdigest()}
+                else:
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(projected)
+    return projected
 
 
 class RequestError(Exception):

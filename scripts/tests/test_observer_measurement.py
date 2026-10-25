@@ -167,7 +167,7 @@ class MeasurementTests(unittest.TestCase):
         parent = capture()
         child = {**parent, "captured_at_unix_ms": 1002, "captured_at_ms": parent["captured_at_ms"] + 2,
             "sha256": "e" * 64, "width": 320, "height": 240, "parent_capture": parent,
-            "non_atomic": True, "popup_index": 0, "popup_window": {"hwnd": 123, "owner_hwnd": 45}}
+            "non_atomic": True, "popup_index": 0, "popup_window": {"binding_id": "a" * 64}}
         value = state()
         value["table_context"]["seats"][0]["stats"] = profile(child)
         projected, audit = measurement.CompactProjection().project(value)
@@ -178,6 +178,12 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(len(imported), 1)
         self.assertEqual(imported[0]["captured_at_unix_ms"], 1002)
         self.assertNotEqual(measurement.capture_key(child), measurement.capture_key({**child, "popup_index": 1}))
+        rebound = copy.deepcopy(child)
+        rebound["popup_window"]["binding_id"] = "b" * 64
+        self.assertNotEqual(measurement.capture_key(child), measurement.capture_key(rebound))
+        for popup in ({}, {"binding_id": "../private"}, {"binding_id": "a" * 64, "hwnd": 123}):
+            with self.subTest(popup=popup), self.assertRaises(ValueError):
+                measurement.capture_key({**child, "popup_window": popup})
         bad = copy.deepcopy(value)
         bad["table_context"]["seats"][0]["stats"]["capture"]["parent_capture"]["source_id"] = "other"
         rejected = measurement.analyze_context([(0, sample(bad))], run())["seats"]["1"]["profile"]

@@ -96,6 +96,7 @@ from laya_server_validation import (
     load_seat_registry_from_root,
     pinned_file_entries,
     png_size,
+    project_browser_snapshot,
     shape_answers,
     validate_request,
 )
@@ -916,7 +917,7 @@ def make_handler(engine, alias, meta, log_fn, service=None):
                 snapshot["server"]["manual_feed_version"] = 1 if service.manual_feed is not None else None
                 snapshot["automatic_startup"] = service.automatic_startup.snapshot(snapshot["capture_session"]) if service.automatic_startup is not None else None
                 snapshot["capture_control"] = service.capture_controls(snapshot["capture_session"])
-                self._send(200, snapshot)
+                self._send(200, project_browser_snapshot(snapshot))
             elif self.path.startswith("/api/evidence/"):
                 evidence_id = self.path.removeprefix("/api/evidence/")
                 png = (service.manual_feed.visual.archive.read(evidence_id)

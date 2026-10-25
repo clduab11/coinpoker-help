@@ -1179,6 +1179,56 @@ POLL_CHECKS = r"""
 """
 
 
+POLL_FAILURE_CHECKS = r"""
+(async () => {
+  accept(input.snapshot); assert(visible());
+  const response = (body, ok = true) => {
+    let read = false;
+    return { ok, status: ok ? 200 : 503, headers: { get: name => name === 'content-type' ? 'application/json' : null },
+      body: { getReader: () => ({ read: async () => {
+        if (read) return { done: true }; read = true;
+        return { done: false, value: new TextEncoder().encode(body) };
+      }, cancel: async () => {} }) } };
+  };
+  const cases = [
+    { kind: 'timeout', expected: 'timed out' },
+    { kind: 'unreachable', expected: 'unreachable' },
+    { kind: 'http', expected: 'rejected' },
+    { kind: 'malformed', expected: 'invalid snapshot' },
+    { kind: 'invalid', expected: 'invalid snapshot' }
+  ];
+  let current = input.snapshot;
+  for (const item of cases) {
+    current = structuredClone(current); current.event_seq += 1;
+    accept(current); assert(visible());
+    const requests = [], timeouts = [], originalSetTimeout = window.setTimeout;
+    window.setTimeout = (callback, ms) => { timeouts.push({ callback, ms }); return ++timer; };
+    context.fetch = (path, options) => {
+      requests.push({ path, options });
+      if (item.kind === 'timeout') return new Promise((resolve, reject) =>
+        options.signal.addEventListener('abort', () => reject(Error('PRIVATE abort')), { once: true }));
+      if (item.kind === 'unreachable') return Promise.reject(Error('PRIVATE unreachable'));
+      if (item.kind === 'http') return Promise.resolve(response('PRIVATE HTTP body', false));
+      if (item.kind === 'malformed') return Promise.resolve(response('{PRIVATE malformed'));
+      return Promise.resolve(response('{"schema_version":1,"session_id":"PRIVATE"}'));
+    };
+    const pending = test.poll();
+    if (item.kind === 'timeout') timeouts.find(entry => entry.ms === 1500).callback();
+    await pending;
+    window.setTimeout = originalSetTimeout;
+    assert(!visible(), item.kind);
+    assert(nodes.get('monitor-empty').textContent.includes(item.expected), `${item.kind}: ${nodes.get('monitor-empty').textContent}`);
+    assert(![...nodes.values()].some(node => node.textContent.includes('PRIVATE')), item.kind);
+    assert.equal(requests.length, 1); assert.equal(requests[0].path, '/api/state');
+    current = structuredClone(current); current.event_seq += 1; current.partial_observation.generation += 1;
+    context.fetch = async () => response(JSON.stringify(current));
+    await test.poll(); assert(visible(), `passive recovery after ${item.kind}: ${nodes.get('monitor-empty').textContent}`);
+  }
+  console.log('offline UI poll failure diagnostics: PASS');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+
+
 STOP_CHECKS = r"""
 (async () => {
   const button = nodes.get('stop-capture'), requests = []; let resolve, reject;
@@ -1357,6 +1407,9 @@ class CompanionUiTests(unittest.TestCase):
         if scenario == "polling":
             script = stage2.NODE_UI.replace("{ normalizeSnapshot, acceptSnapshot", "{ poll, normalizeSnapshot, acceptSnapshot")
             script = script.replace("console.log(`offline UI ${input.scenario}: PASS`);", POLL_CHECKS)
+        if scenario == "poll-failures":
+            script = stage2.NODE_UI.replace("{ normalizeSnapshot, acceptSnapshot", "{ poll, normalizeSnapshot, acceptSnapshot")
+            script = script.replace("console.log(`offline UI ${input.scenario}: PASS`);", POLL_FAILURE_CHECKS)
         if scenario.startswith("stop-"):
             script = stage2.NODE_UI.replace("console.log(`offline UI ${input.scenario}: PASS`);", STOP_CHECKS)
         if scenario.startswith("operator-"):
@@ -2185,6 +2238,10 @@ class CompanionUiTests(unittest.TestCase):
         self.manual_session()
         self.run_ui("polling")
 
+    def test_poll_failures_are_categorized_safe_and_passively_recover_without_private_errors(self):
+        self.manual_session()
+        self.run_ui("poll-failures")
+
     def test_manual_budget_expires_on_both_clocks_and_cannot_rearm(self):
         self.manual_session(elapsed_ms=990, max_duration_ms=1000, remaining_ms=10)
         for clock in ("normal", "forward", "backward"):
@@ -2557,8 +2614,7 @@ class CompanionUiTests(unittest.TestCase):
         original = stats["capture"]
         stats["capture"] = {**original, "width": 260, "height": 180, "sha256": "c" * 64,
                             "parent_capture": copy.deepcopy(original), "popup_index": 0, "non_atomic": True,
-                            "popup_window": {"hwnd": "0x111", "owner_hwnd": "0x222", "root_owner_hwnd": "0x222",
-                                             "process_id": 123, "window_class": "ProfileFixture"}}
+                            "popup_window": {"binding_id": "a" * 64}}
         self.run_ui("context-popup")
         baseline = copy.deepcopy(self.snapshot)
         for key, value in (("source_id", "1" * 16), ("epoch", 2), ("width", original["width"] + 1)):
@@ -2569,6 +2625,13 @@ class CompanionUiTests(unittest.TestCase):
         self.snapshot = copy.deepcopy(baseline)
         self.snapshot["table_context"]["seats"][0]["stats"]["capture"]["non_atomic"] = False
         self.run_ui("context-stats-reject")
+        for popup in ({}, {"binding_id": "../PRIVATE"}, {"binding_id": "a" * 64, "hwnd": "0x111"},
+                      {"hwnd": "0x111", "owner_hwnd": "0x222", "root_owner_hwnd": "0x222",
+                       "process_id": 123, "window_class": "ProfileFixture"}):
+            with self.subTest(popup=popup):
+                self.snapshot = copy.deepcopy(baseline)
+                self.snapshot["table_context"]["seats"][0]["stats"]["capture"]["popup_window"] = popup
+                self.run_ui("context-stats-reject")
 
     def test_profile_unknown_missing_locale_range_and_wrong_labels_are_atomic_not_local_rates(self):
         context = self.context_session()

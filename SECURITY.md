@@ -18,13 +18,20 @@ retired product endpoint or automatic alternate port. The local listener is
 unauthenticated; do not expose it through a proxy or tunnel. An occupied 18090
 is a conflict, not permission to stop an unowned process.
 
-UI/status requests must remain independent
-of model loading and the single GPU admission slot, with bounded requests,
-Host/Origin validation, restrictive CSP and safe text rendering. No arbitrary
-file serving, raw images/model replies, backend bodies or player names belong
-in browser DTOs. These are implementation-test requirements, not an accepted
-live-security receipt. Session mutations use explicit requests bound to the current
-service and session. Status polling does not implicitly start or stop capture.
+UI/status requests must remain independent of model loading and the single GPU
+admission slot, with bounded requests, Host/Origin validation, restrictive CSP and
+safe text rendering. State DTOs contain no PNG bytes or data URLs. The bounded
+`GET /api/evidence/<sha256>` route serves only registered, hash-allowlisted local
+original/crop PNGs; it does not provide arbitrary file serving. Local on-screen
+player labels are allowed, but raw private paths, raw model answers, backend
+bodies, HWND, PID and window class are not public browser fields. Public capture
+and popup bindings use opaque identities while full provenance remains local.
+These are implementation-test requirements, not an accepted live-security receipt.
+
+`POST /api/capture/start` and `/api/capture/stop` use explicit JSON requests bound
+to the current service and control token, with same-origin/session checks. Stop
+also binds the active session when present and can cancel pending discovery.
+Status polling does not implicitly start or stop capture.
 
 Live decisions are scoped to an executable name, PID and HWND, plus observation
 generation and expiry. Consumers must clear on `clear`, lease expiry, EOF or process
@@ -35,12 +42,13 @@ Raw answers and legacy table events do not establish current hero controls or
 eligible history. Follow-on observation invalidation/capture health must clear
 current views even when no advice exists; polling cannot renew an expired lease.
 
-Public event/browser output must exclude screenshots, PNG data URLs, raw Laya
-payloads and server error bodies. Local images are not anonymized simply because
-the DTO uses opaque IDs; `--list-windows` may expose personal titles. Private
-answer logs are diagnostics, never advice inputs. Historical Gemma color probes
-are not the current typed Laya API. Keep doctor/evaluation local, and review
-local server logs, swap and crash dumps separately.
+Public event/state DTOs must exclude PNG data URLs, raw Laya payloads and server
+error bodies. The hash-registered original/crop evidence route above is the only
+browser PNG path; it does not make local images anonymous or permit path
+selection. `--list-windows` may expose personal titles. Private answer logs are
+diagnostics, never advice inputs. Historical Gemma color probes are not the
+current typed Laya API. Keep doctor/evaluation local, and review local server
+logs, swap and crash dumps separately.
 
 Keep new real capture pixels under ignored `.local/captures/`; existing local
 fixture/label records remain private. Planned bounded per-session history under

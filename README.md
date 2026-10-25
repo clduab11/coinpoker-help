@@ -48,12 +48,17 @@ Reference uses a searchable topic list and selected content, with the existing
 bundled education and citations unchanged.
 It makes no runtime content requests and does not copy the root charts.
 
-Open `http://127.0.0.1:18090/` beside the selected table. **Stop capture** requests
-termination of the current source session through the service-bound local
-`POST /api/capture/stop`; it does not need a loaded model. There are currently no
-HTTP start/mark, seating or betting controls. For development startup, choose
-one mode below, not two concurrent servers; inspect the existing 18090 listener
-before starting anything. Reuse an already running service.
+Open `http://127.0.0.1:18090/` beside the selected table. **Start monitor** and
+**Stop monitor** issue the local `POST /api/capture/start` and
+`POST /api/capture/stop` routes. Both bind the request to the current service and
+control token; Stop also binds the active capture session when one exists and can
+cancel pending source discovery before a session ID is assigned. Start requires a
+configured manual-start service and ready model. These JSON routes retain the
+local Host/same-origin and session/service checks; polling remains passive, and a
+start/stop acknowledgement is not completed capture/teardown. There are no HTTP
+mark, seating or betting controls. For development startup, choose one mode below,
+not two concurrent servers; inspect the existing 18090 listener before starting
+anything. Reuse an already running service.
 
 ```powershell
 # Dashboard-only startup without loading a model or using the GPU.
@@ -84,22 +89,39 @@ loading requires separately approved `-EnableInference`; it never starts capture
 See the [manual runbook](docs/SEATED_DIAGNOSTIC.md) for commands and draft markers.
 
 For explicitly approved observation of one confirmed table window until it closes,
-use the sustained mode after verifying/stopping only the owned existing service:
+use the canonical sustained manual-start mode after verifying/stopping only the
+owned existing service:
 
 ```powershell
-pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ContinuousObservation
+pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ContinuousObservation -ManualStart
 ```
 
-All three flags are required. This reuses the confirmed private source profile;
-it never follows a replacement or changes the poker client. Evidence recording
-still stops at 600 seconds, 1,200 saved frames, or 1 GiB, but newly acquired live
-frames continue through bounded in-memory transport. Monitor labels that distinction
-and puts stop reasons in its main view. Field confidence floors and five-second
-reading leases are unchanged; unknown role/activity does not hide independent
-admitted numeric fields. Page refresh starts nothing. Source/visibility/owner/model
-failure or an explicit stop ends observation without automatic resume. This mode
-does not run experimental p6/p7 diagnostics, strategy, or timer recognition.
-Synthetic sustained tests are not real-window recognition acceptance.
+For bounded manual-start recovery, omit `-ContinuousObservation`:
+
+```powershell
+pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ManualStart
+```
+
+Both modes reuse the confirmed private source profile and start capture only after
+an explicit Monitor Start request; they never follow a replacement or change the
+poker client. In sustained mode, evidence recording still stops at 600 seconds,
+1,200 saved frames, or 1 GiB, but newly acquired live frames continue through
+bounded in-memory transport. Bounded mode instead stops collection at its first
+time, frame or evidence limit. Monitor labels that distinction and puts stop
+reasons in its main view. Field confidence floors and five-second reading leases
+are unchanged; unknown role/activity does not hide independent admitted numeric
+fields. Page refresh starts nothing. Source/visibility/owner/model failure or an
+explicit stop ends observation without automatic resume. Sustained mode does not
+run experimental p6/p7 diagnostics, strategy, or timer recognition. Synthetic
+sustained tests are not real-window recognition acceptance.
+
+CPU numeric, visual and context lanes are **provisional**, distinct from native
+admitted **current** values and UI-only **last-read** values. Per field, a newer
+or same-capture provisional CPU value may win; CPU empty Pot cannot veto native
+Pot; and board precedence is native admitted board, then provisional board, then
+last-read. Last-read values are not current and never enter API GameState,
+history or advice. Private original/event diagnostics, including
+`diagnostic-attempts-only`, are not admitted observations.
 
 Some client windows draw the CoinPoker logo and `NLH` number inside their frame
 but expose only `CoinPoker` as the OS title. A confirmed private selector can
@@ -119,8 +141,14 @@ The native recorder saves only private PNGs and a durable SHA-256 manifest under
 7,200 frames, 1 GiB and 500 ms; the new bounded manual entry point overrides the
 frame limit to 1,200 and adds the independent 600-second stop.
 Caps or I/O failures preserve the prefix and stop new recording without deleting
-evidence. The manual session never rearms or follows a replacement. No images, paths or window titles are
-served to the browser. Real counters are separate from capture-health counters.
+evidence. The manual session never rearms or follows a replacement. State DTOs
+contain no PNG bytes or data URLs. Bounded `GET /api/evidence/<sha256>` serves
+only registered hash-allowlisted local original/crop PNGs for source backchecks;
+it is not arbitrary file access. Local on-screen player labels remain allowed.
+Raw private paths, raw model answers, backend bodies, HWND, PID and window class
+are not public browser fields. Public bindings use opaque identities while full
+capture provenance remains local. Real counters are separate from capture-health
+counters.
 The confirmed real-window B check recorded 900x686 frames, followed the
 replacement table and captured its 800x613-to-879x670 resize. SHA-256 audits passed
 for 322 original, 9 transition and 118 replacement-prefix frames; old evidence
@@ -131,19 +159,17 @@ latency acceptance has occurred. Seated controls/hero amounts and calculated met
 require the later genuine-data/quality checkpoints; a null metric is not zero.
 Private session history uses opaque IDs, not player names or cross-session guesses.
 
-Checkpoint A validation: 402 Rust tests passed (one ignored), 79 Python tests
-passed, and 47 desktop/400px browser checks passed with no JavaScript errors or
-mutation/external requests. Doctor has ten passes and discovery blocked (exit 1).
-These tests use synthetic role observations, not real seated recognition or
-capture-to-Monitor latency acceptance. Receipts remain private under `.local/`.
+Current Phase 0a/A3 validation (2026-10-25): **633 Rust tests passed/5 ignored**,
+**968 Python tests ran/26 skipped**, and **60/60 synthetic intercepted real-browser
+cases passed**. Canonical `scripts/validate.py` checks, synthetic evaluation and
+pinned-artifact verification also passed. The browser receipt is
+`.local/browser-smoke/20261025T040732Z-81bbf5e5/report.json`. Clean Linux Python
+remains the separately recorded A2 result of 963 ran/29 skipped; Linux Rust and
+hosted CI remain unverified. These software/synthetic results do not establish
+live recognition, physical numeric accuracy or capture-to-Monitor latency.
 
-Checkpoint B software verification: 425 Rust passes (one ignored), 161 Python
-passes, successful pinned-artifact verification, and refreshed desktop/400px UI
-checks without JavaScript errors. The existing launcher replaced the old service
-only after verifying it stopped; one it1 model remains on 18090. Capture and
-manifest checks now pass; source-current poker readings remain unaccepted.
-The old it1 fitted acceptance floors are now enforced independently from
-temperature calibration; board `1.0` is never lowered or rounded into acceptance.
+The old it1 fitted acceptance floors are enforced independently from temperature
+calibration; board `1.0` is never lowered or rounded into acceptance.
 
 The baseline receipt stays failed: board threshold `1.0` gave **0/330 confident
 board units** on the 66 agent-reviewed frames, despite raw accuracy
@@ -164,12 +190,11 @@ proof; defaults remainuntrained/unknown. No suggestions/metrics or qualitypromot
 Monitor/Reference remain the onlyviews; stack and wager are distinct, and
 unsupported contributions remain unknown in secondary diagnostics.
 
-Workspace506pass/1realcaptureignored, offlinePython/Node207pass, strictclippy pass.
-Saved-answer regression preserves pot+3/5/5stackcandidates withstrictnull, not live
-accuracy/latencyproof. Private receipts andNEWunlabeled72framev2 index staylocal.
-No helper/modelreload, GPUtraining, new observing/capture or gameinput occurred.
-Realquality, hand/convention evidence, browser/mobile and warmtotalp95 are pending
-separate gates; GateF FAIL/humanUNVERIFIED/suggestionsOFF unchanged.
+Offline regressions supported this historical implementation stage but did not
+establish live accuracy or latency. Private receipts and the unlabeled 72-frame
+v2 index remain local. No helper/model reload, GPU training, new observing/capture
+or game input occurred in that stage. Gate F FAIL, human UNVERIFIED and
+suggestions OFF remained unchanged; later readiness counts are recorded above.
 
 Historical stage1 diagnosis: native observing assembly previously skipped trained stack
 passes, discards players and lacks wagers/badges/dealer/acting-seat extraction.
@@ -198,7 +223,8 @@ Reference displays are not live recommendations.
 ```text
 Windows process and window metadata (exe name, PID, HWND)
   -> unique source-specific confirmed game-window selection, explicit ambiguity
-  -> Windows Graphics Capture for the selected window, RGBA frame
+  -> automatic mode: checked synchronous GDI desktop copy, RGBA frame
+     (manual/ordinary capture retains Windows Graphics Capture)
   -> cumulative and local pixel change checks, persistently animated tiles
      suppressed (seat avatars, badges, glows), stability gate
   -> one inference worker and one replaceable latest frame
@@ -288,13 +314,18 @@ metadata are user calibration, not cryptographic proof that a window is a table.
 
 ## Privacy and model provenance
 
-Explicit native capture requests the selected window through Windows Graphics
-Capture. The pixel boundary still needs physical evidence. Laya receives local
-PNG region requests; browser snapshots/history must not expose captures, raw
-model replies, backend bodies or player names. The service binds loopback only;
-there is no supported remote opt-in. Keep new capture pixels under
-`.local/captures/` and diagnostics private. Local logs, swap and crash dumps need
-separate review; private answer logs are diagnostics, never advice inputs.
+Automatic capture requests the selected window's current unobscured desktop
+rectangle through checked synchronous GDI copies; manual and ordinary capture use
+Windows Graphics Capture. The pixel boundary still needs physical evidence. Laya
+receives local PNG region requests. Browser state/history DTOs contain no PNGs,
+raw model replies or backend bodies; only registered hash-allowlisted original/crop
+PNGs are available through `GET /api/evidence/<sha256>`. Local on-screen player
+labels are allowed, while raw private paths, raw answers, backend bodies, HWND,
+PID and window class stay out of public DTOs. Public bindings are opaque and full
+provenance remains local. The service binds loopback only; there is no supported
+remote opt-in. Keep new capture pixels under `.local/captures/` and diagnostics
+private. Local logs, swap and crash dumps need separate review; private answer
+logs are diagnostics, never advice inputs.
 
 `download-model.ps1 -Verify` verifies existing Laya files against
 `scripts/laya-pins.json`. Repository source is MIT; the pinned Laya fork and
@@ -352,11 +383,12 @@ These commands require a source checkout with Cargo and the test suite:
 ```powershell
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features --locked
-cargo test --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-python -m unittest discover -s scripts/tests -v
+cargo test --workspace --all-targets --all-features --locked
+& .local/laya-runtime/env/python.exe -B -m unittest discover -s scripts/tests
+& .local/laya-runtime/env/python.exe -B scripts/validate.py --output-dir ".local/validation/$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
 cargo run --locked --bin coinpoker -- --evaluate fixtures/synthetic/manifest.json
-python scripts/validate.py
+pwsh -File download-model.ps1 -Verify   # before/after any model work
 ```
 
 The historical source-free candidate has the binary and acceptance helper. Its
@@ -369,6 +401,8 @@ and report commands do not validate the new dashboard:
 pwsh -File scripts/windows-acceptance.ps1
 ```
 
-CI covers Windows and platform-neutral Linux checks. The manual
-`release-windows.yml` workflow prepares a checksummed candidate archive; it does
-not publish a release or establish physical acceptance.
+CI configuration covers Windows and platform-neutral Linux checks, but hosted CI
+acceptance remains unverified. The recorded clean Linux Python suite does not
+establish Linux Rust or hosted CI success. The manual `release-windows.yml`
+workflow prepares a checksummed candidate archive; it does not publish a release
+or establish physical acceptance.

@@ -1,5 +1,62 @@
 # Next Conversation: Deliver Verified Live Table Data
 
+## Current A3 Implementation And Validation (2026-10-25)
+
+Phase 0a wording cleanup and the Phase 1 A3 runtime/browser changes passed local
+validation: 633 Rust tests passed/5 ignored; 968 Python tests ran/26 skipped;
+60/60 synthetic intercepted real-browser cases passed; canonical
+`scripts/validate.py` checks and synthetic evaluation passed; and pinned-artifact
+verification returned `ok:true`. The browser receipt is
+`.local/browser-smoke/20261025T040732Z-81bbf5e5/report.json`. Clean Linux Python
+remains the separately recorded A2 result of 963 ran/29 skipped. Linux Rust and
+hosted CI remain unverified. These results do not establish live recognition,
+physical numeric accuracy or capture-to-DOM latency.
+
+Receipt-handling note: the canonical `scripts/validate.py` invocation rewrote the
+pre-existing generated `.local/validation/report.json`. Future validation runs
+must use unique `--output-dir` directories to preserve prior reports. The command
+did not read or modify capture, model or label artifacts.
+
+Current operation uses explicit same-origin/service/control-bound
+`POST /api/capture/start` and `/api/capture/stop`, including cancellation of
+pending discovery. Public browser DTOs use opaque source/session/control/binding
+identities; raw private provenance remains local. State DTOs contain no PNGs, but
+`GET /api/evidence/<sha256>` serves only registered hash-allowlisted local
+original/crop PNGs for source backchecks. Local on-screen player labels remain
+allowed; raw private paths, raw answers, backend bodies, HWND, PID and window
+class are not public.
+
+Evidence tiers are native admitted current values, CPU provisional values, and
+UI-only last-read values. Last-read values and private original/event diagnostics
+(including `diagnostic-attempts-only`) are not current/advice inputs or admitted
+observations. Automatic capture uses checked GDI copies; manual/ordinary capture
+retains WGC. CPU and native field precedence is specified in
+[EVENTS_V2.md](docs/EVENTS_V2.md).
+
+Canonical sustained launch:
+
+```powershell
+pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ContinuousObservation -ManualStart
+```
+
+Bounded manual-start recovery omits `-ContinuousObservation`; it stops at the
+first time, frame or evidence limit rather than continuing observation after
+recording closes:
+
+```powershell
+pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -ManualStart
+```
+
+A4 integrated freeze/live preflight and the independently verified A5 sustained
+run remain. B-track independent board labelling/calibration, seated inputs and
+real-pixel experimental advice acceptance also remain; no A5/B3 acceptance is
+claimed here.
+
+## Historical Handoff (2026-10-12/13)
+
+The material below preserves the earlier operator instructions, runbooks and
+receipts. Its historical counts and live outcomes are not the current baseline.
+
 Operator GO recorded: **2026-10-12T19:08:04Z**.
 Repository: `C:\Users\cld-main\Desktop\github-projects\coinpoker-help`.
 Actual Monitor: `http://127.0.0.1:18090/`.
@@ -13,8 +70,10 @@ Profile metadata now uses `six-max-table`; legacy `practice-six-max` profiles ke
 their identical exact selectors. Existing profile paths/flags remain compatible;
 no title or scope label proves game mode/layout or widens source selection.
 Explicit inference/resource opt-in remains separate. Monitor's **Stop capture**
-uses the current receipt and service instance through `POST /api/capture/stop`;
-GET polling is passive and no HTTP start/mark or poker-input route is implemented.
+used the current receipt and service instance through `POST /api/capture/stop`.
+At this 2026-10-13 integration point HTTP start was not yet implemented; the
+current Start/Stop and pending-discovery routes are documented above. HTTP mark
+and poker-input routes remain unimplemented, and GET polling remains passive.
 
 The native manual path now uses the existing decision Pipeline. Only a genuine
 current full native observation plus a matching legal decision can project
@@ -116,7 +175,7 @@ does not require seating and is not evidence of hero identity.
 - Preserve original source UTC/monotonic provenance and freshness. Do not restamp old images or extend the five-second source lease merely to make a failed result appear live.
 - Use the installed it1 and existing fitted floors as the baseline. Do not lower confidence floors, fabricate values, relabel guesses, or substitute synthetic/replayed readings for live success. Unsupported fields remain unknown; zero is a real value, not a fallback for missing data.
 - The 23:33:09Z operator instruction authorizes enabling bet/action recognition. p6/p7 must still be independently justified and source-verified; an unsupported model head cannot be called trained because permission was granted. Gate F remains historical FAIL; labels remain DRAFT and human review PENDING. Functional readout evidence is not general recognition-accuracy approval.
-- Keep source identifiers, PNGs, raw answers, diagnostics, and screenshots private under `.local`. Preserve original receipts, including failures and incomplete flags. Do not overwrite an earlier attempt's evidence.
+- Keep raw source provenance, raw answers, diagnostics and screenshots private under `.local`. State DTOs contain no PNGs; only registered hash-allowlisted original/crop PNGs are available through the bounded evidence route. Preserve original receipts, including failures and incomplete flags. Do not overwrite an earlier attempt's evidence.
 - Do not indiscriminately delete captures, model weights, calibration files, or training data. Delete only demonstrated disposable contamination. No archived PNG reuse was found in the current live inference path.
 - Preserve the dirty worktree and unrelated work. Do not commit, push, revert other changes, or alter credentials/permissions as part of this task.
 
@@ -177,14 +236,17 @@ Read the relevant sections instead of indiscriminately loading every old frame.
 6. Inspect the real Monitor while the table is being observed. Compare admitted displayed values with corresponding source frames and original timestamps, not with a prior screenshot or a canned test payload.
 7. On failure, retain the receipt, diagnose, fix, rebuild/revalidate, and repeat. On source loss/ambiguity, stop that attempt rather than silently switching it. Stop the task for an actual external blocker or operator stop, not an obsolete authorization restriction.
 
-Canonical launch, as one command:
+Canonical bounded manual-start recovery launch, as one command:
 
 ```powershell
-pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -PracticeConfig .local/practice-table.json
+pwsh -NoProfile -File scripts/start-vlm.ps1 -EnableInference -AutomaticInference -PracticeConfig .local/practice-table.json -ManualStart
 ```
 
-Add `-AnswersLog` with a **new private path** for each attempt. Both consent flags
-are required; ordinary launch remains dashboard-only. Keep browser refresh passive.
+Omit `-ContinuousObservation` for this bounded mode; the canonical sustained
+command is in the current readiness section above. Add `-AnswersLog` with a
+**new private path** for each attempt. Inference, automatic observation and manual
+start are required for this Monitor-controlled workflow; ordinary launch remains
+dashboard-only. Keep browser refresh passive.
 The current profile intentionally matches the Win32 metadata title `CoinPoker`;
 the client can draw an `NLH ...` caption itself. Do not replace the profile with an
 NLH fallback because those two titles differ. Metadata remains candidate selection,

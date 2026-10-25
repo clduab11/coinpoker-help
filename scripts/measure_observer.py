@@ -39,8 +39,7 @@ CAPTURE_KEYS = ("service_instance_id", "session_id", "capture_session_id", "sour
 CAPTURE_BASE_SPEC = dict.fromkeys((*CAPTURE_KEYS, "native_source_id", "table_context_id", "table_epoch", "generation",
     "complete", "source_process_created_at_100ns", "pixel_source", "readability", "occluded_regions"))
 CAPTURE_SPEC = {**CAPTURE_BASE_SPEC, "parent_capture": CAPTURE_BASE_SPEC, "popup_index": None, "non_atomic": None,
-    "popup_window": dict.fromkeys(("hwnd", "owner_hwnd", "root_owner_hwnd", "process_id",
-        "process_created_at_100ns", "window_class", "relative_bounds"))}
+    "popup_window": dict.fromkeys(("binding_id",))}
 CLOCK_KEYS = ("requested_at_unix_ms", "attempt_started_at_unix_ms", "completed_at_unix_ms",
               "requested_at_ms", "attempt_started_at_ms", "completed_at_ms", "processing_ms")
 EVIDENCE_SPEC = dict.fromkeys(("enabled", "complete", "count", "bytes", "event_count", "frame_count",
@@ -286,16 +285,17 @@ def capture_key(capture):
             raise ValueError("popup-parent-capture")
         parent_key = capture_key(parent)
         window = capture.get("popup_window")
-        hwnd = window.get("hwnd") if isinstance(window, dict) else None
+        binding = window.get("binding_id") if isinstance(window, dict) else None
         if (capture.get("non_atomic") is not True or type(capture.get("popup_index")) is not int
                 or not 0 <= capture["popup_index"] <= 3 or not isinstance(window, dict)
-                or not (type(hwnd) is int and hwnd > 0 or isinstance(hwnd, str) and 0 < len(hwnd) <= 64)):
+                or set(window) != {"binding_id"}
+                or not isinstance(binding, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,96}", binding)):
             raise ValueError("popup-receipt-proof")
         if (any(capture[name] != parent[name] for name in CAPTURE_KEYS[:5])
                 or capture["captured_at_unix_ms"] < parent["captured_at_unix_ms"]
                 or capture["captured_at_ms"] < parent["captured_at_ms"]):
             raise ValueError("popup-parent-scope-or-clock")
-        key += (parent_key, capture["popup_index"], hwnd, True)
+        key += (parent_key, capture["popup_index"], binding, True)
     elif capture.get("non_atomic") is True or capture.get("popup_index") is not None:
         raise ValueError("popup-parent-missing")
     return key

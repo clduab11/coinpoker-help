@@ -24,8 +24,10 @@ eligible sampled prefix, not every frame or validated game history.
 
 Manifest rows contain source UTC, capture-call-start monotonic time, dimensions,
 frame index, PNG size/SHA-256 and opaque provenance. Generation stays null when
-unknown. Images, paths, titles and private candidates never enter the browser.
-Enabled B telemetry supersedes the fixed first-phase no-recorder fields below.
+unknown. State DTOs contain no PNGs, private paths, titles or private candidates;
+separately registered source evidence is available only through the bounded
+hash-addressed route below. Enabled B telemetry supersedes the fixed first-phase
+no-recorder fields below.
 
 The user's `2026-10-10T15:03:16Z` correction selects the unique visible CoinPoker
 window matching `^NLH\s*[0-9]+`, without practice/lobby/cash title distinctions.
@@ -158,8 +160,10 @@ The browser and model API share `http://127.0.0.1:18090/`. `GET /api/state`
 normalizes the native JSONL pipe into a small snapshot:
 opaque stream `session_id`, monotonic `event_seq`, model/capture states, nullable
 experimental observation, history/ledger status, nullable experimental `advice`, and readiness.
-It omits native HWND/PID/name data, raw responses, images and backend bodies.
-The service accepts an explicit, session-bound capture-stop request; HTTP start,
+It omits native HWND/PID/window-class data, raw responses, PNGs and backend bodies.
+Other raw private paths and provenance remain local; local on-screen player labels
+are allowed. The service accepts explicit control-token/service-bound capture
+Start and Stop requests, including Stop during pending source discovery. HTTP
 mark, model/process management and poker-input routes are not implemented. The
 user-facing app has exactly **Monitor** and **Reference** views; runtime details,
 freshness internals, private ledger status and synthetic fixtures are not extra
@@ -251,22 +255,43 @@ browser polls at 250 ms with one outstanding request and source-bound local
 expiry; disconnect, heartbeat loss, older sequence/session, and tab hide/resume
 clear before revalidation. Same-session polls never refresh a source lease.
 
-### Explicit Capture Stop
+### Explicit Capture Start and Stop
 
-`POST /api/capture/stop` accepts a JSON object with exactly `session_id` and
-`service_instance_id`, both 32-character lowercase hex identifiers. The browser
-uses the current `capture_session.session_id` and `server.instance_id`; duplicate
-or extra keys are invalid. Requests require `application/json`, a body of at most
-512 bytes, and the service's local Host/same-origin checks. The request is admitted
-only for a fresh currently capturing receipt and matching service/session binding.
+`POST /api/capture/start` accepts exactly `service_instance_id` and `control_id`;
+`POST /api/capture/stop` accepts `session_id` and `service_instance_id`, with the
+current `control_id` added for control-bound requests. IDs are 32-character
+lowercase hex. During pending source discovery, Stop uses `session_id:null` plus
+the current control token so it can cancel that exact arm before a capture session
+exists. Duplicate or extra keys are invalid. Requests require `application/json`,
+a body of at most 512 bytes, and the service's local Host/same-origin checks.
+Start additionally requires configured manual start, ready inference and an
+available control; Stop binds the active session when one exists.
 
-`200 {"ok":true}` acknowledges a stop request, not completed child teardown.
-`409 {"error":"capture-session-unavailable"}` reports an ended/stale/mismatched
-session or service; malformed JSON/identifiers return `400`. The route requests
-the named session's existing stop path and invalidates current output. It neither
-loads a model nor waits for a GPU slot. Monitor exposes it through **Stop capture**;
-GET polling remains side-effect-free. HTTP start/mark and poker-input endpoints
-are not implemented; their absence is a capability description, not an authorization ban.
+Start returns `202` with a replacement control token when the request is accepted;
+this is not proof that capture or source discovery succeeded. Stop returns
+`200 {"ok":true}` to acknowledge a requested stop, not completed child teardown.
+Stale/mismatched controls, services or sessions are rejected. Stop neither loads
+a model nor waits for a GPU slot. Monitor exposes these routes through **Start
+monitor** and **Stop monitor**, with no automatic retry after an unconfirmed
+request. GET polling remains side-effect-free. HTTP mark and poker-input endpoints
+are not implemented; their absence is a capability description, not an
+authorization ban.
+
+### Hash-addressed Source Evidence
+
+`GET /api/evidence/<sha256>` serves a registered local original or crop PNG only
+when its exact lowercase SHA-256 is present in the active visual evidence archive.
+Reads are bounded and the bytes must still match that hash; unknown or unregistered
+IDs return `404 {"error":"evidence-unavailable"}`. The route cannot select a path,
+traverse directories or serve arbitrary files. State DTOs contain no PNG bytes or
+data URLs, only opaque evidence references. Evidence opens in a separate isolated
+tab so Monitor polling continues.
+
+Public browser DTOs use opaque source/session/control/binding identities. Local
+on-screen player labels remain allowed; raw private paths, raw answers, backend
+bodies, HWND, PID and window class are not public. Original frames, crops, event
+logs and full capture provenance remain local diagnostic evidence, not admitted
+observations by themselves.
 
 ### Historical Checkpoint A/B Startup
 
@@ -319,9 +344,11 @@ time,600000ms/1200-frame maxima, acknowledged saved frames/bytes, capture failur
 gap count/max gap/estimated missed samples, distinct draft opportunity count,
 target20/deficit, stop reason, update time and separate inference consent. Missing/malformed
 receipts remain unknown/failed; stale active status becomes interrupted. Estimates
-are missed samples, never inferred poker actions. No HWND/title/path/PNG/marker
-prose is served. Capture stop is the explicit POST described above; HTTP start/mark
-and poker-input endpoints are not implemented.
+are missed samples, never inferred poker actions. No HWND/PID/window class/title,
+private path, PNG bytes or marker prose is served; public capture and popup
+bindings use opaque identities while full provenance remains local. Capture Start
+and Stop use the explicit POST routes above; HTTP mark and poker-input endpoints
+are not implemented.
 
 Manual capture emits separate private `manual_capture` progress JSONL and uses
 the existing recorder manifest, with capture-call-start UTC, PNG SHA256 and
@@ -436,6 +463,30 @@ before/after the copy; an obscured/moved/lost source stops rather than switches.
 Private native stderr records the capture backend. Each saved frame and model job
 retains its original capture-call UTC/monotonic stamp and five-second lease. Manual
 and ordinary platform capture retain WGC and its compositor-timestamp checks.
+
+### CPU Provisional Lanes, Field Precedence and Evidence Tiers
+
+CPU numeric, visual and context lanes provide independently leased provisional
+readings; they do not promote themselves into native-admitted full observations.
+Display state is selected per field rather than by promoting a whole snapshot:
+
+- A newer or same-capture provisional CPU value may win its field.
+- A CPU empty Pot result cannot veto an admitted native Pot value.
+- Board precedence is native admitted board, then provisional board, then UI-only
+  last-read board. Missing or expired values remain unknown, not zero.
+
+The explicit evidence tiers are:
+
+1. **Current:** native admitted values with their original source and lease.
+2. **Provisional:** CPU numeric/visual/context values, visibly qualified and never
+   counted as native current timing or accuracy samples.
+3. **Last read:** UI-only retained values, visibly stale/not current and excluded
+   from API GameState, history and advice inputs.
+
+Private original frames and event diagnostics, including records marked
+`diagnostic-attempts-only`, are diagnostic evidence rather than admitted
+observations. A hash-linked PNG or diagnostic row cannot admit a value, renew a
+lease or supply advice.
 
 Automatic readout scheduling compares the existing trained readout regions
 independently; inference still receives original, unmasked pixels. Activity's two
