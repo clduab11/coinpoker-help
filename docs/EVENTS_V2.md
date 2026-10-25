@@ -76,7 +76,7 @@ integrity and fresh capture health do not establish accepted poker readings.
 | `observation` | Separately admitted full-state observation with `observation` ticket, source capture/emission/expiry times, remaining lease, cards/phase, nullable chip amounts/actions, `action_required` and `quality_approved`. This is the browser's freshness-bound diagnostic source, not a raw model response or a quality approval. Unseated hero amounts and offered controls are null, not zero/absent. |
 | `observation_invalidated` | `reason`, `generation`, `epoch`, `identity`, `emitted_at_unix_ms`. Invalidates current diagnostics even when no recommendation exists. |
 | `capture_health` | Every 1000 ms: cumulative `frame_count`, nullable `frame_width`/`frame_height`, capture/emission time, generation/epoch/identity and `fresh_capture`. A delayed source frame cannot claim fresh health. `recording_enabled:false` and `recorded_frames:0` explicitly distinguish capture from image recording. |
-| `history` | Sanitized bounded observer `summary` and emission time after a successfully emitted, still-current observation. The baseline contributes `unvalidated_source` gaps only, never guessed player actions or profiles. |
+| `history` | Sanitized bounded observer `summary`, a monotonic event cursor and emission time after a successfully emitted, still-current observation. `summary.events` is a delta between complete views; see "Bounded history records" below. The baseline contributes `unvalidated_source` gaps only, never guessed player actions or profiles. |
 | `table` | `game_phase`, `hero_cards`, `board`, `action_required`. Weaker card-only consensus reading without a ticket or external lease. Not equivalent to complete state/advice admission and not authoritative current controls. Emitted only when that tuple changes; no player names or table id. |
 | `clear` | `reason`, `generation`; invalidates one active decision and is not repeated when no decision is active. |
 | `discarded` | `generation` and a safe reason such as `obsolete-observation`, `observation-expired`, `decision-budget-expired`, or `publication-expired`. Obsolete/expired completions are discarded whole; they cannot classify, seed consensus, or reactivate older diagnostics/advice. |
@@ -108,6 +108,59 @@ after a meaningful frame or scope change.
    full lease. Use the shorter available wall-clock or monotonic lease.
 3. Never show an older generation/epoch over a newer one; duplicate packets/polls cannot renew a lease. Tombstone cleared/expired versions until a newer source admission.
 4. If transport delay or clock uncertainty makes freshness unknowable, clear.
+
+### Bounded history records
+
+The observer ledger is never truncated and no event is dropped silently. A
+`history` record carries the cursor fields below alongside the observer `summary`;
+only `summary.events` differs between its two forms.
+
+| Field | Meaning |
+| --- | --- |
+| `history_since` | Highest `event_sequence` the consumer had before this record; `0` for a complete view. |
+| `history_through` | `event_sequence` of the newest event this record represents; `0` when the ledger holds no events. |
+| `history_snapshot` | `true`: `summary.events` is the complete bounded view, so the consumer replaces its retained events. `false`: `summary.events` is exactly the contiguous run appended after `history_since`, so the consumer appends. |
+| `history_omitted` | Events appended after `history_since` that this record does not represent; `0` in normal operation. Non-zero means the reconstructed prefix is discontinuous before its oldest event. |
+
+A complete view is sent when the session opens, when `session_id`, `table_id` or
+`hand_id` changes, every 64 emissions, and whenever more events are pending than
+the bounded view can hold, in which case `history_omitted` counts them. Every
+other record is a delta.
+
+1. `event_sequence` is strictly ascending and contiguous in the ledger. A delta
+   extends the retained run without reordering, dropping, inventing or truncating
+   events, and `history_through` is exactly the newest sequence the consumer holds
+   after applying it. A consumer that missed records sees `history_since` no
+   longer match its own cursor.
+2. Applying every record in order, and bounding the retained list to the newest
+   200 events, reconstructs exactly what a fresh complete view would give.
+3. `summary` fields other than `events` (`session_id`, `table_id`, `hand_id`,
+   `counts`, `gaps`, `coverage`, `occupants`) are absolute in every record, so a
+   consumer may read them from the newest record alone.
+4. `coverage.event_limit` remains the ledger cap and the bounded view remains 200
+   events. Neither cap is raised, and neither is a truncation of the ledger.
+5. A record without cursor fields is a complete view, so pre-delta producers and
+   existing fixtures stay valid.
+
+A delta record (fictional identities):
+
+```json
+{"schema_version":2,"event":"history","history_since":41,"history_through":42,
+ "history_snapshot":false,"history_omitted":0,"emitted_at_unix_ms":1700000000000,
+ "summary":{"session_id":11,"table_id":22,"hand_id":null,"gaps":42,
+            "counts":{"folds":0,"checks":0,"calls":0,"bets":0,"raises":0},
+            "occupants":[],
+            "coverage":{"complete":false,"ordered_prefix":false,"recording":true,
+                        "accepted_captures":42,"unvalidated_captures":42,
+                        "partial_hands":0,"event_limit":10000},
+            "events":[{"event_sequence":42,"event":"gap","reason":"unvalidated_source",
+                       "hand_id":null,"street":null,
+                       "capture":{"session_id":11,"table_id":22,"sequence":42,
+                                  "captured_at_ms":1700000000000,"ticket":42}}]}}
+```
+
+Emission cadence is unchanged: one `history` record per admitted observation,
+partial observation or fresh capture health.
 
 ## States and reasons
 
