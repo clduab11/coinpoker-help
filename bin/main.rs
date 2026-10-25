@@ -1,6 +1,6 @@
 //! `coinpoker` — binary entrypoint.
 //!
-//! Wires the ingestion, decision, mimicry, modeling, and UI crates into a
+//! Wires the ingestion, decision, sizing, modeling, and UI crates into a
 //! single decision-support process.
 //!
 //! Modes:
@@ -200,7 +200,7 @@ impl Pipeline {
                         min_increment,
                         max_increment,
                     )
-                    .map_err(|error| format!("raise humanization failed: {error}"))?;
+                    .map_err(|error| format!("raise sizing failed: {error}"))?;
                 hero_contribution.saturating_add(increment)
             }
         } else {

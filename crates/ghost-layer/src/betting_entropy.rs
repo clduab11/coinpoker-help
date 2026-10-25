@@ -1,14 +1,13 @@
 //! Weighted bet-sizing menu with rare off-grid events.
 //!
-//! Maps continuous solver outputs to human-like discretized sizing
+//! Maps continuous solver outputs to quantized pot-fraction sizing
 //! (0.5x, 0.75x, 1.0x, 2.0x, 2.5x, 3.0x, 3.5x pot, …) with a small
-//! probability of off-grid jitter, mimicking how humans snap to familiar
-//! bet sizes rather than betting arbitrary amounts.
+//! probability of bounded off-grid jitter around familiar bet sizes.
 
 use rand::Rng;
 use thiserror::Error;
 
-/// The canonical human discretization menu, as pot fractions.
+/// The canonical pot-fraction discretization menu.
 pub const SIZING_MENU: [f64; 11] = [0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5];
 
 /// Configuration for the betting entropy sampler.
@@ -53,34 +52,34 @@ impl BettingEntropyConfig {
     }
 }
 
-/// Errors from bounded bet humanization.
+/// Errors from bounded bet-size quantization.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum HumanizeError {
     #[error("minimum legal bet {min} exceeds maximum legal bet {max}")]
     InvalidLegalBounds { min: u32, max: u32 },
 }
 
-/// Maps solver-recommended bet sizes to human-like discretized sizes.
+/// Maps solver-recommended bet sizes to quantized pot-fraction sizes.
 #[derive(Debug, Clone)]
 pub struct BettingEntropy {
     config: BettingEntropyConfig,
 }
 
 impl BettingEntropy {
-    /// Construct a humanizer. Invalid manually supplied configuration is
+    /// Construct a sizing quantizer. Invalid manually supplied configuration is
     /// handled safely by [`Self::humanize`]; prefer [`Self::try_new`] when
     /// validation feedback is useful.
     pub fn new(config: BettingEntropyConfig) -> Self {
         Self { config }
     }
 
-    /// Construct a humanizer after validating its configuration.
+    /// Construct a sizing quantizer after validating its configuration.
     pub fn try_new(config: BettingEntropyConfig) -> Result<Self, BettingEntropyConfigError> {
         config.validate()?;
         Ok(Self { config })
     }
 
-    /// Convert a target bet (in chips) into a human-like bet size.
+    /// Convert a target bet (in chips) into a quantized bet size.
     ///
     /// With probability `off_grid_probability` the result is jittered
     /// off-grid by up to `off_grid_jitter`; otherwise it snaps to the

@@ -1,13 +1,12 @@
-//! `ghost-layer` — behavioral mimicry.
+//! `ghost-layer` — bet-sizing and latency utilities.
 //!
-//! Injects human-like variance into the system's output so that decisions
-//! retain behavioral parity with a human operator: log-normal reaction-time
-//! distributions and discretized bet sizing with rare off-grid events.
+//! Provides quantized pot-fraction bet sizing with bounded off-grid variation
+//! and log-normal reaction-time sampling for decision-support experiments.
 //!
-//! Modules (built out in subsequent steps):
+//! Modules:
 //! - `temporal`        — log-normal reaction-time sampling
 //! - `betting_entropy` — weighted sizing menu with off-grid jitter
-//! - `profile`         — serializable human-parity parameter store
+//! - `profile`         — serializable sizing and latency parameter store
 
 pub mod betting_entropy;
 pub mod profile;

@@ -1,7 +1,7 @@
-//! Serializable human-parity parameter store.
+//! Serializable sizing and latency parameter store.
 //!
 //! Holds timing curves, sizing preferences, and deviation frequencies so a
-//! behavioral profile can be persisted and reused across sessions.
+//! decision-support profile can be persisted and reused across sessions.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -29,7 +29,7 @@ pub enum ProfileValidationError {
     Betting(#[from] BettingEntropyConfigError),
 }
 
-/// The full set of human-parity parameters.
+/// The full set of sizing and latency parameters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GhostProfile {
     /// Name of the profile (e.g. "default", "reg-vs-fish").

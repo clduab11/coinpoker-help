@@ -1,8 +1,8 @@
 //! Log-normal reaction-time sampling.
 //!
-//! Samples human-like action latency from a log-normal distribution
-//! clamped to [10ms, 3000ms], with the median correlated to decision
-//! complexity (a preflop fold is fast; a river all-in is slow).
+//! Samples action latency from a log-normal distribution clamped to
+//! [10ms, 3000ms], with the median correlated to decision complexity
+//! (a preflop fold is fast; a river all-in is slow).
 
 use std::time::Duration;
 
@@ -102,7 +102,7 @@ impl TemporalConfig {
     }
 }
 
-/// Samples human-like reaction times.
+/// Samples log-normal reaction times.
 #[derive(Debug, Clone)]
 pub struct TemporalSampler {
     config: TemporalConfig,
