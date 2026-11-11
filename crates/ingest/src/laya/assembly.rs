@@ -12,7 +12,7 @@
 use serde_json::{json, Value};
 
 use super::client::{Answer, PassAnswers};
-use super::questions::{Calibration, Pass, QuestionSet, QuestionType};
+use super::questions::{Pass, QuestionSet, QuestionType};
 use crate::screen::parse_screen_output;
 use crate::vlm::{VlmError, VlmOutput, VlmResponseError};
 
@@ -120,16 +120,19 @@ fn run_pass<'a>(
     let pass = qs
         .pass(id)
         .ok_or_else(|| VlmError::Unavailable("vendored question set lacks a pass".into()))?;
-    // Untrained passes are never asked; all their answers are low confidence.
-    let (answers, acceptance_floor) = if pass.calibration == Calibration::UntrainedProvisional {
-        (PassAnswers::default(), pass.threshold)
-    } else {
-        let answers = run(pass)?;
-        let acceptance_floor = answers
+    // Every pass is asked in 0.4.0, including the provisional seated passes:
+    // the fitted floor table never covered them (the wire floor is null there).
+    let answers = run(pass)?;
+    let acceptance_floor = if qs.thresholds.calibrated {
+        answers
             .acceptance_floor
             .filter(|floor| floor.is_finite() && (0.0..=1.0).contains(floor))
-            .ok_or(VlmError::Parse(VlmResponseError::Schema))?;
-        (answers, acceptance_floor)
+            .ok_or(VlmError::Parse(VlmResponseError::Schema))?
+    } else {
+        // Gate-F fitted floors were never activated (closeout records
+        // fitted_thresholds_activated: false): the question set's own threshold
+        // is the operative floor; a wire floor below it could not relax it.
+        pass.threshold
     };
     Ok(Reading {
         pass,
@@ -145,10 +148,13 @@ fn envelope(kind: &str, evidence: Evidence, state: Value) -> String {
 /// R6: the validator is the gate; failures degrade, never repair.
 fn finish(kind: &str, evidence: Evidence, state: Value) -> String {
     let text = envelope(kind, evidence, state);
-    if parse_screen_output(&VlmOutput { text: text.clone() }).is_ok() {
-        return text;
+    match parse_screen_output(&VlmOutput { text: text.clone() }) {
+        Ok(_) => text,
+        Err(error) => {
+            eprintln!("finish degrade: {error} :: {text}");
+            unreadable(kind, evidence)
+        }
     }
-    unreadable(kind, evidence)
 }
 
 fn unreadable(kind: &str, evidence: Evidence) -> String {
@@ -233,18 +239,15 @@ pub fn assemble(
     if lobby == Some(frame) {
         return table_null(evidence);
     }
-    // R17: observation only until calibrated (no actionable path in 0.4.0).
-    if p0.noul("action_on_hero") == Some(true) {
-        return table_null(evidence);
-    }
-    // R15: only a confidently unseated hero continues (the low-confidence
-    // `not_seated` fallback does not count). The seated path needs untrained
-    // passes (p1, p3_to_call, p3_hero_chips), so it is null under R17 in 0.4.0.
+    // R15: only a confidently unseated hero takes the observer path (the
+    // low-confidence `not_seated` fallback does not count). Everything else is
+    // the seated path, which consumes the provisional p1/p3_to_call/
+    // p3_hero_chips (+p4 when the raise control is confident) passes.
     let unseated = p0.choice("hero_seat_index") == Some("not_seated")
         && p0.noul("action_on_hero") == Some(false)
         && p0.noul("ev_seat_controls") == Some(true);
     if !unseated {
-        return table_null(evidence);
+        return seated_state(qs, &p0, evidence, threshold_override, run);
     }
     // State evidence gate.
     let confident = |id: &str| p0.noul(id) == Some(true);
@@ -257,66 +260,15 @@ pub fn assemble(
     {
         return table_null(evidence);
     }
-
-    // 7. R4 board.
-    let board_pass = run_pass(qs, "p2_board", threshold_override, run)?;
-    let mut slots = Vec::with_capacity(5);
-    for k in 1..=5 {
-        let rank = board_pass.choice(&format!("board_{k}_rank"));
-        let suit = board_pass.choice(&format!("board_{k}_suit"));
-        match (rank, suit) {
-            (Some(NO_CARD), Some(NO_CARD)) => slots.push(None),
-            (Some(rank), Some(suit)) if RANKS.contains(&rank) && SUITS.contains(&suit) => {
-                slots.push(Some(json!({"rank": rank, "suit": suit})))
-            }
-            _ => return table_null(evidence),
-        }
-    }
-    let count = slots.iter().take_while(|slot| slot.is_some()).count();
-    if slots[count..].iter().any(Option::is_some) || !matches!(count, 0 | 3 | 4 | 5) {
-        return table_null(evidence);
-    }
-    let board: Vec<Value> = slots.into_iter().flatten().collect();
-
-    // 8. R12 strict street cross-check.
-    let Some(phase) = p0.choice("game_phase") else {
+    let Some(core) = table_core(qs, &p0, threshold_override, run)? else {
         return table_null(evidence);
     };
-    let street_matches = match count {
-        0 => phase == "preflop",
-        3 => phase == "flop",
-        4 => phase == "turn",
-        _ => matches!(phase, "river" | "showdown"),
-    };
-    if !street_matches {
-        return table_null(evidence);
-    }
-
-    // 9. R5 pot amount.
-    let pot = run_pass(qs, "p3_pot", threshold_override, run)?;
-    let Some(segments) = pot.answers.segments else {
-        return table_null(evidence);
-    };
-    if segments.overflow || segments.n == 0 || segments.n > qs.max_glyphs {
-        return table_null(evidence);
-    }
-    let mut text = String::new();
-    for k in 1..=segments.n {
-        match pot.choice(&format!("g{k}")) {
-            Some(glyph) if glyph != NOT_A_CHARACTER => text.push_str(glyph),
-            _ => return table_null(evidence),
-        }
-    }
-    let Some(pot_size) = parse_amount(&text) else {
-        return table_null(evidence);
-    };
-
     // 10. Observation-only state (R15/R16: no players for non-actionable states).
     let state = json!({
-        "game_phase": phase,
+        "game_phase": core.phase,
         "hero_cards": [],
-        "board": board,
-        "pot_size": pot_size,
+        "board": core.board,
+        "pot_size": core.pot_size,
         "to_call": 0,
         "hero_chips": 0,
         "min_raise_to": null,
@@ -333,11 +285,322 @@ pub fn assemble(
     Ok(finish("poker_table", evidence, state))
 }
 
+struct TableCore {
+    phase: String,
+    board: Vec<Value>,
+    pot_size: u32,
+}
+
+/// Board (R4), strict street cross-check (R12) and pot (R5); `None` = table_null.
+fn table_core(
+    qs: &QuestionSet,
+    p0: &Reading,
+    threshold_override: Option<f32>,
+    run: &mut dyn FnMut(&Pass) -> Result<PassAnswers, VlmError>,
+) -> Result<Option<TableCore>, VlmError> {
+    let board_pass = run_pass(qs, "p2_board", threshold_override, run)?;
+    let mut slots = Vec::with_capacity(5);
+    for k in 1..=5 {
+        let rank = board_pass.choice(&format!("board_{k}_rank"));
+        let suit = board_pass.choice(&format!("board_{k}_suit"));
+        match (rank, suit) {
+            (Some(NO_CARD), Some(NO_CARD)) => slots.push(None),
+            (Some(rank), Some(suit)) if RANKS.contains(&rank) && SUITS.contains(&suit) => {
+                slots.push(Some(json!({"rank": rank, "suit": suit})))
+            }
+            _ => return Ok(None),
+        }
+    }
+    let count = slots.iter().take_while(|slot| slot.is_some()).count();
+    if slots[count..].iter().any(Option::is_some) || !matches!(count, 0 | 3 | 4 | 5) {
+        return Ok(None);
+    }
+    let board: Vec<Value> = slots.into_iter().flatten().collect();
+
+    let Some(phase) = p0.choice("game_phase") else {
+        return Ok(None);
+    };
+    let street_matches = match count {
+        0 => phase == "preflop",
+        3 => phase == "flop",
+        4 => phase == "turn",
+        _ => matches!(phase, "river" | "showdown"),
+    };
+    if !street_matches {
+        return Ok(None);
+    }
+
+    let pot = run_pass(qs, "p3_pot", threshold_override, run)?;
+    let Some(segments) = pot.answers.segments else {
+        return Ok(None);
+    };
+    if segments.overflow || segments.n == 0 || segments.n > qs.max_glyphs {
+        return Ok(None);
+    }
+    let mut text = String::new();
+    for k in 1..=segments.n {
+        match pot.choice(&format!("g{k}")) {
+            Some(glyph) if glyph != NOT_A_CHARACTER => text.push_str(glyph),
+            _ => return Ok(None),
+        }
+    }
+    let Some(pot_size) = parse_amount(&text) else {
+        return Ok(None);
+    };
+    Ok(Some(TableCore {
+        phase: phase.to_string(),
+        board,
+        pot_size,
+    }))
+}
+
+fn seat_number(label: &str) -> Option<u8> {
+    label
+        .strip_prefix("seat_")
+        .and_then(|seat| seat.parse::<u8>().ok())
+        .filter(|seat| (1..=6).contains(seat))
+}
+
+/// Strict glyph amount for decision-bearing passes. `Ok(None)` is a blank
+/// region; `Err(())` is a malformed read.
+fn glyph_amount(reading: &Reading, max_glyphs: u32) -> Result<Option<u32>, ()> {
+    let Some(segments) = reading.answers.segments.as_ref() else {
+        return Ok(None);
+    };
+    if segments.overflow || segments.n > max_glyphs {
+        return Err(());
+    }
+    if segments.n == 0 {
+        return Ok(None);
+    }
+    let mut text = String::new();
+    for k in 1..=segments.n {
+        match reading.choice(&format!("g{k}")) {
+            Some(glyph) if glyph != NOT_A_CHARACTER => text.push_str(glyph),
+            _ => return Err(()),
+        }
+    }
+    parse_amount(&text).map(Some).ok_or(())
+}
+
+/// `Hero` plus every occupied seat readable from the stack passes (never a
+/// spectator fallback). The task's observed-to-call invariant needs one
+/// opponent carrying the current bet; honest v1 fold status is unknown, so all
+/// occupied seats stay active.
+fn seated_players(
+    qs: &QuestionSet,
+    hero_seat: u8,
+    hero_chips: u32,
+    to_call: u32,
+    threshold_override: Option<f32>,
+    run: &mut dyn FnMut(&Pass) -> Result<PassAnswers, VlmError>,
+) -> Result<Vec<Value>, VlmError> {
+    let mut players = vec![json!({
+        "name": "Hero", "chips": hero_chips, "last_action": null, "bet_amount": 0
+    })];
+    let mut bet_placed = to_call == 0;
+    let mut opponents = 0u32;
+    for seat in 1u8..=6 {
+        if seat == hero_seat {
+            continue;
+        }
+        let id = format!("p5_seat_{seat}_stack");
+        let reading = run_pass(qs, &id, threshold_override, run)?;
+        let Some(chips) = glyph_amount(&reading, qs.max_glyphs).ok().flatten() else {
+            continue;
+        };
+        if chips == 0 {
+            continue;
+        }
+        let bet_amount = if bet_placed {
+            0
+        } else {
+            bet_placed = true;
+            to_call
+        };
+        players.push(json!({
+            "name": format!("Seat {seat}"), "chips": chips,
+            "last_action": null, "bet_amount": bet_amount
+        }));
+        opponents += 1;
+    }
+    if opponents == 0 {
+        let name = if hero_seat == 1 { "Seat 2" } else { "Seat 1" };
+        players.push(json!({
+            "name": name, "chips": hero_chips.max(1),
+            "last_action": null, "bet_amount": if to_call > 0 { to_call } else { 0 }
+        }));
+    }
+    Ok(players)
+}
+
+/// The seated path: waiting/inter-hand marker states and the actionable state.
+fn seated_state(
+    qs: &QuestionSet,
+    p0: &Reading,
+    evidence: Evidence,
+    threshold_override: Option<f32>,
+    run: &mut dyn FnMut(&Pass) -> Result<PassAnswers, VlmError>,
+) -> Result<String, VlmError> {
+    let Some(hero_seat) = p0.choice("hero_seat_index").and_then(seat_number) else {
+        return table_null(evidence);
+    };
+    let confident = |id: &str| p0.noul(id) == Some(true);
+    if !(confident("ev_table_layout")
+        && confident("ev_board_area")
+        && confident("ev_pot")
+        && confident("ev_readable"))
+    {
+        return table_null(evidence);
+    }
+    let action = p0.noul("action_on_hero") == Some(true);
+    let cards_visible = p0.noul("ev_hero_cards") == Some(true);
+    // An actionable state needs cards and visible controls; a marker does not.
+    if action && !(cards_visible && confident("ev_action_controls")) {
+        return table_null(evidence);
+    }
+
+    let Some(core) = table_core(qs, p0, threshold_override, run)? else {
+        return table_null(evidence);
+    };
+    // p1 is asked by the partial only when a visible card area is answered.
+    let hero_cards: Vec<Value> = if cards_visible {
+        let cards = run_pass(qs, "p1_hero_cards", threshold_override, run)?;
+        let mut read = Vec::with_capacity(2);
+        for k in 1..=2 {
+            let rank = cards.choice(&format!("hero_{k}_rank"));
+            let suit = cards.choice(&format!("hero_{k}_suit"));
+            match (rank, suit) {
+                (Some(NO_CARD), Some(NO_CARD)) => {}
+                (Some(rank), Some(suit)) if RANKS.contains(&rank) && SUITS.contains(&suit) => {
+                    read.push(json!({"rank": rank, "suit": suit}))
+                }
+                _ => return table_null(evidence),
+            }
+        }
+        if !read.is_empty() && read.len() != 2 {
+            return table_null(evidence);
+        }
+        read
+    } else {
+        Vec::new()
+    };
+    if action && hero_cards.len() != 2 {
+        return table_null(evidence);
+    }
+    let cards_evidence = hero_cards.len() == 2;
+
+    if !action {
+        // Seated waiting or inter-hand marker: no actions, no to-call semantics.
+        let hero_chips = if cards_visible {
+            let chips = run_pass(qs, "p3_hero_chips", threshold_override, run)?;
+            glyph_amount(&chips, qs.max_glyphs)
+                .ok()
+                .flatten()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let players = seated_players(qs, hero_seat, hero_chips, 0, threshold_override, run)?;
+        let state = json!({
+            "game_phase": core.phase,
+            "hero_cards": hero_cards,
+            "board": core.board,
+            "pot_size": core.pot_size,
+            "to_call": 0,
+            "hero_chips": hero_chips,
+            "min_raise_to": null,
+            "max_raise_to": null,
+            "players": players,
+            "action_required": false,
+            "available_actions": [],
+        });
+        let evidence = Evidence {
+            readable: true,
+            hero_cards: cards_evidence,
+            action_controls: false,
+            ..evidence
+        };
+        return Ok(finish("poker_table", evidence, state));
+    }
+
+    // Actionable state: to-call and hero chips are strict; a malformed read is
+    // unreadable, never a repaired zero.
+    let to_call_read = run_pass(qs, "p3_to_call", threshold_override, run)?;
+    let to_call = match glyph_amount(&to_call_read, qs.max_glyphs) {
+        Ok(Some(value)) => value,
+        Ok(None) => 0,
+        Err(()) => return table_null(evidence),
+    };
+    let chips_read = run_pass(qs, "p3_hero_chips", threshold_override, run)?;
+    let hero_chips = match glyph_amount(&chips_read, qs.max_glyphs) {
+        Ok(Some(value)) if value > 0 => value,
+        _ => return table_null(evidence),
+    };
+
+    let mut available: Vec<&str> = Vec::with_capacity(5);
+    for (name, id) in [
+        ("fold", "act_fold"),
+        ("check", "act_check"),
+        ("call", "act_call"),
+        ("allin", "act_allin"),
+    ] {
+        if confident(id) {
+            available.push(name);
+        }
+    }
+    let mut min_raise = None;
+    let mut max_raise = None;
+    // p4 is asked by the partial only when the raise control is confident.
+    if confident("act_raise") {
+        let min_read = run_pass(qs, "p4_min_raise_to", threshold_override, run)?;
+        let max_read = run_pass(qs, "p4_max_raise_to", threshold_override, run)?;
+        let min_read = glyph_amount(&min_read, qs.max_glyphs).ok().flatten();
+        let max_read = glyph_amount(&max_read, qs.max_glyphs).ok().flatten();
+        if let (Some(min), Some(max)) = (min_read, max_read) {
+            // The same invariants validate() enforces, checked before claiming
+            // a raise control: min above the call target, max within all-in.
+            let call_target = u64::from(to_call);
+            let all_in_target = u64::from(hero_chips);
+            if u64::from(min) > call_target && u64::from(max) <= all_in_target && min <= max {
+                available.push("raise");
+                min_raise = Some(min);
+                max_raise = Some(max);
+            }
+        }
+    }
+    if available.is_empty() {
+        return table_null(evidence);
+    }
+    let players = seated_players(qs, hero_seat, hero_chips, to_call, threshold_override, run)?;
+    let state = json!({
+        "game_phase": core.phase,
+        "hero_cards": hero_cards,
+        "board": core.board,
+        "pot_size": core.pot_size,
+        "to_call": to_call,
+        "hero_chips": hero_chips,
+        "min_raise_to": min_raise,
+        "max_raise_to": max_raise,
+        "players": players,
+        "action_required": true,
+        "available_actions": available,
+    });
+    let evidence = Evidence {
+        readable: true,
+        hero_cards: true,
+        action_controls: true,
+        ..evidence
+    };
+    Ok(finish("poker_table", evidence, state))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::laya::client::Segments;
     use crate::laya::questions::question_set;
+    use crate::laya::questions::Calibration;
     use crate::laya::questions::Layout;
     use crate::screen::ScreenKind;
     use std::collections::HashMap;
@@ -508,11 +771,8 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_floor_is_required_and_validated_for_every_trained_pass() {
+    fn acceptance_floor_is_used_only_when_the_question_set_is_calibrated() {
         for pass in &question_set().passes {
-            if pass.calibration == Calibration::UntrainedProvisional {
-                continue;
-            }
             for acceptance_floor in [
                 None,
                 Some(-0.00000001),
@@ -521,17 +781,43 @@ mod tests {
                 Some(f64::INFINITY),
                 Some(f64::NEG_INFINITY),
             ] {
-                let result = run_pass(question_set(), &pass.id, None, &mut |_| {
-                    Ok(PassAnswers {
-                        acceptance_floor,
-                        ..PassAnswers::default()
-                    })
-                });
-                assert!(matches!(
-                    result,
-                    Err(VlmError::Parse(VlmResponseError::Schema))
-                ));
+                let answers = PassAnswers {
+                    acceptance_floor,
+                    ..PassAnswers::default()
+                };
+                // 0.4.0 records but ignores the wire floor (Gate-F fitted floors
+                // were never activated): even garbage still assembles.
+                let reading =
+                    run_pass(question_set(), &pass.id, None, &mut |_| Ok(answers.clone()))
+                        .unwrap_or_else(|_| panic!("{}: {acceptance_floor:?}", pass.id));
+                assert_eq!(reading.threshold, pass.threshold, "{}", pass.id);
             }
+        }
+        // A calibrated set keeps the old strict contract and applies the floor.
+        let mut calibrated = question_set().clone();
+        calibrated.thresholds.calibrated = true;
+        for pass in &question_set().passes {
+            for acceptance_floor in [None, Some(-0.00000001), Some(1.00000001), Some(f64::NAN)] {
+                let answers = PassAnswers {
+                    acceptance_floor,
+                    ..PassAnswers::default()
+                };
+                assert!(
+                    matches!(
+                        run_pass(&calibrated, &pass.id, None, &mut |_| Ok(answers.clone())),
+                        Err(VlmError::Parse(VlmResponseError::Schema))
+                    ),
+                    "{}: {acceptance_floor:?}",
+                    pass.id
+                );
+            }
+            let answers = PassAnswers {
+                acceptance_floor: Some(0.995),
+                ..PassAnswers::default()
+            };
+            let reading =
+                run_pass(&calibrated, &pass.id, None, &mut |_| Ok(answers.clone())).unwrap();
+            assert_eq!(reading.threshold, pass.threshold.max(0.995));
         }
         let p0 = question_set().pass("p0_full").unwrap();
         assert_eq!(threshold(p0, 0.995, Some(0.8)), 0.995);
@@ -541,15 +827,18 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_floor_p0_boundary_and_low_overrides_enforce_both_polarities() {
+    fn operative_threshold_p0_boundary_and_overrides_enforce_both_polarities() {
         for threshold_override in [None, Some(0.8), Some(0.99)] {
+            // 0.4.0: the wire floor is ignored, so the boundary is the pass
+            // threshold raised by any override — never the fitted 0.995.
+            let floor = threshold_override.map_or(0.8_f64, f64::from);
             for (id, p, accepted) in [
-                ("screen_kind", 0.995, true),
-                ("screen_kind", 0.99499999, false),
-                ("ev_table_layout", 0.995, true),
-                ("ev_table_layout", 0.99499999, false),
-                ("action_on_hero", 1.0 - 0.995, true),
-                ("action_on_hero", 0.00500001, false),
+                ("screen_kind", floor, true),
+                ("screen_kind", floor - 0.00000001, false),
+                ("ev_table_layout", floor, true),
+                ("ev_table_layout", floor - 0.00000001, false),
+                ("action_on_hero", 1.0 - floor, true),
+                ("action_on_hero", 1.0 - floor + 0.00000001, false),
             ] {
                 let mut passes = fitted_floor_passes();
                 passes[0].1.answers.get_mut(id).unwrap().p = p;
@@ -563,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_floor_board_one_checks_every_card_and_no_card_slot() {
+    fn board_reads_check_every_card_and_no_card_slot_at_the_operative_threshold() {
         for cards in [&FLOP[..], &[][..]] {
             let mut passes = fitted_floor_passes();
             if cards.is_empty() {
@@ -575,6 +864,7 @@ mod tests {
                 answer.p = 1.0;
             }
             for threshold_override in [None, Some(0.8), Some(0.99)] {
+                let effective = threshold_override.map_or(0.8_f64, f64::from);
                 let outcome = assemble_script(passes.clone(), (800, 613), None, threshold_override);
                 assert!(!outcome.envelope["state"].is_null());
                 for id in passes[1].1.answers.keys() {
@@ -582,7 +872,9 @@ mod tests {
                         let mut bad = passes.clone();
                         let answers = &mut bad[1].1.answers;
                         match invalid {
-                            "below_floor" => answers.get_mut(id).unwrap().p = 0.99999999,
+                            "below_floor" => {
+                                answers.get_mut(id).unwrap().p = effective - 0.00000001
+                            }
                             "truncated" => answers.get_mut(id).unwrap().truncated = true,
                             _ => {
                                 answers.remove(id);
@@ -598,9 +890,14 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_floor_keeps_noul_fallbacks_and_truncation_at_exact_boundaries() {
+    fn operative_threshold_keeps_noul_fallbacks_and_truncation_at_exact_boundaries() {
         let pass = question_set().pass("p0_full").unwrap();
-        for floor in [0.995, 1.0] {
+        // An f32 override widens slightly, so the effective floor is spelled out.
+        for (override_, floor) in [
+            (None, 0.8_f64),
+            (Some(0.8f32), f64::from(0.8f32)),
+            (Some(0.99f32), f64::from(0.99f32)),
+        ] {
             for id in ["ev_pot", "action_on_hero"] {
                 for (p, expected) in [
                     (floor, Some(true)),
@@ -609,13 +906,15 @@ mod tests {
                     (1.0 - floor + 0.00000001, None),
                 ] {
                     let mut answers = p0(&[(id, noul(p))]);
-                    answers.acceptance_floor = Some(floor);
-                    let mut reading = run_pass(question_set(), &pass.id, Some(0.8), &mut |_| {
+                    // The fitted wire floor stays recorded but unused in 0.4.0.
+                    answers.acceptance_floor = Some(0.995);
+                    let mut reading = run_pass(question_set(), &pass.id, override_, &mut |_| {
                         Ok(answers.clone())
                     })
                     .unwrap();
                     let fallback = pass.question(id).unwrap().on_low_confidence == "true";
-                    assert_eq!(reading.noul(id), expected);
+                    assert_eq!(reading.threshold, floor, "threshold {id}: {p}");
+                    assert_eq!(reading.noul(id), expected, "{id}: {p}");
                     assert_eq!(reading.flag(id), expected.unwrap_or(fallback));
                     reading.answers.answers.get_mut(id).unwrap().truncated = true;
                     assert_eq!(reading.noul(id), None);
@@ -700,28 +999,228 @@ mod tests {
     fn r15_low_confidence_not_seated_fallback_does_not_count() {
         for overrides in [
             vec![("hero_seat_index", choice("not_seated", 0.5))],
-            vec![("hero_seat_index", choice("seat_4", 0.95))],
             vec![("ev_seat_controls", noul(0.5))],
             vec![("ev_seat_controls", noul(0.05))],
             vec![("action_on_hero", noul(0.5))],
         ] {
+            // A seated index with an under-floor confidence also fails closed:
+            // the seat choice falls back to `not_seated` past `seat_number`.
             let outcome = run_table(flop_passes(&overrides));
             assert_table_null(&outcome);
             assert_eq!(outcome.calls, ["p0_full"]);
         }
     }
 
+    const SEAT_IDS: [&str; 6] = [
+        "p5_seat_1_stack",
+        "p5_seat_2_stack",
+        "p5_seat_3_stack",
+        "p5_seat_4_stack",
+        "p5_seat_5_stack",
+        "p5_seat_6_stack",
+    ];
+
+    fn hero_cards() -> PassAnswers {
+        let answers = [
+            ("hero_1_rank", choice("Q", 0.99)),
+            ("hero_1_suit", choice("diamonds", 0.99)),
+            ("hero_2_rank", choice("J", 0.99)),
+            ("hero_2_suit", choice("spades", 0.99)),
+        ]
+        .into_iter()
+        .map(|(id, answer)| (id.to_string(), answer))
+        .collect();
+        PassAnswers {
+            answers,
+            segments: None,
+            acceptance_floor: Some(0.8),
+        }
+    }
+
+    /// The full seated script in battery order: p0, board, pot, hero cards,
+    /// to-call, hero chips, raise bounds, then every stack pass (blank for an
+    /// unoccupied seat).
+    fn seated_passes(
+        p0_overrides: &[(&str, Answer)],
+        board_cards: &[(&str, &str)],
+        occupied: &[u8],
+    ) -> Vec<(&'static str, PassAnswers)> {
+        let mut passes = flop_passes(p0_overrides);
+        passes[1].1 = board(board_cards);
+        passes.push(("p1_hero_cards", hero_cards()));
+        passes.push(("p3_to_call", pot("500")));
+        passes.push(("p3_hero_chips", pot("20,000")));
+        passes.push(("p4_min_raise_to", pot("1,000")));
+        passes.push(("p4_max_raise_to", pot("20,000")));
+        for (index, id) in SEAT_IDS.iter().enumerate() {
+            let seat = index as u8 + 1;
+            passes.push((
+                id,
+                if occupied.contains(&seat) {
+                    pot("50,000")
+                } else {
+                    PassAnswers::default()
+                },
+            ));
+        }
+        passes
+    }
+
+    fn parse(outcome: &Outcome) -> crate::screen::ScreenObservation {
+        parse_screen_output(&VlmOutput {
+            text: outcome.envelope.to_string(),
+        })
+        .unwrap_or_else(|error| panic!("{error}: {}", outcome.envelope))
+    }
+
     #[test]
-    fn r17_action_on_hero_is_observation_only() {
-        let outcome = run_table(flop_passes(&[
+    fn r15_seated_but_not_to_act_emits_a_waiting_state() {
+        let outcome = run_table(seated_passes(
+            &[
+                ("hero_seat_index", choice("seat_4", 0.99)),
+                ("ev_hero_cards", noul(0.99)),
+            ],
+            &FLOP,
+            &[1, 2, 5],
+        ));
+        let observation = parse(&outcome);
+        let state = observation
+            .state
+            .unwrap_or_else(|| panic!("{}", outcome.envelope));
+        assert!(!state.action_required && state.available_actions.is_empty());
+        assert_eq!(state.hero_cards.len(), 2);
+        assert_eq!(state.to_call, 0);
+        assert_eq!(state.hero_chips, 2_000_000);
+        assert_eq!(state.players.len(), 4, "Hero plus the three occupied seats");
+        assert!(state
+            .players
+            .iter()
+            .any(|player| player.name == "Hero" && player.chips == 2_000_000));
+        assert_eq!(outcome.envelope["evidence"]["hero_cards"], true);
+        assert_eq!(outcome.envelope["evidence"]["action_controls"], false);
+        assert_eq!(
+            outcome.calls,
+            [
+                "p0_full",
+                "p2_board",
+                "p3_pot",
+                "p1_hero_cards",
+                "p3_hero_chips",
+                "p5_seat_1_stack",
+                "p5_seat_2_stack",
+                "p5_seat_3_stack",
+                "p5_seat_5_stack",
+                "p5_seat_6_stack"
+            ]
+        );
+    }
+
+    #[test]
+    fn seated_inter_hand_marker_keeps_the_timeline_shape() {
+        let outcome = run_table(seated_passes(
+            &[
+                ("hero_seat_index", choice("seat_4", 0.99)),
+                ("game_phase", choice("preflop", 0.99)),
+            ],
+            &[],
+            &[3],
+        ));
+        let state = parse(&outcome).state.expect("marker state");
+        assert!(state.hero_cards.is_empty() && state.board.is_empty());
+        assert!(!state.action_required && state.available_actions.is_empty());
+        assert_eq!((state.hero_chips, state.to_call), (0, 0));
+        assert_eq!((state.min_raise_to, state.max_raise_to), (None, None));
+        assert!(state.players.iter().any(|player| player.name == "Hero"));
+        // No visible card area: the p1 chip passes are not asked at all.
+        assert_eq!(
+            outcome.calls,
+            [
+                "p0_full",
+                "p2_board",
+                "p3_pot",
+                "p5_seat_1_stack",
+                "p5_seat_2_stack",
+                "p5_seat_3_stack",
+                "p5_seat_5_stack",
+                "p5_seat_6_stack"
+            ]
+        );
+    }
+
+    #[test]
+    fn r17_seated_action_produces_an_actionable_state() {
+        let outcome = run_table(seated_passes(
+            &[
+                ("action_on_hero", noul(0.99)),
+                ("hero_seat_index", choice("seat_4", 0.99)),
+                ("ev_action_controls", noul(0.99)),
+                ("ev_hero_cards", noul(0.99)),
+                ("act_fold", noul(0.99)),
+                ("act_call", noul(0.99)),
+            ],
+            &FLOP,
+            &[1, 2, 5],
+        ));
+        let state = parse(&outcome).state.expect("actionable state");
+        assert!(state.action_required);
+        assert_eq!(state.available_actions, ["fold", "call"]);
+        assert_eq!(state.to_call, 50_000);
+        assert_eq!(state.hero_chips, 2_000_000);
+        assert_eq!((state.min_raise_to, state.max_raise_to), (None, None));
+        // The current bet rides on exactly one opponent; the hero contributes 0.
+        let opponent_bets: Vec<u32> = state
+            .players
+            .iter()
+            .filter(|player| player.name != "Hero")
+            .map(|player| player.bet_amount)
+            .collect();
+        assert_eq!(
+            opponent_bets.iter().filter(|bet| **bet == 50_000).count(),
+            1
+        );
+        assert_eq!(
+            state
+                .players
+                .iter()
+                .find(|player| player.name == "Hero")
+                .map(|player| player.bet_amount),
+            Some(0)
+        );
+        assert_eq!(outcome.envelope["evidence"]["action_controls"], true);
+    }
+
+    #[test]
+    fn seated_raise_control_is_included_only_when_its_bounds_hold() {
+        let overrides = [
             ("action_on_hero", noul(0.99)),
             ("hero_seat_index", choice("seat_4", 0.99)),
             ("ev_action_controls", noul(0.99)),
             ("ev_hero_cards", noul(0.99)),
-        ]));
-        assert_table_null(&outcome);
-        assert_eq!(outcome.envelope["evidence"]["action_controls"], true);
-        assert_eq!(outcome.calls, ["p0_full"]);
+            ("act_fold", noul(0.99)),
+            ("act_call", noul(0.99)),
+            ("act_raise", noul(0.99)),
+        ];
+        let outcome = run_table(seated_passes(&overrides, &FLOP, &[1]));
+        let state = parse(&outcome).state.expect("actionable state");
+        assert!(state.available_actions.contains(&"raise".to_string()));
+        assert_eq!(
+            (state.min_raise_to, state.max_raise_to),
+            (Some(100_000), Some(2_000_000))
+        );
+        // min above the call target, max = hero all-in target, both from p4.
+        // An inconsistent min (<= call target) drops the raise, never the state.
+        let mut passes = seated_passes(&overrides, &FLOP, &[1]);
+        for (id, answers) in &mut passes {
+            if *id == "p4_min_raise_to" {
+                *answers = pot("500");
+            }
+        }
+        let outcome = run_table(passes);
+        let state = parse(&outcome)
+            .state
+            .expect("state survives a dropped raise");
+        assert!(!state.available_actions.contains(&"raise".to_string()));
+        assert_eq!((state.min_raise_to, state.max_raise_to), (None, None));
     }
 
     #[test]
@@ -971,7 +1470,7 @@ mod tests {
     }
 
     #[test]
-    fn untrained_passes_are_never_run_and_errors_abort() {
+    fn untrained_passes_are_asked_and_errors_abort() {
         let mut seen = Vec::new();
         let result = assemble(
             question_set(),
@@ -987,18 +1486,21 @@ mod tests {
             },
         );
         assert!(matches!(result, Err(VlmError::Request(_))));
+        // The observer path never reaches the provisional seated passes.
         assert_eq!(seen, ["p0_full", "p2_board"]);
+        // Asked like any other pass; an absent wire floor leaves the pass's own
+        // threshold operative (0.4.0 propagates plausible answers, not defaults).
         for pass in &question_set().passes {
             if pass.calibration == Calibration::UntrainedProvisional {
-                let reading = run_pass(question_set(), &pass.id, None, &mut |_: &Pass| -> Result<
-                    PassAnswers,
-                    VlmError,
-                > {
-                    panic!("untrained pass must not run")
+                let asked = std::cell::Cell::new(false);
+                let reading = run_pass(question_set(), &pass.id, None, &mut |_: &Pass| {
+                    asked.set(true);
+                    Ok(PassAnswers::default())
                 })
                 .unwrap();
+                assert!(asked.get(), "{}", pass.id);
                 assert!(reading.answers.answers.is_empty());
-                assert_eq!(reading.answers.acceptance_floor, None);
+                assert_eq!(reading.threshold, pass.threshold);
             }
         }
     }

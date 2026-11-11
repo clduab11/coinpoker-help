@@ -148,15 +148,47 @@ impl Default for EquityConfig {
     }
 }
 
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+
+    #[test]
+    fn seeded_estimates_repeat_and_unseeded_default_stays() {
+        let hero = vec![
+            Card::new(Rank::Ace, Suit::Spades),
+            Card::new(Rank::King, Suit::Spades),
+        ];
+        let config = EquityConfig { iterations: 2_000 };
+        let first = EquityEstimator::new(config.clone())
+            .with_seed(42)
+            .estimate_against_unknown(&hero, 3, &[])
+            .unwrap();
+        let second = EquityEstimator::new(config)
+            .with_seed(42)
+            .estimate_against_unknown(&hero, 3, &[])
+            .unwrap();
+        assert_eq!(first, second);
+        assert!(first > 0.2 && first < 0.8);
+    }
+}
+
 /// Board-aware Monte Carlo equity estimator.
 #[derive(Debug, Clone)]
 pub struct EquityEstimator {
     config: EquityConfig,
+    seed: Option<u64>,
 }
 
 impl EquityEstimator {
     pub fn new(config: EquityConfig) -> Self {
-        Self { config }
+        Self { config, seed: None }
+    }
+
+    /// Seed the sampler so identical inputs replay identically (PLAN §7).
+    /// Unseeded estimators keep `from_entropy` realism.
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
     }
 
     /// Estimate hero equity against opponent hole cards given a board.
@@ -208,7 +240,10 @@ impl EquityEstimator {
             return Err(EquityError::DeckExhausted);
         }
 
-        let mut rng = rand::rngs::StdRng::from_entropy();
+        let mut rng = match self.seed {
+            Some(seed) => rand::rngs::StdRng::seed_from_u64(seed),
+            None => rand::rngs::StdRng::from_entropy(),
+        };
         let mut wins = vec![0u64; hands.len()];
         let mut split = vec![0.0f64; hands.len()];
 
@@ -315,7 +350,10 @@ impl EquityEstimator {
 
         let hero_rs: Vec<RsCard> = hero.iter().copied().map(Card::to_rs).collect();
         let board_rs: Vec<RsCard> = board.iter().copied().map(Card::to_rs).collect();
-        let mut rng = rand::rngs::StdRng::from_entropy();
+        let mut rng = match self.seed {
+            Some(seed) => rand::rngs::StdRng::seed_from_u64(seed),
+            None => rand::rngs::StdRng::from_entropy(),
+        };
         let mut hero_share = 0.0;
 
         for _ in 0..self.config.iterations {

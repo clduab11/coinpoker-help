@@ -23,9 +23,9 @@ MAX_IMAGE_PIXELS = 4096 * 4096
 MAX_REFERENCE_EDGE = 16384
 MAX_GLYPHS = 8
 MAX_GLYPH_BATCH = 6
-MAX_READOUT_PASSES = 4
-MAX_READOUT_QUESTIONS = 40
-MAX_READOUT_IMAGES = 25
+MAX_READOUT_PASSES = 8
+MAX_READOUT_QUESTIONS = 64
+MAX_READOUT_IMAGES = 64
 ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 LAYOUTS = ("full", "slots", "glyphs")
 GLYPH_STYLES = ("white", "gold")
@@ -40,6 +40,11 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'se
 ACCEPTANCE_PASSES = frozenset({"p0_full", "p2_board", "p3_pot",
                               *("p5_seat_" + str(n) + "_stack" for n in range(1, 7))})
 STACK_PASSES = frozenset("p5_seat_%d_stack" % n for n in range(1, 7))
+# Provisional seated passes: defined and cropped by the client, absent from the
+# it1 fitted floor table, so the wire floor is null and the client's own pass
+# threshold is operative while thresholds.calibrated is false.
+SEATED_PASSES = frozenset({"p1_hero_cards", "p3_to_call", "p3_hero_chips",
+                           "p4_min_raise_to", "p4_max_raise_to"})
 WAGER_PASSES = frozenset("p6_seat_%d_wager" % n for n in range(1, 7))
 SCENE_PASSES = frozenset("p7_seat_%d_scene" % n for n in range(1, 7))
 WAGER_NOTE = "Observed per-seat visible wager glyphs; not stack, street contribution or call cost."
@@ -438,7 +443,7 @@ def answer_diagnostics(pid, answers, floor):
         labels.update(label for _, choices in SCENE_QUESTIONS.values() for label in choices)
     safe = {}
     for qid, answer in answers.items():
-        if (qid not in allowed_ids and not re.fullmatch(r"g[1-8]|board_[1-5]_(rank|suit)", qid)):
+        if (qid not in allowed_ids and not re.fullmatch(r"g[1-8]|board_[1-5]_(rank|suit)|hero_[12]_(rank|suit)", qid)):
             continue
         value = answer.get("choice")
         if answer["type"] == "choice":

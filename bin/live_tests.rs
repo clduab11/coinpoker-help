@@ -15,7 +15,7 @@ fn emit_with_history(
 
 // Existing publication tests exercise the explicitly disabled recorder path.
 fn event_record(
-    event: LiveEvent<ui::widgets::DecisionView>,
+    event: LiveEvent<crate::ui::widgets::DecisionView>,
     now_ms: u64,
     emitted_at_unix_ms: u64,
     config: &RuntimeConfig,
@@ -243,7 +243,7 @@ fn configuration_event_reports_laya_perception() {
     LayaBackend::new(defaults.vlm, None).expect("default backend constructs without I/O");
 }
 
-fn observation_event(actionable: bool) -> LiveEvent<ui::widgets::DecisionView> {
+fn observation_event(actionable: bool) -> LiveEvent<crate::ui::widgets::DecisionView> {
     let state: ingest::parser::GameState = serde_json::from_value(json!({
         "game_phase":"preflop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"K","suit":"hearts"}],
         "board":[],"pot_size":100,"to_call":0,"hero_chips":1000,
@@ -402,7 +402,7 @@ fn decision_publication_uses_the_same_total_deadline() {
         LiveEvent::Observation { ticket, .. } => ticket,
         _ => unreachable!(),
     };
-    let value = ui::widgets::DecisionView {
+    let value = crate::ui::widgets::DecisionView {
         action: "check".into(),
         amount: 0,
         ev: 0.0,
@@ -600,7 +600,7 @@ fn admitted_observation_emits_one_opaque_gap_summary_after_successful_write() {
     assert_eq!(summary["coverage"]["ordered_prefix"], false);
     assert_eq!(
         summary["counts"],
-        json!(opponent_model::observer::ActionCounts::default())
+        json!(core_engine::opponent::observer::ActionCounts::default())
     );
     assert_eq!(summary["occupants"], json!([]));
     assert!(summary["hand_id"].is_null());
@@ -798,7 +798,7 @@ fn invalidation_blocks_old_sources_without_fabricating_another_capture() {
     assert_ne!(summary.table_id, old_table);
     assert_eq!(
         summary.counts,
-        opponent_model::observer::ActionCounts::default()
+        core_engine::opponent::observer::ActionCounts::default()
     );
     assert!(
         summary.occupants.is_empty()
@@ -1095,7 +1095,7 @@ fn current_capture_health_tracks_unvalidated_gaps_without_inference() {
     assert_eq!(summary.coverage.unvalidated_captures, 3);
     assert_eq!(
         summary.counts,
-        opponent_model::observer::ActionCounts::default()
+        core_engine::opponent::observer::ActionCounts::default()
     );
     assert!(summary.occupants.is_empty());
     assert!(!summary.coverage.complete);
@@ -1186,7 +1186,7 @@ fn scoped_partial_invalidation_serializes_only_original_source_and_no_lease() {
     let (mut ticket, _) = history_source();
     ticket.captured_at_unix_ms = Some(9_900);
     let record = event_record(
-        LiveEvent::<ui::widgets::DecisionView>::PartialObservationInvalidated {
+        LiveEvent::<crate::ui::widgets::DecisionView>::PartialObservationInvalidated {
             ticket: ticket.clone(),
             reason: "source-region-changed",
             fields: None,
@@ -1225,7 +1225,7 @@ fn field_invalidation_serializes_exact_allowlist_without_reissuing_lease() {
     let (mut ticket, _) = history_source();
     ticket.captured_at_unix_ms = Some(9_900);
     let record = event_record(
-        LiveEvent::<ui::widgets::DecisionView>::PartialObservationInvalidated {
+        LiveEvent::<crate::ui::widgets::DecisionView>::PartialObservationInvalidated {
             ticket: ticket.clone(),
             reason: "source-region-changed",
             fields: Some(vec![VerifiedField::Stack1, VerifiedField::BoardCount]),
@@ -1322,7 +1322,7 @@ fn heartbeat_does_not_erase_original_source_bound_partial_stacks() {
     assert!(view.call_cost.is_none() && view.pot_odds.is_none());
     assert_eq!(
         history.partial.history().counts,
-        opponent_model::observer::ActionCounts::default()
+        core_engine::opponent::observer::ActionCounts::default()
     );
     assert!(!history.record_partial(&ticket, &stack_partial(), 250, &config));
     assert!(history
@@ -1387,7 +1387,7 @@ fn partial_history_checks_expiry_after_stdout_and_preserves_gaps_on_replacement(
     assert!(summary.occupants.is_empty());
     assert_eq!(
         summary.counts,
-        opponent_model::observer::ActionCounts::default()
+        core_engine::opponent::observer::ActionCounts::default()
     );
 }
 
@@ -1483,4 +1483,19 @@ fn partial_publication_preserves_the_existing_public_history_prefix() {
     assert_eq!(written.len(), 2);
     assert_eq!(written[1]["summary"], serde_json::to_value(prefix).unwrap());
     assert!(history.partial.view(200).seats[0].displayed_stack.is_some());
+}
+
+#[test]
+fn cdp_poller_reports_unavailable_once_for_a_closed_port() {
+    let mut records: Vec<serde_json::Value> = Vec::new();
+    crate::live::run_cdp_poller(
+        59223,
+        std::time::Duration::from_millis(5),
+        Some(2),
+        &mut |record| records.push(record.clone()),
+    );
+    assert_eq!(records.len(), 1, "steady state stays quiet: {records:?}");
+    assert_eq!(records[0]["kind"], "cdp-status");
+    assert_eq!(records[0]["state"], "unavailable");
+    assert_eq!(records[0]["port"], 59223);
 }

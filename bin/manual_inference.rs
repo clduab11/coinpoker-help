@@ -33,10 +33,16 @@ use crate::{Pipeline, RunError};
 
 const ACTIVITY_REGIONS: usize = ingest::laya::geometry::TABLE_READOUT_REGIONS.len();
 
+/// A baseline is honoured while the probe keeps observing the region; it is dropped only after
+/// this many consecutive samples in which the region could not be observed. Counting observations
+/// instead of milliseconds is what stops the qualifier depending on inference latency.
+const BASELINE_ABSENT_BUDGET: u8 = 8;
+
 struct ActivityGate {
     active: bool,
     last: Option<Ticket>,
-    baseline: [Option<(TableContentWitness, u64)>; ACTIVITY_REGIONS],
+    baseline: [Option<TableContentWitness>; ACTIVITY_REGIONS],
+    absent: [u8; ACTIVITY_REGIONS],
     candidate: Option<TableContentWitness>,
     repeats: [u8; ACTIVITY_REGIONS],
 }
@@ -47,6 +53,7 @@ impl ActivityGate {
             active: policy == SourcePolicy::Manual,
             last: None,
             baseline: std::array::from_fn(|_| None),
+            absent: [0; ACTIVITY_REGIONS],
             candidate: None,
             repeats: [0; ACTIVITY_REGIONS],
         }
@@ -80,6 +87,7 @@ impl ActivityGate {
                 .is_some_and(|(a, b)| !a.same_geometry(b))
         {
             self.baseline.fill(None);
+            self.absent.fill(0);
             self.candidate = None;
             self.repeats.fill(0);
         }
@@ -94,18 +102,17 @@ impl ActivityGate {
             return;
         };
         for index in 0..ACTIVITY_REGIONS {
-            if self.baseline[index]
-                .as_ref()
-                .is_some_and(|(_, captured_at_ms)| now.saturating_sub(*captured_at_ms) >= 5_000)
-            {
-                self.baseline[index] = None;
-            }
             if !witness.has_current_region(index) {
-                // A readout may change during inference. It cannot count toward
-                // either pair or renew the baseline, but is not a source break.
+                // A readout may change during inference: it cannot count toward either pair, and
+                // absence is the only thing that ages a baseline. Not a source break.
                 self.repeats[index] = 0;
+                self.absent[index] = self.absent[index].saturating_add(1);
+                if self.absent[index] >= BASELINE_ABSENT_BUDGET {
+                    self.baseline[index] = None;
+                }
                 continue;
             }
+            self.absent[index] = 0;
             self.repeats[index] = if self
                 .candidate
                 .as_ref()
@@ -116,14 +123,13 @@ impl ActivityGate {
                 1
             };
             if self.repeats[index] == 2 {
-                if let Some((baseline, captured_at_ms)) = &mut self.baseline[index] {
-                    if !baseline.same_region(&witness, index) {
-                        self.active = true;
-                    } else {
-                        *captured_at_ms = ticket.captured_at_ms;
+                match &self.baseline[index] {
+                    Some(baseline) => {
+                        if !baseline.same_region(&witness, index) {
+                            self.active = true;
+                        }
                     }
-                } else {
-                    self.baseline[index] = Some((witness.clone(), ticket.captured_at_ms));
+                    None => self.baseline[index] = Some(witness.clone()),
                 }
             }
         }
@@ -137,8 +143,8 @@ struct ManualWorker<W> {
     stop_on_result_error: bool,
 }
 
-impl<W: InferencePort<ui::widgets::DecisionView>> InferencePort<ui::widgets::DecisionView>
-    for ManualWorker<W>
+impl<W: InferencePort<crate::ui::widgets::DecisionView>>
+    InferencePort<crate::ui::widgets::DecisionView> for ManualWorker<W>
 {
     fn start(&mut self, job: ingest::runtime::InferenceJob) -> Result<(), InferenceFailure> {
         if self.failed.get() {
@@ -155,8 +161,10 @@ impl<W: InferencePort<ui::widgets::DecisionView>> InferencePort<ui::widgets::Dec
 
     fn try_complete(
         &mut self,
-    ) -> Result<Option<ingest::runtime::Completion<ui::widgets::DecisionView>>, InferenceFailure>
-    {
+    ) -> Result<
+        Option<ingest::runtime::Completion<crate::ui::widgets::DecisionView>>,
+        InferenceFailure,
+    > {
         let result = self.inner.try_complete();
         if result.as_ref().is_err()
             || self.stop_on_result_error
@@ -496,7 +504,11 @@ fn poll_delay(policy: SourcePolicy, period: u64, started: u64, now: u64) -> u64 
     }
 }
 
-fn inference_loop<S: CaptureSource, W: InferencePort<ui::widgets::DecisionView>, C: Clock>(
+fn inference_loop<
+    S: CaptureSource,
+    W: InferencePort<crate::ui::widgets::DecisionView>,
+    C: Clock,
+>(
     source: ManualSource<'_, S, C>,
     worker: W,
     mut wait: impl FnMut(u64),
@@ -800,16 +812,17 @@ impl AutomaticSchedule {
         if !policy.is_sustained() {
             return next_automatic_pass(&mut self.step, experimental);
         }
-        // One mixed request reads Pot and two seats. Repeat on a distinct capture
-        // for consensus. A separately running CPU board lane removes only GPU
-        // Board jobs; it never supplies qualified native Board or GameState inputs.
+        // One mixed request reads Pot and every seat, so one repeated pair refreshes the
+        // whole seat row instead of three separate pairs. A separately running CPU board
+        // lane removes only GPU Board jobs; it never supplies qualified native Board or
+        // GameState inputs.
         let period = if self.cpu_visual_board && !experimental {
-            6
+            2
         } else {
-            8
+            4
         };
-        let pass = if self.step < 6 {
-            ObservationPass::ReadoutPair((self.step / 2) * 2 + 1)
+        let pass = if self.step < 2 {
+            ObservationPass::ReadoutAll
         } else {
             ObservationPass::BoardReadout
         };

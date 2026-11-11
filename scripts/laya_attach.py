@@ -1,14 +1,18 @@
 """Metadata-only attachment to the user's declared CoinPoker NLH game window.
 
 The built-in rule declares a six-seat layout; titles do not prove game type,
-seating, six seats, or calibrated perception. No lobby image, pixel
-classification, fixed resolution, or ROI is used. Capture owns current bounds.
-An explicitly confirmed private profile can select the exact OS title CoinPoker
-when the visible NLH caption is drawn inside that game window. This is not a
-default lobby fallback. This module never captures or performs game actions.
+seating, six seats, or calibrated perception. No image, pixel classification,
+fixed resolution, or ROI is used. Capture owns current bounds. An explicitly
+confirmed private profile can select the exact OS title CoinPoker when the visible
+NLH caption is drawn inside that game window. This is not a default lobby
+fallback. When several windows share that title, the client's lobby window is
+discarded by dimensions: only a window that can present the calibrated table
+surface without letterbox bars is eligible. This module never captures or
+performs game actions.
 """
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -48,15 +52,46 @@ MESSAGES = {
     "window-list-invalid": "Automatic attachment is blocked: window metadata is invalid.",
     "window-list-unavailable": "Automatic attachment is blocked: window metadata is unavailable.",
     "practice-target-absent": "Waiting for one visible game window matching the user-declared selector.",
-    "practice-target-ambiguous": "Automatic attachment is blocked: more than one visible game window matches the user-declared selector.",
+    "practice-target-ambiguous": "Automatic attachment is blocked: more than one visible game window matches the user-declared selector and no single one presents the six-max table surface.",
 }
 _EXE_CASE = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+REGIONS_REL_PATH = "crates/ingest/assets/laya/regions.json"
+MAX_REGIONS_BYTES = 64 * 1024
 
 
 class AttachError(ValueError):
     def __init__(self, code):
         self.code = code
         super().__init__(MESSAGES[code])
+
+
+@lru_cache(maxsize=1)
+def _surface_geometry():
+    """(content_aspect, header_min_px, header_max_px, min_crop_px) from the region manifest."""
+    raw = (ROOT / REGIONS_REL_PATH).read_bytes()
+    if len(raw) > MAX_REGIONS_BYTES:
+        raise ValueError("regions manifest too large")
+    geometry = json.loads(raw)["geometry"]
+    lo, hi = (int(value) for value in geometry["title_bar_range_px"])
+    return float(geometry["content_aspect"]), lo, hi, int(geometry["min_crop_px"])
+
+
+def fits_table_surface(width, height):
+    """True when the window can present the calibrated table surface without letterbox bars.
+
+    Mirrors the unbordered branch of the shared content-rectangle rule: the content fills the
+    window width and the remainder is the observed in-window header. Any other shape needs
+    letterbox/pillarbox bars, so it is not the calibrated six-max surface; the client's separate
+    lobby window is one such shape. Window dimensions and the region manifest only: no pixels.
+    """
+    if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
+        return False
+    try:
+        aspect, lo, hi, min_crop = _surface_geometry()
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    t = height - int(round(width / aspect))
+    return lo <= t <= hi and height - t >= min_crop
 
 
 def _text(value, maximum=512):
@@ -405,9 +440,18 @@ class PracticeAttachment:
             matches = [window for window in listing.windows if rule.matches(window)]
             if not matches:
                 raise AttachError("practice-target-absent")
-            if len(matches) != 1:
-                raise AttachError("practice-target-ambiguous")
-            window = matches[0]
+            if len(matches) == 1:
+                window = matches[0]
+            else:
+                # This client reuses one OS title for the lobby and the table. When several
+                # windows match, keep only those whose dimensions can present the calibrated
+                # table surface without letterbox/pillarbox bars; the lobby is discarded here.
+                # Anything still ambiguous fails closed rather than guessing.
+                surfaces = [window for window in matches
+                            if fits_table_surface(window.width, window.height)]
+                if len(surfaces) != 1:
+                    raise AttachError("practice-target-ambiguous")
+                window = surfaces[0]
             # Native title matching is substring-only. Metadata enforces the
             # anchored digit rule; PID/HWND isolate the window without a size pin.
             config = {"binary": binary.relative_to(self.root).as_posix(), "exe_name": window.exe_name,

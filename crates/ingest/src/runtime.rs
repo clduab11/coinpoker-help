@@ -538,6 +538,17 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
     }
 
     /// A caller must tick at the configured poll interval, not on inference completion.
+    /// Milliseconds until the runtime's next scheduled work (`u64::MAX` when
+    /// idle). The live loop waits this long, capped by the capture cadence,
+    /// instead of a fixed sleep — the event-driven remainder of PLAN Phase 1.
+    pub fn next_wake_in_ms(&self, now_ms: u64) -> u64 {
+        if self.next_analysis == 0 {
+            u64::MAX
+        } else {
+            self.next_analysis.saturating_sub(now_ms)
+        }
+    }
+
     pub fn tick(&mut self, clock: &impl Clock) -> Vec<LiveEvent<T>> {
         let mut events = Vec::new();
         self.activity_sample = None;

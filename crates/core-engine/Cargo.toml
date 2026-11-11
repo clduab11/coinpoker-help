@@ -12,6 +12,7 @@ publish = false
 serde = { workspace = true }
 thiserror = { workspace = true }
 rand = { workspace = true }
+rand_distr = { workspace = true }
 rs_poker = { workspace = true }
 
 [dev-dependencies]

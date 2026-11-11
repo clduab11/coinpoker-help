@@ -42,6 +42,7 @@ pub enum ObservationPass {
     Stack(u8),
     Numbers(u8),
     ReadoutPair(u8),
+    ReadoutAll,
     BoardReadout,
     Wager(u8),
     Scene(u8),
@@ -155,6 +156,12 @@ impl LayaBackend {
                 format!("p5_seat_{seat}_stack"),
                 format!("p5_seat_{}_stack", seat + 1),
             ]),
+            Some(ObservationPass::ReadoutAll) => Some(
+                std::iter::once("p0_full".to_string())
+                    .chain(std::iter::once("p3_pot".to_string()))
+                    .chain((1..=6).map(|seat| format!("p5_seat_{seat}_stack")))
+                    .collect(),
+            ),
             Some(ObservationPass::ReadoutPair(_)) => {
                 return Err(VlmError::Unavailable(
                     "invalid-observation-seat-pair".into(),
@@ -170,9 +177,11 @@ impl LayaBackend {
             Some(ObservationPass::Table) => Some(String::new()),
             Some(ObservationPass::Pot) => Some("p3_pot".into()),
             Some(ObservationPass::Board) => Some("p2_board".into()),
-            Some(ObservationPass::ReadoutPair(_) | ObservationPass::BoardReadout) => {
-                Some(String::new())
-            }
+            Some(
+                ObservationPass::ReadoutPair(_)
+                | ObservationPass::ReadoutAll
+                | ObservationPass::BoardReadout,
+            ) => Some(String::new()),
             Some(ObservationPass::Stack(seat @ 1..=6) | ObservationPass::Numbers(seat @ 1..=6)) => {
                 Some(format!("p5_seat_{seat}_stack"))
             }
@@ -871,13 +880,13 @@ mod tests {
     #[test]
     fn frames_too_small_to_crop_fail_closed_without_crop_requests() {
         let (port, requests) = scripted_server(unseated_flop);
-        let error = backend(port, None)
+        // Crop-less passes answer with defaults while uncalibrated (no wire
+        // floor is required), so the frame fails closed to an unreadable table.
+        let output = backend(port, None)
             .analyze(&frame(60, 60), "")
-            .expect_err("unattempted trained pass has no acceptance floor");
-        assert!(matches!(
-            error,
-            VlmError::Parse(crate::vlm::VlmResponseError::Schema)
-        ));
+            .expect("default answers fail closed");
+        let observation = parse_screen_output(&output).expect("unreadable envelope");
+        assert!(!observation.evidence.readable && observation.state.is_none());
         let passes: Vec<String> = requests
             .try_iter()
             .map(|r| r["pass"].as_str().unwrap().to_string())
@@ -948,15 +957,17 @@ mod tests {
                 Instant::now() + std::time::Duration::from_secs(5),
             )
             .unwrap();
-        assert!(parse_screen_output(&result.output).unwrap().state.is_none());
+        // At the operative 0.8 floor the 0.9925 `not_seated` answer is confident,
+        // so this is a full observer state, not a role-blocked null.
+        assert!(parse_screen_output(&result.output).unwrap().state.is_some());
         let mut candidate = result.partial.unwrap();
         assert!(
             candidate.retain_source_current_fields(&frame(800, 613)),
             "backend must bind the original real input Frame"
         );
         let view = candidate.view;
-        assert_eq!(view.role, None);
-        assert_eq!(view.game_phase, None);
+        assert_eq!(view.role, Some(crate::runtime::ObservationRole::Observing));
+        assert_eq!(view.game_phase, Some(crate::parser::GamePhase::Flop));
         assert_eq!(view.pot_size, Some(250));
         assert!(view
             .seats
@@ -1028,7 +1039,7 @@ mod tests {
             && s.visible_wager == Some(700)
             && s.street_contribution.is_none()));
         assert!(!view.quality_approved);
-        assert!(parse_screen_output(&result.output).unwrap().state.is_none());
+        assert!(parse_screen_output(&result.output).unwrap().state.is_some());
         let sent: Vec<Value> = requests.try_iter().collect();
         assert_eq!(sent.len(), 10);
         for request in &sent[4..] {
@@ -1267,11 +1278,19 @@ mod tests {
             assert!(candidate.core_accepted());
             assert!(candidate.table_content_witness(&source).is_some());
             assert_eq!(
-                candidate.view.role, None,
-                "hero identity is still unconfirmed"
+                candidate.view.role,
+                Some(crate::runtime::ObservationRole::Observing),
+                "0.9925 `not_seated` is confident at the operative 0.8 floor"
             );
-            assert_eq!(candidate.view.game_phase, None);
-            assert!(candidate.view.board_slots.iter().all(Option::is_none));
+            let expected_slots = selected == ObservationPass::Board;
+            assert_eq!(
+                candidate.view.game_phase,
+                expected_slots.then_some(crate::parser::GamePhase::Flop),
+                "phase is cross-checked against the board pass when it ran"
+            );
+            for (index, slot) in candidate.view.board_slots.iter().enumerate() {
+                assert_eq!(slot.is_some(), expected_slots && index < 3);
+            }
             assert_eq!(
                 candidate.view.pot_size,
                 (selected == ObservationPass::Pot).then_some(250)
@@ -1300,7 +1319,9 @@ mod tests {
                 ObservationPass::Board => "p2_board".to_string(),
                 ObservationPass::Stack(seat) => format!("p5_seat_{seat}_stack"),
                 ObservationPass::Numbers(_) => unreachable!("numeric pair has separate coverage"),
-                ObservationPass::ReadoutPair(_) | ObservationPass::BoardReadout => {
+                ObservationPass::ReadoutPair(_)
+                | ObservationPass::ReadoutAll
+                | ObservationPass::BoardReadout => {
                     unreachable!("mixed batches have separate coverage")
                 }
                 ObservationPass::Wager(_) | ObservationPass::Scene(_) => {
@@ -1317,8 +1338,8 @@ mod tests {
                     assert!(pass
                         .questions
                         .iter()
-                        .all(|question| question.effective_floor == Some(1.0)
-                            && question.reason == DiagnosticReason::BelowFloor));
+                        .all(|question| question.effective_floor == Some(0.8)
+                            && question.reason == DiagnosticReason::Accepted));
                 }
             }
             if selected != ObservationPass::Pot {
@@ -1391,14 +1412,24 @@ mod tests {
             assert!(parse_screen_output(&result.output).unwrap().state.is_none());
             let mut candidate = result.partial.unwrap();
             assert!(candidate.core_accepted() && candidate.retain_source_current_fields(&source));
+            // The readout core omits the role/hero questions, so hero identity
+            // stays unconfirmed on this path.
             assert!(!candidate.view.quality_approved && candidate.view.hero_seated.is_none());
+            assert_eq!(candidate.view.role, None);
             assert_eq!(candidate.view.pot_size, first_seat.map(|_| 250));
             for (i, seat) in candidate.view.seats.iter().enumerate() {
                 let included = first_seat.is_some_and(|first| i + 1 == first || i == first);
                 assert_eq!(seat.displayed_stack, included.then_some(100));
                 assert!(seat.visible_wager.is_none() && seat.street_contribution.is_none());
             }
-            assert!(candidate.view.board_slots.iter().all(Option::is_none));
+            if first_seat.is_none() {
+                // BoardReadout reads the (Q,7,2) flop at the operative 0.8 floor.
+                for (index, slot) in candidate.view.board_slots.iter().enumerate() {
+                    assert_eq!(slot.is_some(), index < 3);
+                }
+            } else {
+                assert!(candidate.view.board_slots.iter().all(Option::is_none));
+            }
             assert!(result.diagnostics.timing.inference_ms.is_some());
             assert!(result
                 .diagnostics
@@ -1462,7 +1493,7 @@ mod tests {
                 assert!(board
                     .questions
                     .iter()
-                    .all(|q| q.effective_floor == Some(1.0)));
+                    .all(|q| q.effective_floor == Some(0.8)));
             }
         }
     }
@@ -1579,7 +1610,7 @@ mod tests {
                 assert!(seat.visible_wager.is_none() && seat.street_contribution.is_none());
             }
             assert!(candidate.view.board_slots.iter().all(Option::is_none));
-            assert!(candidate.view.hero_seated.is_none() && !candidate.view.quality_approved);
+            assert!(candidate.view.hero_seated == Some(false) && !candidate.view.quality_approved);
             assert!(parse_screen_output(&result.output).unwrap().state.is_none());
             let sent: Vec<_> = requests.try_iter().collect();
             assert_eq!(sent.len(), 3);
@@ -1724,7 +1755,9 @@ mod tests {
     fn automatic_partial_passes_do_not_run_fields_after_unqualified_core() {
         let (port, requests) = scripted_server(|request| {
             let mut reply = partial_reply(request);
-            reply["answers"]["ev_readable"]["noul"] = json!(0.98);
+            // Below the operative 0.8 floor: the core is unqualified and no
+            // further pass may run.
+            reply["answers"]["ev_readable"]["noul"] = json!(0.78);
             reply
         });
         let result = backend(port, None)

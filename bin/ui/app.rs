@@ -3,7 +3,7 @@
 //! Owns the decision panel state and drives frame updates from the
 //! decision-support pipeline.
 
-use crate::widgets::{render_panel, DecisionView};
+use crate::ui::widgets::{render_panel, DecisionView};
 
 /// The egui application.
 #[derive(Debug, Default)]

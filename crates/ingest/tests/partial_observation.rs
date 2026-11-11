@@ -141,7 +141,10 @@ fn unsupported_seat_capabilities_are_recorded_once_per_field_not_once_per_seat()
 }
 
 #[test]
-fn rejected_role_and_all_cards_preserve_independent_pot_and_six_stacks() {
+fn role_and_cards_follow_the_operative_floor_while_pot_and_stacks_stay_independent() {
+    // At the operative 0.8 floor a 0.9925 seat answer and near-1.0 cards are
+    // confident: role, phase and slots arrive while pot and stacks own their
+    // own lanes.
     let mut passes = scripts();
     passes
         .get_mut("p0_full")
@@ -156,11 +159,18 @@ fn rejected_role_and_all_cards_preserve_independent_pot_and_six_stacks() {
     let (partial, diagnostics, calls) = assemble(&passes, None);
     let partial = partial.unwrap();
     assert!(partial.core_accepted());
-    assert_eq!(partial.view.role, None);
-    assert_eq!(partial.view.hero_seated, None);
-    assert_eq!(partial.view.game_phase, None);
-    assert_eq!(partial.view.board_count, None);
-    assert!(partial.view.board_slots.iter().all(Option::is_none));
+    assert_eq!(
+        partial.view.role,
+        Some(ingest::runtime::ObservationRole::Observing)
+    );
+    assert_eq!(partial.view.hero_seated, Some(false));
+    assert_eq!(
+        partial.view.game_phase,
+        Some(ingest::parser::GamePhase::Flop)
+    );
+    assert_eq!(partial.view.board_count, Some(3));
+    assert!(partial.view.board_slots[..3].iter().all(Option::is_some));
+    assert!(partial.view.board_slots[3..].iter().all(Option::is_none));
     assert_eq!(partial.view.pot_size, Some(1050));
     assert_eq!(
         calls,
@@ -191,18 +201,49 @@ fn rejected_role_and_all_cards_preserve_independent_pot_and_six_stacks() {
     for private in ["crop_bounds", "questions", "score", "diagnostics", "name"] {
         assert!(!public.contains(private));
     }
+
+    // Below the floor the role/card lanes stay unknown while pot and all six
+    // stacks survive independently.
+    let mut passes = scripts();
+    passes
+        .get_mut("p0_full")
+        .unwrap()
+        .answers
+        .get_mut("hero_seat_index")
+        .unwrap()
+        .p = 0.7;
+    for a in passes.get_mut("p2_board").unwrap().answers.values_mut() {
+        a.p = 0.7;
+    }
+    let (partial, _, calls) = assemble(&passes, None);
+    let partial = partial.unwrap();
+    assert_eq!(partial.view.role, None);
+    assert_eq!(partial.view.hero_seated, None);
+    assert_eq!(partial.view.game_phase, None);
+    assert_eq!(partial.view.board_count, None);
+    assert!(partial.view.board_slots.iter().all(Option::is_none));
+    assert_eq!(partial.view.pot_size, Some(1050));
+    assert!(partial
+        .view
+        .seats
+        .iter()
+        .all(|s| s.displayed_stack.is_some()));
+    assert_eq!(calls.len(), 9);
 }
 
 #[test]
 fn phase_requires_presence_count_but_not_every_card_identity() {
     let mut passes = scripts();
+    // Under the operative 0.8 floor a below-floor suit is missing while the
+    // rank still marks presence: the count and phase must survive without the
+    // human-readable identity.
     passes
         .get_mut("p2_board")
         .unwrap()
         .answers
         .get_mut("board_1_suit")
         .unwrap()
-        .p = 0.99999999;
+        .p = 0.7;
     let view = assemble(&passes, None).0.unwrap().view;
     assert_eq!(view.board_count, Some(3));
     assert_eq!(view.game_phase, Some(ingest::parser::GamePhase::Flop));
@@ -254,6 +295,15 @@ fn independent_field_failures_and_empty_segmentation_are_never_zero_or_open_seat
         .unwrap()
         .truncated = true;
     passes.get_mut("p5_seat_3_stack").unwrap().acceptance_floor = None;
+    // A missing wire floor no longer invalidates while uncalibrated; the pass
+    // threshold applies, so drive seat 3 below it.
+    passes
+        .get_mut("p5_seat_3_stack")
+        .unwrap()
+        .answers
+        .get_mut("g1")
+        .unwrap()
+        .p = 0.7;
     passes.insert("p5_seat_4_stack".into(), amount("0"));
     passes.insert("p5_seat_5_stack".into(), amount("1..8"));
     let (partial, diagnostics, _) = assemble(&passes, None);
@@ -265,7 +315,7 @@ fn independent_field_failures_and_empty_segmentation_are_never_zero_or_open_seat
     for (seat, reason) in [
         (1, DiagnosticReason::EmptySegmentation),
         (2, DiagnosticReason::Truncated),
-        (3, DiagnosticReason::InvalidFloor),
+        (3, DiagnosticReason::BelowFloor),
         (5, DiagnosticReason::InvalidAmount),
     ] {
         assert!(diagnostics
@@ -280,6 +330,7 @@ fn independent_field_failures_and_empty_segmentation_are_never_zero_or_open_seat
 #[test]
 fn floor_overrides_never_lower_and_untrained_wager_proposals_have_no_floor() {
     let mut passes = scripts();
+    // A 0.2 wire floor cannot lower the operative pass threshold (0.8).
     for id in ["p0_full", "p2_board", "p3_pot", "p5_seat_1_stack"] {
         passes.get_mut(id).unwrap().acceptance_floor = Some(0.2);
     }
@@ -289,7 +340,7 @@ fn floor_overrides_never_lower_and_untrained_wager_proposals_have_no_floor() {
         .answers
         .get_mut("screen_kind")
         .unwrap()
-        .p = 0.99499999;
+        .p = 0.79999999;
     assert!(assemble(&passes, None).0.is_none());
     passes
         .get_mut("p0_full")
@@ -297,7 +348,7 @@ fn floor_overrides_never_lower_and_untrained_wager_proposals_have_no_floor() {
         .answers
         .get_mut("screen_kind")
         .unwrap()
-        .p = 0.995;
+        .p = 0.8;
     passes
         .get_mut("p3_pot")
         .unwrap()
@@ -507,7 +558,15 @@ fn synthetic_qualified_wagers_are_separate_from_all_six_stacks_cards_and_street_
             .unwrap()
             .contains(&format!("seats.{}.visible_wager", i + 1)));
     }
-    assert!(value.view.game_phase.is_none() && value.view.role.is_none());
+    assert_eq!(
+        value.view.game_phase,
+        Some(ingest::parser::GamePhase::Flop),
+        "0.9 cards clear the operative 0.8 floor"
+    );
+    assert_eq!(
+        value.view.role,
+        Some(ingest::runtime::ObservationRole::Observing)
+    );
     assert!(!value.view.quality_approved);
     assert!(diagnostics
         .passes

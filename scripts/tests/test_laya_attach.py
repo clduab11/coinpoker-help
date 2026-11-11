@@ -175,6 +175,39 @@ class AttachTests(unittest.TestCase):
             self.assertIsNone(result.key)
             self.assertEqual(len(result.private_diagnostics["candidates"]), 2)
 
+    def test_table_surface_is_selected_when_the_lobby_shares_the_os_title(self):
+        # Observed client sizes: table 953x724, lobby 1440x753, both titled CoinPoker.
+        value = attach.CONFIRMED_GAME_WINDOW_RULE.document()
+        attach.persist_profile(value, listing(window("CoinPoker", width=953, height=724)),
+                               confirmed=True, root=self.root)
+        metadata = listing(
+            window("CoinPoker", hwnd="0x11", width=953, height=724),
+            window("CoinPoker", hwnd="0x21", process_id=21, width=1440, height=753))
+        result = self.select(metadata)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.config["pid"], 11)
+        self.assertEqual(result.config["window_hwnd"], "0x11")
+
+    def test_two_table_shaped_windows_still_fail_closed(self):
+        value = attach.CONFIRMED_GAME_WINDOW_RULE.document()
+        attach.persist_profile(value, listing(window("CoinPoker", width=953, height=724)),
+                               confirmed=True, root=self.root)
+        metadata = listing(
+            window("CoinPoker", hwnd="0x11", width=953, height=724),
+            window("CoinPoker", hwnd="0x21", process_id=21, width=957, height=727))
+        self.assertEqual(self.select(metadata).code, "practice-target-ambiguous")
+
+    def test_matches_with_no_table_shaped_window_fail_closed(self):
+        value = attach.CONFIRMED_GAME_WINDOW_RULE.document()
+        attach.persist_profile(value, listing(window("CoinPoker", width=1440, height=753)),
+                               confirmed=True, root=self.root)
+        metadata = listing(
+            window("CoinPoker", hwnd="0x11", width=1440, height=753),
+            window("CoinPoker", hwnd="0x21", process_id=21, width=160, height=28))
+        result = self.select(metadata)
+        self.assertEqual(result.code, "practice-target-ambiguous")
+        self.assertIsNone(result.config)
+
     def test_ready_config_pins_current_identity_and_only_fixed_internal_flags(self):
         result = self.select()
         config = result.config
@@ -489,6 +522,33 @@ class AttachTests(unittest.TestCase):
         self.assertFalse(attach.same_exact_source(selected, changed))
         for pid, hwnd in ((12, "0x11"), (11, "0x33"), (True, "0x11"), (11, "bad")):
             self.assert_error("practice-profile-mismatch", attach.select_exact, metadata, pid, hwnd)
+
+
+class TableSurfaceGeometryTests(unittest.TestCase):
+    """Window dimensions only: the calibrated surface fits or it needs bars."""
+
+    def test_observed_table_shapes_fit(self):
+        for width, height in ((953, 724), (957, 727), (913, 695), (1015, 770), (800, 613),
+                              (1280, 963), (1024, 777)):
+            with self.subTest(size=(width, height)):
+                self.assertTrue(attach.fits_table_surface(width, height))
+
+    def test_lobby_and_other_shapes_do_not_fit(self):
+        for width, height in ((1440, 753), (1280, 1032), (1920, 1080), (160, 28),
+                              (800, 600), (1280, 778), (100, 20), (0, 724), (953, 0)):
+            with self.subTest(size=(width, height)):
+                self.assertFalse(attach.fits_table_surface(width, height))
+
+    def test_predicate_matches_the_shared_content_rect_branch(self):
+        import laya_prep
+        for width in (800, 953, 1015, 1280, 1440, 1920):
+            for height in (28, 600, 613, 695, 724, 727, 753, 770, 1032, 1080):
+                with self.subTest(size=(width, height)):
+                    x0, y0, cw, ch = laya_prep.content_rect(width, height)
+                    unbordered = (x0 == 0 and cw == width and ch == height - y0
+                                  and laya_prep.TITLE_BAR_RANGE[0] <= y0 <= laya_prep.TITLE_BAR_RANGE[1]
+                                  and ch >= laya_prep.MIN_CROP_PX)
+                    self.assertEqual(attach.fits_table_surface(width, height), unbordered)
 
 
 if __name__ == "__main__":

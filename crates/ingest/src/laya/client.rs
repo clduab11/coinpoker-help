@@ -59,7 +59,9 @@ struct WireResponse {
     model: String,
     #[serde(rename = "pass")]
     pass_id: String,
-    acceptance_floor: f64,
+    /// Null for a seated pass absent from the fitted floor table (0.4.0).
+    #[serde(default)]
+    acceptance_floor: Option<f64>,
     answers: HashMap<String, WireAnswer>,
     #[serde(default)]
     segments: Option<Segments>,
@@ -388,6 +390,16 @@ impl LayaClient {
                 | ["p0_full", "p3_pot", "p5_seat_1_stack", "p5_seat_2_stack"]
                 | ["p0_full", "p3_pot", "p5_seat_3_stack", "p5_seat_4_stack"]
                 | ["p0_full", "p3_pot", "p5_seat_5_stack", "p5_seat_6_stack"]
+                | [
+                    "p0_full",
+                    "p3_pot",
+                    "p5_seat_1_stack",
+                    "p5_seat_2_stack",
+                    "p5_seat_3_stack",
+                    "p5_seat_4_stack",
+                    "p5_seat_5_stack",
+                    "p5_seat_6_stack"
+                ]
         ) || passes.iter().any(|(pass, images)| {
             !matches!(
                 pass.calibration,
@@ -677,7 +689,7 @@ impl LayaClient {
         if wire.model != self.model || wire.pass_id != pass.id {
             return Err(schema());
         }
-        let acceptance_floor = probability(wire.acceptance_floor)?;
+        let acceptance_floor = wire.acceptance_floor.map(probability).transpose()?;
         let mut answers = HashMap::with_capacity(wire.answers.len());
         for (id, answer) in wire.answers {
             let question = pass.question(&id).ok_or_else(schema)?;
@@ -712,7 +724,7 @@ impl LayaClient {
         Ok(PassAnswers {
             answers,
             segments: wire.segments,
-            acceptance_floor: Some(acceptance_floor),
+            acceptance_floor,
         })
     }
 }
@@ -1256,7 +1268,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn acceptance_floor_requires_a_finite_number_in_the_unit_interval() {
+    fn acceptance_floor_requires_a_finite_number_in_the_unit_interval_when_present() {
         let client = client(0, 1);
         let pass = pass("p0_full").unwrap();
         let valid: Value =
@@ -1267,11 +1279,21 @@ pub(crate) mod tests {
             let answers = client.parse_response(pass, &body.to_string()).unwrap();
             assert_eq!(answers.acceptance_floor, Some(floor));
         }
+        // Absent or explicit null means "no fitted floor on the wire"; this is
+        // the seated-pass contract while the fitted table lacks those passes.
         let mut missing = valid.clone();
         missing.as_object_mut().unwrap().remove("acceptance_floor");
-        let mut invalid = vec![missing.to_string()];
+        for body in [missing.to_string(), {
+            let mut null = valid.clone();
+            null["acceptance_floor"] = Value::Null;
+            null.to_string()
+        }] {
+            let answers = client.parse_response(pass, &body).unwrap();
+            assert_eq!(answers.acceptance_floor, None);
+        }
+        // A present non-number or out-of-range value still fails closed.
+        let mut invalid = Vec::new();
         for floor in [
-            Value::Null,
             json!("unknown"),
             json!("0.995"),
             json!(true),

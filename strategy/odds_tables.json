@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "purpose": "Exact draw math for decisions and for validating core-engine::pot_odds (outs.rs was deleted in the 2026-11-10 decruft; this table is the survivor).",
+    "provenance": "card_printed values mirror the user's card screenshot-1.png ('Odds worth knowing'); the unseen47/unseen46/two_streets columns are the exact formula values 1-(1-o/47)(1-o/46). The card's rule of two and four is quoted below.",
+    "columns": "unseen47 = flop to turn (47 unseen); unseen46 = turn to river (46 unseen); two_streets = flop to river if seeing both.",
+    "note": "Rule of 2 and 4 tracks the card's rounding for 1-9 outs and drifts high above; use the exact columns for 12+."
+  },
+  "outs_to_equity_pct": [
+    {"outs": 1, "unseen47": 2.1, "unseen46": 2.2, "two_streets": 4.3},
+    {"outs": 2, "unseen47": 4.3, "unseen46": 4.3, "two_streets": 8.4},
+    {"outs": 3, "unseen47": 6.4, "unseen46": 6.5, "two_streets": 12.5},
+    {"outs": 4, "unseen47": 8.5, "unseen46": 8.7, "two_streets": 16.5},
+    {"outs": 5, "unseen47": 10.6, "unseen46": 10.9, "two_streets": 20.4},
+    {"outs": 6, "unseen47": 12.8, "unseen46": 13.0, "two_streets": 24.1},
+    {"outs": 7, "unseen47": 14.9, "unseen46": 15.2, "two_streets": 27.8},
+    {"outs": 8, "unseen47": 17.0, "unseen46": 17.4, "two_streets": 31.5},
+    {"outs": 9, "unseen47": 19.1, "unseen46": 19.6, "two_streets": 35.0},
+    {"outs": 10, "unseen47": 21.3, "unseen46": 21.7, "two_streets": 38.4},
+    {"outs": 11, "unseen47": 23.4, "unseen46": 23.9, "two_streets": 41.7},
+    {"outs": 12, "unseen47": 25.5, "unseen46": 26.1, "two_streets": 45.0},
+    {"outs": 13, "unseen47": 27.7, "unseen46": 28.3, "two_streets": 48.1},
+    {"outs": 14, "unseen47": 29.8, "unseen46": 30.4, "two_streets": 51.2},
+    {"outs": 15, "unseen47": 31.9, "unseen46": 32.6, "two_streets": 54.1}
+  ],
+  "common_draws": [
+    {"draw": "gutshot", "outs": 4, "card_printed": {"next_card_pct": 9, "by_the_river_pct": 17}, "note": "~4 outs clean"},
+    {"draw": "two overcards", "outs": 6, "card_printed": {"next_card_pct": 13, "by_the_river_pct": 24}, "note": "dirty vs made pairs"},
+    {"draw": "open-ended straight", "outs": 8, "card_printed": {"next_card_pct": 17, "by_the_river_pct": 32}},
+    {"draw": "flush draw", "outs": 9, "card_printed": {"next_card_pct": 19, "by_the_river_pct": 35}},
+    {"draw": "FD + gutshot", "outs": 12},
+    {"draw": "FD + OESD", "outs": 15, "note": "combo draw - raise it"},
+    {"draw": "set to full house/quads (flop->river)", "outs": 7, "two_streets": 27.8},
+    {"draw": "pocket pair to set (preflop->flop)", "outs": 2, "approx_pct": 11.8, "card_printed": {"flop_to_river_pct": 8}}
+  ],
+  "pot_odds_break_even": [
+    {"pot_odds": "1:1", "required_equity_pct": 50.0},
+    {"pot_odds": "1.5:1", "required_equity_pct": 40.0},
+    {"pot_odds": "2:1", "required_equity_pct": 33.3},
+    {"pot_odds": "2.5:1", "required_equity_pct": 28.6},
+    {"pot_odds": "3:1", "required_equity_pct": 25.0},
+    {"pot_odds": "3.5:1", "required_equity_pct": 22.2},
+    {"pot_odds": "4:1", "required_equity_pct": 20.0},
+    {"pot_odds": "5:1", "required_equity_pct": 16.7},
+    {"pot_odds": "6:1", "required_equity_pct": 14.3},
+    {"pot_odds": "8:1", "required_equity_pct": 11.1},
+    {"pot_odds": "10:1", "required_equity_pct": 9.1}
+  ],
+  "implied_odds_guide": {
+    "set_mining_22_66": "need ~15-20x the open in effective stacks vs the raiser; more if callers behind may squeeze",
+    "suited_connectors_call": "implied from 2 pair+/straights/flushes; require 3%+ cold-call with position",
+    "flush_draw_multiway": "implied improves with 2+ callers; still respect the nut-only rule vs nits",
+    "river_payoff_estimate": "stations: add 25-50% implied to flop/turn calls; nits: discount 25%"
+  },
+  "spr_commitment": {
+    "spr_le_3": "top pair+ commits (stack off plan)",
+    "spr_3_to_6": "two pair+ commits; one pair controls pot",
+    "spr_ge_6": "sets/straights+ only for stacks; everything else pot control"
+  },
+  "combinatorics": {
+    "specific_pair": 6,
+    "specific_offsuit": 12,
+    "specific_suited": 4,
+    "AK_total": 16,
+    "AA_or_KK_hands_remaining_after_holding_an_ace": 6
+  }
+}

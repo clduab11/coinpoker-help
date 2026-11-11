@@ -27,6 +27,10 @@ pub struct DecisionView {
     pub confidence: Option<f64>,
 }
 
+/// Decision view: pure formatting helpers and optional panel rendering.
+/// The formatting methods are exercised by tests and the `desktop` panel;
+/// the default bin profile uses the struct only through `summary` callers.
+#[allow(dead_code)]
 impl DecisionView {
     /// Format pot odds as `3.2:1` (None when facing no bet).
     pub fn pot_odds_ratio_label(&self) -> Option<String> {

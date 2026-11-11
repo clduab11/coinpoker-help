@@ -124,9 +124,14 @@ history or advice. Private original/event diagnostics, including
 `diagnostic-attempts-only`, are not admitted observations.
 
 Some client windows draw the CoinPoker logo and `NLH` number inside their frame
-but expose only `CoinPoker` as the OS title. A confirmed private selector can
-use that exact OS title. This is **not** an automatic lobby fallback: it requires
-explicit user confirmation and still fails on multiple visible matches. Source
+but expose only `CoinPoker` as the OS title, and the client reuses that same title
+for its lobby window. A confirmed private selector can use that exact OS title.
+When several visible windows match, the selector keeps only those whose
+dimensions can present the calibrated table surface without letterbox bars, so
+the lobby is discarded and the table is selected; if no single table surface
+remains, attachment still fails closed. This is **not** a general lobby
+classifier: it is metadata-only geometry, requires explicit user confirmation for
+the title rule, and pins the selected PID/HWND without a size pin. Source
 identity, current dimensions and perception-quality gates stay independent;
 transition/loading/lobby captures are not positive table labels.
 
@@ -373,8 +378,8 @@ clears an active recommendation once; later valid input may recover.
   remains a limitation, and currency-glyph handling is untested.
 - Weights remain local-only and nonredistributed. Template matching is an option
   for the user's decision, not an implemented or validated substitute for Laya.
-- Root `lobby-screengrab.png` remains for the user to delete. The private eval-only
-  copy and the reference PNGs/PDF are retained; the helper does not delete them.
+- Root `lobby-screengrab.png` was removed in the 2026-11-10 decruft. The private
+  eval-only copy and the reference PNGs/PDF are retained.
 
 ## Validation
 

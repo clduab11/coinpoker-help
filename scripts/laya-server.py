@@ -19,9 +19,10 @@ API (loopback only, concurrent HTTP with one GPU admission slot):
         response {model, pass, answers:{qid:{type, choice?, probabilities?, noul?, confidence,
                   truncated}}, segments?, timing_ms:{decode, prep, predict}}
   POST /v1/laya/predict-batch -> {model, batch:[predict bodies]} for up to six stack passes.
-       With batch_kind "readout": exactly [p0, Pot, seat1, seat2] (or 3/4, 5/6), or [p0, Board].
+       With batch_kind "readout": exactly [p0, Pot, seat1, seat2] (or 3/4, 5/6),
+       [p0, Pot, seat1..seat6], or [p0, Board].
        Readout p0 requires exactly the original numeric (4) or board (5) gate questions.
-       At most 40 question rows and 25 prepared images; independent results, shared timing only.
+       At most 64 question rows and 64 prepared images; independent results, shared timing only.
 
 Hygiene: never logs or echoes request content; errors are {"error": "<code>"}; bounded body,
 image and question limits; images are never written to disk. torch / laya / PIL / numpy are
@@ -86,6 +87,7 @@ from laya_server_validation import (
     SCENE_QUESTIONS,
     SOCKET_TIMEOUT,
     STACK_PASSES,
+    SEATED_PASSES,
     WAGER_NOTE,
     WAGER_PASSES,
     answer_diagnostics,
@@ -493,10 +495,18 @@ def handle_predict(engine, alias, body_bytes, log_fn=None, *, experimental_autho
         if note != SCENE_NOTE or questions != expected:
             return 400, {"error": "scene-template-mismatch"}
         floor = scene_capability["fitted_floor"]
-    if not experiment and pid != "doctor_probe" and (pid not in ACCEPTANCE_PASSES and wager_capability is None and scene_capability is None
-                                 or type(floor) not in (int, float)
-                                 or not 0 <= floor <= 1 or not math.isfinite(floor)):
-        return 503, {"error": "acceptance-floor-unavailable"}
+    if not experiment and pid != "doctor_probe":
+        seated = pid in SEATED_PASSES
+        if (pid not in ACCEPTANCE_PASSES and not seated
+                and wager_capability is None and scene_capability is None):
+            return 503, {"error": "acceptance-floor-unavailable"}
+        # The fitted table never covered the seated passes: a null floor is the
+        # contract there. Everywhere else a missing floor still fails closed.
+        if floor is None and not seated:
+            return 503, {"error": "acceptance-floor-unavailable"}
+        if floor is not None and (type(floor) not in (int, float)
+                                  or not 0 <= floor <= 1 or not math.isfinite(floor)):
+            return 503, {"error": "acceptance-floor-unavailable"}
     try:
         images, questions, segments, decode_ms, prep_ms = decode_and_prepare_pass(
             engine, layout, style, raw, questions
@@ -568,7 +578,8 @@ def handle_predict_batch(engine, alias, body_bytes, log_fn=None):
     if readout:
         groups = [("p0_full", "p2_board")] + [
             ("p0_full", "p3_pot", "p5_seat_%d_stack" % seat, "p5_seat_%d_stack" % (seat+1))
-            for seat in (1, 3, 5)]
+            for seat in (1, 3, 5)] + [
+            tuple(["p0_full", "p3_pot"] + ["p5_seat_%d_stack" % seat for seat in range(1, 7)])]
         if (tuple(ids) not in groups or any(
                 any(key in request for key in ("experimental_descriptor", "wager_capability", "scene_capability"))
                 for request in requests)):
@@ -815,7 +826,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
     block_on_close = False
     allow_reuse_address = True
 
-    def __init__(self, address, handler, max_requests=16):
+    def __init__(self, address, handler, max_requests=64):
         self.requests = threading.BoundedSemaphore(max_requests)
         super().__init__(address, handler)
 

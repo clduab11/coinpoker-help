@@ -5,6 +5,10 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use core_engine::opponent::observer::{Capture, Evidence, Id, Observer, Snapshot, MAX_EVENT_VIEW};
+use core_engine::opponent::observing::{
+    Frame as ObservingFrame, Reading, Tracker as ObservingTracker,
+};
 use ingest::capture::{CaptureError, Frame, PlatformCapture, WindowCapturer};
 use ingest::discovery::DiscoveryConfig;
 use ingest::laya::LayaBackend;
@@ -18,8 +22,6 @@ use ingest::runtime::{
 use ingest::screen::parse_screen_output;
 #[cfg(test)]
 use ingest::vlm::VlmBackend;
-use opponent_model::observer::{Capture, Evidence, Id, Observer, Snapshot, MAX_EVENT_VIEW};
-use opponent_model::observing::{Frame as ObservingFrame, Reading, Tracker as ObservingTracker};
 use serde_json::json;
 
 use crate::config::Options;
@@ -60,7 +62,7 @@ fn analyze_frame(
     pipeline: &Pipeline,
     frame: &Frame,
     deadline: Instant,
-) -> Result<Analysis<ui::widgets::DecisionView>, InferenceFailure> {
+) -> Result<Analysis<crate::ui::widgets::DecisionView>, InferenceFailure> {
     let output = backend
         .analyze_with_deadline(frame, &ingest::prompt::build_analysis_prompt(), deadline)
         .map_err(|error| InferenceFailure { code: error.code() })?;
@@ -72,7 +74,7 @@ fn analyze_laya_frame(
     pipeline: &Pipeline,
     frame: &Frame,
     deadline: Instant,
-) -> Result<Analysis<ui::widgets::DecisionView>, InferenceFailure> {
+) -> Result<Analysis<crate::ui::widgets::DecisionView>, InferenceFailure> {
     let output = backend
         .analyze_observation_with_deadline(frame, deadline)
         .map_err(|error| InferenceFailure { code: error.code() })?;
@@ -83,7 +85,7 @@ pub(crate) fn finish_laya_analysis(
     mut output: ingest::laya::LayaAnalysis,
     pipeline: Option<&Pipeline>,
     deadline: Instant,
-) -> Result<Analysis<ui::widgets::DecisionView>, InferenceFailure> {
+) -> Result<Analysis<crate::ui::widgets::DecisionView>, InferenceFailure> {
     let completed = if Instant::now() >= deadline {
         Err(InferenceFailure {
             code: DECISION_DEADLINE_CODE,
@@ -132,7 +134,7 @@ fn finish_analysis(
     output: ingest::vlm::VlmOutput,
     pipeline: Option<&Pipeline>,
     deadline: Instant,
-) -> Result<Analysis<ui::widgets::DecisionView>, InferenceFailure> {
+) -> Result<Analysis<crate::ui::widgets::DecisionView>, InferenceFailure> {
     // Error codes are typed constants, never model payloads or parser messages.
     let observation =
         parse_screen_output(&output).map_err(|error| InferenceFailure { code: error.code() })?;
@@ -140,6 +142,11 @@ fn finish_analysis(
         return Err(InferenceFailure {
             code: DECISION_DEADLINE_CODE,
         });
+    }
+    // Session reads (PLAN Phase 1): fold this state in before deciding so the
+    // exploit layer sees the freshest per-opponent picture.
+    if let (Some(pipeline), Some(state)) = (pipeline, observation.state.as_ref()) {
+        pipeline.feed().observe_state(state);
     }
     let recommendation = observation
         .state
@@ -236,7 +243,7 @@ fn leased_record(
 }
 
 pub(crate) fn event_record(
-    event: LiveEvent<ui::widgets::DecisionView>,
+    event: LiveEvent<crate::ui::widgets::DecisionView>,
     now_ms: u64,
     emitted_at_unix_ms: u64,
     config: &RuntimeConfig,
@@ -258,8 +265,14 @@ pub(crate) fn event_record(
             value,
             valid_for_ms,
         } => {
-            let record =
+            let mut record =
                 serde_json::to_value(value).map_err(|e| RunError::Message(e.to_string()))?;
+            if let Some(map) = record.as_object_mut() {
+                map.insert(
+                    "finished_in_ms".into(),
+                    json!(now_ms.saturating_sub(ticket.captured_at_ms)),
+                );
+            }
             return Ok(leased_record(
                 record,
                 "decision",
@@ -781,6 +794,66 @@ fn load_private_registry<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).map_err(|_| invalid())
 }
 
+/// Poll the CDP lobby surface: emits a `lobby-snapshot` on every listing
+/// change, and a `cdp-status` record on every reachability transition (so a
+/// client close/reopen is visible in the stream, not a silent gap).
+/// `max_ticks` bounds the loop for tests; `None` runs until process exit.
+pub(crate) fn run_cdp_poller(
+    port: u16,
+    interval: std::time::Duration,
+    max_ticks: Option<u32>,
+    sink: &mut impl FnMut(&serde_json::Value),
+) {
+    use ingest::adapter::cdp;
+    let mut last_seq: Option<u64> = None;
+    let mut last_state: Option<&'static str> = None;
+    let mut ticks = 0u32;
+    loop {
+        let state: &'static str = match cdp::lobby_snapshot(port) {
+            Ok(Some(snapshot)) => {
+                if last_seq != Some(snapshot.seq) || last_state != Some("snapshot") {
+                    last_seq = Some(snapshot.seq);
+                    sink(&json!({
+                        "kind": "lobby-snapshot",
+                        "adapter": "cdp",
+                        "extraction": cdp::CDP_EXTRACTION_VERSION,
+                        "path": snapshot.path,
+                        "user": snapshot.user,
+                        "wallet": snapshot.wallet_raw,
+                        "wallet_amount": snapshot.wallet_amount,
+                        "seq": snapshot.seq,
+                        "captured_at_ms": snapshot.captured_at_ms,
+                        "tables": snapshot.tables,
+                    }));
+                }
+                "snapshot"
+            }
+            Ok(None) => {
+                if last_state != Some("no-lobby-page") {
+                    sink(&json!({"kind": "cdp-status", "state": "no-lobby-page", "port": port}));
+                }
+                "no-lobby-page"
+            }
+            Err(error) => {
+                // Detail only on the transition, so steady state stays quiet.
+                if last_state != Some("unavailable") {
+                    sink(&json!({
+                        "kind": "cdp-status", "state": "unavailable",
+                        "detail": error, "port": port
+                    }));
+                }
+                "unavailable"
+            }
+        };
+        last_state = Some(state);
+        ticks += 1;
+        if max_ticks == Some(ticks) {
+            return;
+        }
+        std::thread::sleep(interval);
+    }
+}
+
 pub fn run(options: Options) -> Result<(), RunError> {
     if !cfg!(target_os = "windows") {
         return Err(RunError::Message(
@@ -789,6 +862,24 @@ pub fn run(options: Options) -> Result<(), RunError> {
         ));
     }
     emit(&configuration_event(&options))?;
+
+    // CDP lobby poller (Phase 1): observes the Electron lobby surface over
+    // loopback CDP and emits `lobby-snapshot` records whenever the listing
+    // changes. Spawned before the identity gate so it still reports when the
+    // capture identity is uncalibrated. Fail-quiet.
+    if options.cdp_enabled {
+        let port = options.cdp_port;
+        std::thread::spawn(move || {
+            run_cdp_poller(
+                port,
+                std::time::Duration::from_millis(2_000),
+                None,
+                &mut |record| {
+                    let _ = emit(record);
+                },
+            );
+        });
+    }
     if !options.discovery.has_identity() {
         emit(
             &json!({"schema_version":2,"event":"status","state":"configuration_required",
@@ -813,9 +904,19 @@ pub fn run(options: Options) -> Result<(), RunError> {
             .with_scene_registry(load_private_registry(root, &path)?)
             .map_err(|_| RunError::Message("invalid private scene registry".into()))?;
     }
-    let pipeline = Pipeline::new();
+    let pipeline = Pipeline::with_seed(options.seed);
+    // Doorbell: the worker pings on completion so the loop wakes immediately
+    // instead of waiting out the capture cadence.
+    let doorbell = std::sync::Arc::new((std::sync::Mutex::new(0u64), std::sync::Condvar::new()));
+    let worker_doorbell = doorbell.clone();
     let worker = ThreadWorker::new(move |job| {
-        analyze_laya_frame(&backend, &pipeline, &job.frame, job.deadline)
+        let result = analyze_laya_frame(&backend, &pipeline, &job.frame, job.deadline);
+        let (lock, cvar) = &*worker_doorbell;
+        if let Ok(mut seen) = lock.lock() {
+            *seen += 1;
+        }
+        cvar.notify_all();
+        result
     });
     let poll_ms = options.runtime.poll_ms;
     let config = options.runtime.clone();
@@ -830,6 +931,11 @@ pub fn run(options: Options) -> Result<(), RunError> {
     let recording = capture.recording();
     let mut runtime = LiveRuntime::new(capture, worker, options.discovery, options.runtime)
         .map_err(|e| RunError::Message(e.into()))?;
+    // Live runs use the field lanes: per-region change detection keeps partial
+    // candidates coherent instead of clearing them on every felt animation tick,
+    // and the activity sample feeds the admission schedule. The bounded probe
+    // also seeds partial consensus before the first gate observation.
+    runtime.enable_activity_probe();
     let clock = MonotonicClock::default();
     let mut history = AdmittedHistory::new()?;
     loop {
@@ -897,7 +1003,16 @@ pub fn run(options: Options) -> Result<(), RunError> {
                 }
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(poll_ms));
+        // Event-driven wait (Phase 1): wake on the worker doorbell or at the
+        // runtime's next due deadline; `poll_ms` survives only as the capture
+        // cadence cap for idle stretches.
+        let due_ms = runtime.next_wake_in_ms(clock.now_ms());
+        let wait = std::time::Duration::from_millis(due_ms.min(poll_ms))
+            .max(std::time::Duration::from_millis(2));
+        let (lock, cvar) = &*doorbell;
+        if let Ok(guard) = lock.lock() {
+            let _ = cvar.wait_timeout(guard, wait);
+        }
     }
 }
 

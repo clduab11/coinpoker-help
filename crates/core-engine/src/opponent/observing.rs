@@ -6,15 +6,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::betting::{
+use crate::opponent::betting::{
     additional_call_cost, pot_odds, BettingRound, CallContext, CallCost, PotAccounting, PotOdds,
 };
-use crate::classifier::Archetype;
-use crate::observer::{
+use crate::opponent::classifier::Archetype;
+use crate::opponent::observer::{
     Badge, Capture, ChipMovement, Evidence, GapReason, HandStart, Id, LedgerEntry, Observer,
     SeatSnapshot, Snapshot, Street, Summary, MAX_SESSION_EVENTS, PHYSICAL_SEATS,
 };
-use crate::position::{Position, PositionEvidence, PositionMap};
+use crate::opponent::position::{Position, PositionEvidence, PositionMap};
 
 pub const MAX_FIELD_AGE_MS: u64 = 5_000;
 const SEAT_FIELDS: usize = 6;
@@ -335,7 +335,7 @@ impl Tracker {
                 self.hand = hand;
                 let voluntary_badge = frame.seats.iter().any(|seat| {
                     seat.badge.as_ref().and_then(|r| r.evidence.known()).is_some_and(|badge| {
-                        matches!(badge, Badge::Action(action) if action.forced.known() == Some(&crate::observer::ForcedAction::Voluntary))
+                        matches!(badge, Badge::Action(action) if action.forced.known() == Some(&crate::opponent::observer::ForcedAction::Voluntary))
                     })
                 });
                 if street == Some(Street::Preflop) && identity_valid && !voluntary_badge {
@@ -733,9 +733,9 @@ fn valid_frame(frame: &Frame, now: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::betting::PotConvention;
-    use crate::observer::{ActionBadge, ActionBasis, ActionKind, ForcedAction};
-    use crate::position::ButtonPolicy;
+    use crate::opponent::betting::PotConvention;
+    use crate::opponent::observer::{ActionBadge, ActionBasis, ActionKind, ForcedAction};
+    use crate::opponent::position::ButtonPolicy;
 
     fn capture(sequence: u64) -> Capture {
         Capture {

@@ -1,0 +1,57 @@
+{
+  "meta": {
+    "game": "NLH 6-max",
+    "notation": "Range tokens use the repo dialect parsed by core-engine::ranges (e.g. '22+', 'A2s+', 'K9s-K5s'). Dashes are inclusive same-high-card runs; '+' widens to the best hand of the class; s=suited, o=offsuit.",
+    "stacks": "100bb baseline; scale open sizes, not ranges, with stack depth.",
+    "provenance": {
+      "opens": "EXACT mirror of the user's card screenshot-2.png ('Before the flop, six-handed') as encoded in core-engine::ranges::RANGE_TIERS; drift-guarded by bin/tests/strategy_fuel.rs. Card mapping: tier 1 from any seat (14%), tier 2 adds from HJ/CO (26%), tier 3 adds on SB/BTN (43%); BB never opens.",
+      "playbook": "threebet/call/defense tiers are playbook-authored (the card covers opens only)."
+    }
+  },
+  "open_tiers": {
+    "tier1_from_any_seat_14pct": ["22+", "ATs+", "A5s-A2s", "KTs+", "QTs+", "JTs", "T9s", "98s", "AJo+", "KQo"],
+    "tier2_add_hj_co_26pct": ["A9s-A6s", "K9s-K5s", "Q9s", "Q8s", "J9s", "J8s", "T8s", "97s", "87s", "76s", "65s", "54s", "ATo", "A9o", "A8o", "KJo", "KTo", "QJo"],
+    "tier3_add_sb_btn_43pct": ["K4s-K2s", "Q7s-Q4s", "J7s", "J6s", "T7s", "T6s", "96s", "95s", "86s", "85s", "75s", "64s", "A7o-A2o", "K9o", "K8o", "QTo", "Q9o", "JTo", "J9o", "T9o", "98o"]
+  },
+  "positions": {
+    "UTG": {
+      "open": ["22+", "ATs+", "A5s-A2s", "KTs+", "QTs+", "JTs", "T9s", "98s", "AJo+", "KQo"]
+    },
+    "HJ": {
+      "open": ["22+", "ATs+", "A5s-A2s", "KTs+", "QTs+", "JTs", "T9s", "98s", "AJo+", "KQo", "A9s-A6s", "K9s-K5s", "Q9s", "Q8s", "J9s", "J8s", "T8s", "97s", "87s", "76s", "65s", "54s", "ATo", "A9o", "A8o", "KJo", "KTo", "QJo"]
+    },
+    "CO": {
+      "open": ["22+", "ATs+", "A5s-A2s", "KTs+", "QTs+", "JTs", "T9s", "98s", "AJo+", "KQo", "A9s-A6s", "K9s-K5s", "Q9s", "Q8s", "J9s", "J8s", "T8s", "97s", "87s", "76s", "65s", "54s", "ATo", "A9o", "A8o", "KJo", "KTo", "QJo"]
+    },
+    "BTN": {
+      "open": ["22+", "ATs+", "A5s-A2s", "KTs+", "QTs+", "JTs", "T9s", "98s", "AJo+", "KQo", "A9s-A6s", "K9s-K5s", "Q9s", "Q8s", "J9s", "J8s", "T8s", "97s", "87s", "76s", "65s", "54s", "ATo", "A9o", "A8o", "KJo", "KTo", "QJo", "K4s-K2s", "Q7s-Q4s", "J7s", "J6s", "T7s", "T6s", "96s", "95s", "86s", "85s", "75s", "64s", "A7o-A2o", "K9o", "K8o", "QTo", "Q9o", "JTo", "J9o", "T9o", "98o"]
+    },
+    "SB": {
+      "open": ["22+", "ATs+", "A5s-A2s", "KTs+", "QTs+", "JTs", "T9s", "98s", "AJo+", "KQo", "A9s-A6s", "K9s-K5s", "Q9s", "Q8s", "J9s", "J8s", "T8s", "97s", "87s", "76s", "65s", "54s", "ATo", "A9o", "A8o", "KJo", "KTo", "QJo", "K4s-K2s", "Q7s-Q4s", "J7s", "J6s", "T7s", "T6s", "96s", "95s", "86s", "85s", "75s", "64s", "A7o-A2o", "K9o", "K8o", "QTo", "Q9o", "JTo", "J9o", "T9o", "98o"],
+      "note": "Raise-or-fold first-in (card covers opens only); complete only vs a confirmed passive BB."
+    },
+    "BB": {
+      "open": [],
+      "note": "Never opens. Playbook defense tiers below.",
+      "threebet_value": ["QQ+", "AKs", "AKo"],
+      "threebet_bluff_ip": ["A5s", "A4s", "KQs", "KJs"],
+      "threebet_bluff_oop": ["A5s", "A4s"],
+      "call_vs_UTG_open": ["22+", "AQs", "AJs", "KQs", "QJs", "JTs", "T9s", "98s", "87s", "76s", "65s"],
+      "call_vs_BTN_open": ["22+", "A2o+", "K8o+", "Q9o+", "J9o+", "T8o+", "98o", "A2s+", "K3s+", "Q6s+", "J7s+", "T7s+", "96s+", "85s+", "74s+", "63s+", "52s+"]
+    }
+  },
+  "vs_threebet": {
+    "fourbet_value": ["QQ+", "AKs", "AKo"],
+    "fourbet_bluff": ["A5s", "A4s"],
+    "call_ip": ["99+", "AQs", "AJs", "KQs", "JTs"],
+    "call_oop": ["JJ+", "AQs", "KQs"],
+    "fold_default": true
+  },
+  "sizings": {
+    "open_first_in": "2.2-2.5bb standard; 3bb vs limpers behind; BTN/SB may mix 2.2/3.0",
+    "threebet_ip": "3x open (plus 1bb per caller)",
+    "threebet_oop": "4x open",
+    "fourbet": "2.2-2.5x 3bet",
+    "cbet_srp": "33% on dry, 66-75% on wet; 100% with sets on draw-heavy boards"
+  }
+}

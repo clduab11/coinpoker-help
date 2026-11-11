@@ -38,7 +38,10 @@ Configuration (CLI > nonempty environment > defaults):\n\
   --changed-fraction N        COINPOKER_CHANGED_FRACTION (0.000001..1)\n\
   --local-fraction N          COINPOKER_LOCAL_FRACTION (0.000001..1)\n\
   --tile-size N               COINPOKER_TILE_SIZE (8..128)\n\
-  --sample-stride N           COINPOKER_SAMPLE_STRIDE (1..64)\n\n\
+  --sample-stride N           COINPOKER_SAMPLE_STRIDE (1..64)\n\
+  --seed N                    COINPOKER_SEED (positive; seeded replay)\n\
+  --cdp-port N                COINPOKER_CDP_PORT (1..=65535, default 9222)\n\
+  --cdp 0|1                   COINPOKER_CDP (lobby poller on/off, default on)\n\n\
 Approved observing capabilities (capture mode, CLI opt-in only):\n\
   --wager-registry .local/PATH.json   Versioned per-seat proof; unapproved seats stay unknown\n\n\
   --scene-registry .local/PATH.json   Versioned seat-scene proof; disabled without approval\n\n\
@@ -66,6 +69,13 @@ pub struct Options {
     pub recording: Option<RecorderConfig>,
     pub wager_registry: Option<String>,
     pub scene_registry: Option<String>,
+    /// When set, decision-affecting RNG is seeded (PLAN §7 replay).
+    pub seed: Option<u64>,
+    /// CDP port for the Electron lobby surface; launch the client with
+    /// `--remote-debugging-port=<port>` (Phase 0 recipe).
+    pub cdp_port: u16,
+    /// False silences the lobby poller (`--cdp 0` / `COINPOKER_CDP=0`).
+    pub cdp_enabled: bool,
 }
 
 const RECORD_FLAGS: &[&str] = &[
@@ -99,6 +109,9 @@ const FLAGS: &[(&str, &str)] = &[
     ("--local-fraction", "COINPOKER_LOCAL_FRACTION"),
     ("--tile-size", "COINPOKER_TILE_SIZE"),
     ("--sample-stride", "COINPOKER_SAMPLE_STRIDE"),
+    ("--seed", "COINPOKER_SEED"),
+    ("--cdp-port", "COINPOKER_CDP_PORT"),
+    ("--cdp", "COINPOKER_CDP"),
 ];
 
 pub fn parse(
@@ -141,6 +154,9 @@ pub fn parse(
         recording: None,
         wager_registry: None,
         scene_registry: None,
+        seed: None,
+        cdp_port: 9222,
+        cdp_enabled: true,
     };
     let recording_requested = RECORD_FLAGS.iter().any(|flag| overrides.contains_key(flag));
     if recording_requested && !matches!(options.mode, Mode::Capture | Mode::Help) {
@@ -246,6 +262,25 @@ pub fn parse(
     );
     set!(options.runtime.change.tile_size, "--tile-size");
     set!(options.runtime.change.sample_stride, "--sample-stride");
+    if let Some(seed) = number::<u64>(value("--seed"), "--seed")? {
+        if seed == 0 {
+            return Err("--seed must be positive".into());
+        }
+        options.seed = Some(seed);
+    }
+    if let Some(port) = number::<u16>(value("--cdp-port"), "--cdp-port")? {
+        if port == 0 {
+            return Err("--cdp-port must be 1..=65535".into());
+        }
+        options.cdp_port = port;
+    }
+    if let Some(cdp) = value("--cdp") {
+        options.cdp_enabled = match cdp.trim() {
+            "0" | "off" | "false" => false,
+            "1" | "on" | "true" => true,
+            other => return Err(format!("--cdp expects 0/1, got {other}")),
+        };
+    }
     if recording_requested {
         let directory = overrides
             .get("--record-dir")
@@ -276,6 +311,35 @@ pub fn parse(
         validate_vlm_endpoint(&options.vlm.endpoint)?;
     }
     Ok(options)
+}
+
+#[cfg(test)]
+mod adapter_config_tests {
+    use super::parse;
+
+    #[test]
+    fn parses_seed_and_cdp_options() {
+        let options = parse([], |name| match name {
+            "COINPOKER_SEED" => Some("42".into()),
+            "COINPOKER_CDP_PORT" => Some("9333".into()),
+            "COINPOKER_CDP" => Some("0".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(options.seed, Some(42));
+        assert_eq!(options.cdp_port, 9333);
+        assert!(!options.cdp_enabled);
+    }
+
+    #[test]
+    fn cdp_defaults_and_bad_values() {
+        let options = parse([], |_| None).unwrap();
+        assert_eq!(options.cdp_port, 9222);
+        assert!(options.cdp_enabled);
+        assert_eq!(options.seed, None);
+        assert!(parse([], |name| (name == "COINPOKER_CDP").then(|| "maybe".into())).is_err());
+        assert!(parse([], |name| (name == "COINPOKER_SEED").then(|| "0".into())).is_err());
+    }
 }
 
 fn parse_lobby_size(value: &str) -> Result<(u32, u32), String> {

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::observer::{ActionKind, ActionRecord, Evidence, ForcedAction, PHYSICAL_SEATS};
+use crate::opponent::observer::{ActionKind, ActionRecord, Evidence, ForcedAction, PHYSICAL_SEATS};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -207,7 +207,7 @@ impl BettingRound {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::observer::{ActionBasis, Id};
+    use crate::opponent::observer::{ActionBasis, Id};
 
     fn action(
         seat: u8,

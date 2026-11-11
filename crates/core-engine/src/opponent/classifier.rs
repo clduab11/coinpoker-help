@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::features::PlayerStats;
+use crate::opponent::features::PlayerStats;
 
 /// Opponent archetypes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

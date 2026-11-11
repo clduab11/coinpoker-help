@@ -6,7 +6,7 @@
 
 use std::io::{self, Write};
 
-use crate::widgets::DecisionView;
+use crate::ui::widgets::DecisionView;
 
 /// A transport for headless output.
 pub trait Emit {

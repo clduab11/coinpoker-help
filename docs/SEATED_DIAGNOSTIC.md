@@ -23,7 +23,10 @@ scope, current blocker, execution loop, and definition of done.
 Historical "separately authorized attempt" / "no further run authorized" wording
 below is not a requirement to ask again for each agent-directed run of that task.
 Existing source sessions still retire permanently; retries use fresh sessions and
-evidence. The two-baseline/two-changed qualifier remains for activity/history only;
+evidence. The two-baseline/two-changed qualifier remains for activity/history only, and its
+per-region baseline is now honoured while the probe keeps observing the region and dropped
+only after `BASELINE_ABSENT_BUDGET` (8) consecutive samples in which the region could not be
+observed — never by wall clock, so qualification no longer depends on inference latency;
 the former 30-second startup timeout is removed under this GO. Independently admitted
 partial readouts do not require activity qualification. Data integrity and
 honest verification remain separate requirements.
@@ -170,7 +173,11 @@ its evidence and terminal receipts were preserved.
 
 The checkpoint, calibration files, canonical prompts/option order, RGB conversion,
 and shared crop/glyph preprocessing were checked against the installed it1 contract.
-The observed rendering has a near-black surface, unlike the green-felt originals.
+The client's current rendering is green felt, matching the green-felt originals; the
+near-black surface seen during this investigation was a transient client graphics glitch,
+not the steady state (felt-region green fraction returned to 1.000 after a client restart,
+measured 0.781 / 0.792 / 1.000 across frames;
+`.local/laya/probe/phase0b-20261025/PHASE0B-RECEIPT.md`).
 Saved-frame diagnostic probes at both trained sizes and with the inferred titlebar
 removed still reject it. The green original passes p0 and the real lobby negative
 remains rejected. Desktop screenshots agree with the saved geometry/background,
@@ -315,7 +322,12 @@ test; synchronous OS calls cannot be preempted by that wait budget.
 Offline Rust replay increased pixel-eligible frames from 7 to 24 of 27 while preserving
 every original PNG hash and source clock; its busy spy generated no predictions.
 Conditional replay at the old cadence did not establish activity activation, and
-is not a substitute for actual model-to-Monitor evidence. Private evidence is under
+is not a substitute for actual model-to-Monitor evidence. That miss was later diagnosed to the
+per-region baseline lease: 5,000 ms of wall clock renewed only at `repeats == 2`, so at a slow
+sample cadence a genuine change's erase-and-confirm window outlived the lease and the change was
+discarded. The lease is now counted in samples (`BASELINE_ABSENT_BUDGET`, 8 consecutive
+unobservable samples) and never in milliseconds, and a fresh bounded live run activated at its
+real cadence — see `.local/preflight/PHASE2-RECEIPT.md`. Private evidence is under
 `.local/laya/train/automatic-inference-20261012/stability-investigation-20261012/`.
 
 ### Subsequent Authorized Live Checks

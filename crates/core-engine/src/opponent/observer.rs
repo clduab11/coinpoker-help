@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::classifier::Archetype;
+use crate::opponent::classifier::{Archetype, Classifier, ClassifierConfig};
+use crate::opponent::features::PlayerStats;
 
 pub const MAX_EVENT_VIEW: usize = 200;
 pub const MAX_SESSION_EVENTS: usize = 10_000;
@@ -1066,6 +1067,37 @@ impl Observer {
         self.seats[index].as_mut().unwrap().settled = true;
     }
 
+    /// Classify an occupant's tracked stats for the summary (PLAN Phase 1 bridge).
+    /// VPIP/PFR/aggression mirror `features::StatsAccumulator` semantics; the
+    /// classifier's own `min_hands` gate keeps sparse occupants at `Unknown`.
+    fn occupant_profile(stats: &Stats) -> Archetype {
+        if stats.hands == 0 {
+            return Archetype::Unknown;
+        }
+        let calls = stats.actions.calls;
+        let aggressive = stats.actions.bets.saturating_add(stats.actions.raises);
+        let aggression_factor = if calls == 0 {
+            if aggressive == 0 {
+                0.0
+            } else {
+                f64::MAX
+            }
+        } else {
+            aggressive as f64 / calls as f64
+        };
+        let features = PlayerStats {
+            hands: stats.hands.min(u64::from(u32::MAX)) as u32,
+            vpip: stats.vpip as f64 / stats.hands as f64,
+            pfr: stats.pfr as f64 / stats.hands as f64,
+            aggression_factor,
+            went_to_showdown: 0.0,
+            won_at_showdown: 0.0,
+        };
+        Classifier::new(ClassifierConfig::default())
+            .classify(&features)
+            .archetype
+    }
+
     pub fn summary(&self) -> Summary {
         let occupants = self
             .seats
@@ -1079,6 +1111,7 @@ impl Observer {
                     .get(&(capture.session_id, capture.table_id, state.occupant))
                     .cloned()
                     .unwrap_or_default();
+                let profile = Self::occupant_profile(&stats);
                 Some(OccupantSummary {
                     seat: seat as u8,
                     occupant_id: state.occupant,
@@ -1088,7 +1121,7 @@ impl Observer {
                     pfr_hands: stats.pfr,
                     vpip: (stats.hands != 0).then(|| stats.vpip as f64 / stats.hands as f64),
                     pfr: (stats.hands != 0).then(|| stats.pfr as f64 / stats.hands as f64),
-                    profile: Archetype::Unknown,
+                    profile,
                 })
             })
             .collect();
@@ -1225,6 +1258,27 @@ impl Observer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn occupant_profile_classifies_only_with_enough_hands() {
+        let mut stats = Stats {
+            hands: 25,
+            vpip: 20,
+            pfr: 3,
+            ..Stats::default()
+        };
+        stats.actions.calls = 5;
+        stats.actions.raises = 3;
+        stats.actions.bets = 8;
+        assert_eq!(Observer::occupant_profile(&stats), Archetype::Lag);
+
+        let thin = Stats {
+            hands: 5,
+            vpip: 4,
+            ..Stats::default()
+        };
+        assert_eq!(Observer::occupant_profile(&thin), Archetype::Unknown);
+    }
 
     fn capture(sequence: u64) -> Capture {
         Capture {
@@ -1718,7 +1772,7 @@ mod tests {
     }
 
     #[test]
-    fn full_raise_outcomes_do_not_automatically_enable_profiles_after_twenty_hands() {
+    fn full_raise_outcomes_classify_as_lag_after_the_minimum_hand_count() {
         let mut observer = Observer::default();
         for hand in 0..22 {
             let mut s = snapshot(hand * 3 + 1);
@@ -1736,7 +1790,9 @@ mod tests {
         assert_eq!(summary.occupants[0].eligible_hands, 22);
         assert_eq!(summary.occupants[0].vpip, Some(1.0));
         assert_eq!(summary.occupants[0].pfr, Some(1.0));
-        assert_eq!(summary.occupants[0].profile, Archetype::Unknown);
+        // PLAN Phase 1 bridge: at >= min_hands the occupant classifies
+        // (all raises, no calls => max aggression; loose => Lag).
+        assert_eq!(summary.occupants[0].profile, Archetype::Lag);
     }
 
     #[test]

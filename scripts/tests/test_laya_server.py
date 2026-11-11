@@ -349,7 +349,7 @@ class BatchTests(unittest.TestCase):
 
 
 class ReadoutBatchTests(unittest.TestCase):
-    def batch(self, seat=1, board=False):
+    def batch(self, seat=1, board=False, all_seats=False):
         source = next(p for p in json.loads((srv.ROOT / "crates/ingest/assets/laya/question-set.json")
                                            .read_text(encoding="utf-8"))["passes"] if p["id"] == "p0_full")
         ids = {"screen_kind", "ev_table_layout", "ev_readable"} | (
@@ -368,6 +368,10 @@ class ReadoutBatchTests(unittest.TestCase):
             slots = body(images_png_b64=[b64(png())]*5, questions={
                 "board_1_rank": {"type": "choice", "instructions": "Rank?", "criteria": ["A", "K"]}})
             requests = [core, slots]
+        elif all_seats:
+            stacks = BatchTests().batch(seats=range(1, 7))["batch"]
+            pot = {**stacks[0], "pass": "p3_pot", "glyph_style": "white"}
+            requests = [core, pot, *stacks]
         else:
             stacks = BatchTests().batch(seats=(seat, seat+1))["batch"]
             pot = {**stacks[0], "pass": "p3_pot", "glyph_style": "white"}
@@ -399,6 +403,26 @@ class ReadoutBatchTests(unittest.TestCase):
             self.assertEqual(set(result["results"][0]["answers"]), set(value["batch"][0]["questions"]))
             self.assertTrue({"act_fold", "act_call", "act_raise", "hero_seat_index", "action_on_hero"}
                             .isdisjoint(result["results"][0]["answers"]))
+
+    def test_six_seat_readout_group_is_accepted_and_still_bounded(self):
+        value = self.batch(all_seats=True)
+        for request in value["batch"]:
+            request["acceptance_floor"] = 0
+        engine, logged = FakeEngine(), []
+        status, result = self.handle(engine, value, logged.append)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(engine.batch_calls), 1)
+        self.assertEqual([row["pass"] for row in result["results"]],
+                         ["p0_full", "p3_pot"] + ["p5_seat_%d_stack" % seat for seat in range(1, 7)])
+        self.assertTrue(all(row["timing_shared_batch"] for row in result["results"]))
+        # The readout contract stays bounded: one pass beyond the limit is refused
+        # before any decode, never truncated or split.
+        oversized = copy.deepcopy(value)
+        oversized["batch"].append(copy.deepcopy(value["batch"][-1]))
+        engine = FakeEngine()
+        engine.decode = Mock()
+        self.assertEqual(self.handle(engine, oversized), (400, {"error": "malformed"}))
+        engine.decode.assert_not_called()
 
     def test_missing_gate_extra_control_wrong_note_and_changed_original_specs_never_decode(self):
         for board in (False, True):
@@ -521,20 +545,20 @@ class ReadoutBatchTests(unittest.TestCase):
             self.assertTrue(all("segments" in result for result in result["results"][1:]))
             self.assertNotIn("amount", json.dumps(result))
 
-    def test_original_40_question_cap_and_25_image_limit_remain_fail_closed(self):
+    def test_readout_question_and_image_caps_remain_fail_closed(self):
         value = self.batch()
         engine = FakeEngine(n=8)
         status, result = self.handle(engine, value)
         self.assertEqual(status, 200)
         self.assertEqual(sum(len(images) for images, _, _ in engine.batch_calls[0]), 25)
         self.assertEqual(sum(len(p["answers"]) for p in result["results"]), 28)
-        self.assertEqual(srv.MAX_READOUT_QUESTIONS, 40)
-        value["batch"][0]["questions"] = {"q%d" % i: {"type": "noul", "instructions": "Visible?"} for i in range(17)}
+        self.assertEqual(srv.MAX_READOUT_QUESTIONS, 64)
+        value["batch"][0]["questions"] = {"q%d" % i: {"type": "noul", "instructions": "Visible?"} for i in range(41)}
         engine = FakeEngine()
         engine.decode = Mock()
         self.assertEqual(self.handle(engine, value), (400, {"error": "batch-too-large"}))
         engine.decode.assert_not_called()
-        engine = FakeEngine(n=9)
+        engine = FakeEngine(n=22)
         self.assertEqual(self.handle(engine, self.batch()), (400, {"error": "batch-too-large"}))
         self.assertEqual(engine.batch_calls, [])
 
@@ -2111,6 +2135,57 @@ class PolicyTests(unittest.TestCase):
                 read.return_value = content
                 with self.assertRaises(ValueError):
                     srv.dashboard.references()
+
+class SeatedPassTests(unittest.TestCase):
+    """Provisional seated passes are answerable with a null wire floor."""
+
+    def seated_body(self, pid):
+        if pid == "p1_hero_cards":
+            return body(**{"pass": pid, "layout": "slots", "style": "gold",
+                           "images_png_b64": [b64(png())] * 2,
+                           "questions": {
+                               "hero_1_rank": {"type": "choice", "instructions": "Rank?", "criteria": {"A": "ace", "K": "king"}},
+                               "hero_2_rank": {"type": "choice", "instructions": "Rank?", "criteria": {"Q": "queen", "J": "jack"}}}})
+        return body(**{"pass": pid, "layout": "glyphs", "glyph_style": "white",
+                       "images_png_b64": [b64(png())],
+                       "questions": {"g1": {"type": "choice", "instructions": "digit?", "criteria": {"1": "one", "0": "zero"}}}})
+
+    def test_every_seated_pass_answers_single_with_a_null_floor(self):
+        self.assertEqual(len(srv.SEATED_PASSES), 5)
+        for pid in sorted(srv.SEATED_PASSES):
+            with self.subTest(pid=pid):
+                status, payload = srv.handle_predict(
+                    FakeEngine(), ALIAS, json.dumps(self.seated_body(pid)).encode())
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["pass"], pid)
+                self.assertIsNone(payload["acceptance_floor"])
+                self.assertTrue(payload["answers"])
+
+    def test_present_but_invalid_seated_floor_fails_closed(self):
+        for floor in (float("nan"), -0.1, 1.01, "0.8"):
+            with self.subTest(floor=str(floor)):
+                engine = FakeEngine()
+                engine.acceptance_floors["p3_to_call"] = floor
+                status, payload = srv.handle_predict(
+                    engine, ALIAS, json.dumps(self.seated_body("p3_to_call")).encode())
+                self.assertEqual(status, 503)
+                self.assertEqual(payload, {"error": "acceptance-floor-unavailable"})
+
+    def test_seated_floor_present_is_returned_verbatim(self):
+        engine = FakeEngine()
+        engine.acceptance_floors["p3_hero_chips"] = 0.9
+        status, payload = srv.handle_predict(
+            engine, ALIAS, json.dumps(self.seated_body("p3_hero_chips")).encode())
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["acceptance_floor"], 0.9)
+
+    def test_unknown_pid_without_floor_still_rejects_before_decode(self):
+        engine = FakeEngine()
+        engine.decode = Mock(side_effect=AssertionError("must not decode"))
+        status, payload = srv.handle_predict(
+            engine, ALIAS, json.dumps(self.seated_body("p9_unknown")).encode())
+        self.assertEqual(status, 503)
+        self.assertEqual(payload, {"error": "acceptance-floor-unavailable"})
 
 
 if __name__ == "__main__":

@@ -88,10 +88,11 @@ Nothing is admitted, for two fail-closed reasons. First, `bin/live.rs:176` sets
 `crates/ingest/assets/laya/question-set.json` where thresholds are `{"initial": 0.8,
 "calibrated": false}`; with it false every snapshot is `GapReason::UnvalidatedSource`
 (238 of 238 accepted captures, `coverage.unvalidated_captures: 238`,
-`history.state: partial`). Second, the native child wrote 21,001,152 bytes of stdout
-against `MAX_LOG = 20 MiB` (`scripts/laya_capture.py:40,839,851`), so the session ended
-`receipt-invalid` / `status: failed` with `distinct_opportunities: 0`; the volume came
-from a `history` event on every frame that embedded the whole accumulated gap list.
+`history.state: partial`). Second, the native child wrote 21,001,152 bytes of stdout,
+past the then-20 MiB `MAX_LOG` bound (since raised to 64 MiB at `scripts/laya_capture.py:44`),
+so the session ended `receipt-invalid` / `status: failed` with `distinct_opportunities: 0`;
+the volume came from a `history` event on every frame that embedded the whole accumulated
+gap list.
 
 That `history` defect is fixed: a record now carries a monotonic cursor delta, with a
 complete view only at a bounded cadence or on target change, and no ledger event is
@@ -101,7 +102,7 @@ dropped or truncated. Re-measured on the live client on 2026-10-25
 of them complete views. The stream still reached 20,993,748 bytes at 475 s, now led by
 `perception_diagnostics` (506 records, 14,141,778 bytes, 67%) and `partial_observation`
 (4,038,476 bytes, 19%), so the operator authorized raising the diagnostic budget to
-64 MiB (`scripts/laya_capture.py:40`). That raises a hard text bound only; it changes no
+64 MiB (`scripts/laya_capture.py:44`). That raises a hard text bound only; it changes no
 admission, calibration or accuracy gate and adds no decision-path latency. Trimming that
 private telemetry is the follow-up that would let the budget come back down.
 
@@ -120,8 +121,8 @@ held-out split, Gate F is **FAIL**: board raw accuracy 0.40 over 30 slot units w
 admitted at the fitted threshold 1.0, screen classification precision 1.00 at coverage
 0.875 (green-felt set), hero accuracy UNMEASURED with no hero units in any local dataset,
 and worst-pass p95 776 ms inside the 5,000 ms budget. Latency is not the blocker; board
-accuracy is. it2 training needs current-theme pixels and seated hero/control data that no
-local dataset contains, so no GPU time is spent yet. Receipt:
+accuracy is. it2 training needs current-geometry pixels (957x727) with board labels, plus
+seated hero/control data that no local dataset contains, so no GPU time is spent yet. Receipt:
 `.local/laya/dataset/it2-baseline/PHASE4B-READINESS.md`.
 
 Gate F was re-executed at `6e2d16d` (2026-10-25T22:18Z) on the same frozen held-out split
@@ -130,8 +131,12 @@ zero admitted at threshold 1.0, hero UNMEASURED, screen precision 1.00 at covera
 worst p95 776.1 ms. Nothing was promoted; `question-set.json` still reads
 `{"initial": 0.8, "calibrated": false}`. Receipt:
 `.local/laya/dataset/it2-baseline/PHASE4B-GATEF-20261025T2218Z.md`. That receipt also
-records a harness provenance defect: `it2_gatef.py` does not log `--labels`, and the labels
-document it loads is never used (correctness comes from the dump's own `label` field).
+recorded a harness provenance defect: `it2_gatef.py` did not log `--labels` and never used
+the labels document it loads. That is now fixed — every input is recorded with its sha256,
+`--labels` is consumed as a fail-closed cross-check against the dump's own `label` field, and
+the re-run returns the same four criteria **byte-identically** (still `FAIL`) plus a new
+**MEASURED** label cross-check (76 compared, 0 mismatched). Receipt:
+`.local/laya/dataset/it2-baseline/PHASE4B-GATEF-20261026T001500Z.md`.
 
 Two follow-ups were executed the same day. `perception_diagnostics` no longer repeats the
 same capability-absent seat row six times per frame: a field with no registry is journaled

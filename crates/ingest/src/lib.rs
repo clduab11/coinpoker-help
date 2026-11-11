@@ -13,6 +13,7 @@
 //! - `prompt`        — strict system and analysis prompts
 //! - `state_machine` — decision-relevant state tracking and event emission
 
+pub mod adapter;
 pub mod capture;
 pub mod change_detect;
 pub mod discovery;

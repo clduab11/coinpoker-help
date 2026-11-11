@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::observer::{Evidence, HandStart, Id, PHYSICAL_SEATS};
+use crate::opponent::observer::{Evidence, HandStart, Id, PHYSICAL_SEATS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

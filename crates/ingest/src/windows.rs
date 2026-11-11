@@ -179,6 +179,9 @@ pub(crate) fn verify_visible_window(selected: &WindowInfo) -> Result<u64, Captur
     })
 }
 
+/// Cloak probe kept for classification call-sites; discovery no longer gates
+/// eligibility on it (cloaked windows still render for WGC/PrintWindow).
+#[allow(dead_code)]
 fn window_uncloaked(hwnd: HWND) -> bool {
     let mut cloaked = 0u32;
     // SAFETY: Read-only DWM visibility query; unsupported/error fails closed.
@@ -211,8 +214,10 @@ fn window_metadata(hwnd: HWND, exe_name: String) -> Option<WindowInfo> {
     unsafe { GetWindowRect(hwnd, &mut rect) }.ok()?;
     let width = rect.right.saturating_sub(rect.left) as u32;
     let height = rect.bottom.saturating_sub(rect.top) as u32;
-    let on_screen = unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() }
-        && window_uncloaked(hwnd);
+    // DWM-cloaked windows keep a live surface (WGC/PrintWindow still render) and
+    // the client re-cloaks unfocused table windows — eligibility must not depend
+    // on cloak state (Phase 1 live finding, 2026-11-10).
+    let on_screen = unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() };
     Some(WindowInfo {
         hwnd: hwnd.0 as usize,
         process_id: pid,

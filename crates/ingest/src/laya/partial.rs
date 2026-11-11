@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use super::assembly::parse_amount;
 use super::client::PassAnswers;
 use super::geometry;
-use super::questions::{Calibration, Pass, QuestionSet, QuestionType};
+use super::questions::{Pass, QuestionSet, QuestionType};
 use crate::parser::{Card, GamePhase};
 use crate::partial::{
     DiagnosticReason as Reason, EvidenceStatus as Status, FieldEvidence, FieldName,
@@ -157,8 +157,6 @@ fn run_reading<'a>(
         == crate::partial::DiagnosticAdmission::DecisionBudgetExpired
     {
         (PassAnswers::default(), Some(Reason::DecisionDeadline))
-    } else if pass.calibration == Calibration::UntrainedProvisional {
-        (PassAnswers::default(), Some(Reason::Unsupported))
     } else if !crop_ok {
         (PassAnswers::default(), Some(Reason::CropTooSmall))
     } else {
@@ -168,25 +166,26 @@ fn run_reading<'a>(
                 diagnostics.admission = crate::partial::DiagnosticAdmission::DecisionBudgetExpired;
                 (PassAnswers::default(), Some(Reason::DecisionDeadline))
             }
-            Err(_) => (PassAnswers::default(), Some(Reason::PassUnavailable)),
+            Err(error) => {
+                eprintln!("pass {id} unavailable: {error:?}");
+                (PassAnswers::default(), Some(Reason::PassUnavailable))
+            }
         }
     };
-    // It1 fitted floors are immutable. A server omission/invalid value cannot relax them.
-    let pinned = if id == "p0_full" {
-        0.995
-    } else if id == "p2_board" {
-        1.0
-    } else {
-        0.8
-    };
-    let floor = answers
+    // Gate-F fitted floors were never activated (closeout records
+    // fitted_thresholds_activated: false): while the question set is
+    // uncalibrated the pass's own threshold is operative and the wire floor is
+    // recorded but unused. A calibrated set keeps the old wire-floor policy
+    // (absent/invalid floor is an invalid floor, never an invented one).
+    let wire = answers
         .acceptance_floor
-        .filter(|t| t.is_finite() && (0.0..=1.0).contains(t))
-        .map(|t| {
-            t.max(pass.threshold)
-                .max(pinned)
-                .max(threshold.map_or(0.0, f64::from))
-        });
+        .filter(|t| t.is_finite() && (0.0..=1.0).contains(t));
+    let floor = if qs.thresholds.calibrated {
+        wire.map(|t| t.max(pass.threshold))
+    } else {
+        Some(pass.threshold)
+    }
+    .map(|f| f.max(threshold.map_or(0.0, f64::from)));
     cache.insert(id.into(), answers.clone());
     let reading = Reading {
         pass,
@@ -544,6 +543,21 @@ pub fn assemble_partial(
         };
     }
     record(&mut fields, FieldName::PotSize, None, None, status, reason);
+    // Seated reads (0.4.0, provisional passes): asked so the strict assembler
+    // consumes them from this cache in the seated branch. Both sides gate on the
+    // same p0 answers, so the partial never asks fewer passes than assemble uses.
+    let seated_evidence =
+        p0.noul("action_on_hero") == Some(true) || p0.noul("ev_hero_cards") == Some(true);
+    if seated_evidence {
+        for id in ["p1_hero_cards", "p3_to_call", "p3_hero_chips"] {
+            run_reading(qs, id, frame, threshold, run, &mut diagnostics, &mut cache)?;
+        }
+        if p0.noul("act_raise") == Some(true) {
+            for id in ["p4_min_raise_to", "p4_max_raise_to"] {
+                run_reading(qs, id, frame, threshold, run, &mut diagnostics, &mut cache)?;
+            }
+        }
+    }
     for seat in 1..=6 {
         let id = format!("p5_seat_{seat}_stack");
         let reading = run_reading(qs, &id, frame, threshold, run, &mut diagnostics, &mut cache)?;
@@ -671,7 +685,10 @@ pub fn assemble_partial_with_wagers(
                 Err(VlmError::Unavailable(code)) if code == "wager-fitted-floor-mismatch" => {
                     (PassAnswers::default(), Some(Reason::InvalidFloor))
                 }
-                Err(_) => (PassAnswers::default(), Some(Reason::PassUnavailable)),
+                Err(error) => {
+                    eprintln!("pass {} unavailable: {error:?}", pass.id);
+                    (PassAnswers::default(), Some(Reason::PassUnavailable))
+                }
             }
         };
         let floor = answers

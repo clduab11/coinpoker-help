@@ -662,6 +662,17 @@ no admitted fields and a20-opportunity deficit. Usable live recognition is NOT
 verified. No confidence floor, source lease, R17 rule or human-review status changed.
 See `docs/SEATED_DIAGNOSTIC.md` and private automatic-inference-20261012 handoff/audit.
 
+Reconciled 2026-10-26 with the measured mechanism: the 30s probe budget above is not a
+gate — the former 30-second startup timeout is removed under the standing GO — and activity
+qualification turned out to depend on the *sample cadence* against a wall-clock baseline
+lease, not on a fixed probe length. The multi-second stack batches recorded here
+(4496.6/6071.3ms) are what stretch the cadence, and the old 5,000 ms per-region lease then
+expired between a real content change and its confirmation, so the change was discarded. The
+lease is now counted in samples (`BASELINE_ABSENT_BUDGET`, 8 consecutive unobservable
+samples), so cadence no longer decides qualification; a fresh bounded run activated at its
+real cadence. See `.local/preflight/PHASE2-RECEIPT.md` (activity gate diagnosis) and
+`docs/SEATED_DIAGNOSTIC.md`.
+
 ### Historical A-D proposals and B-lite results
 
 These dated proposals/results are superseded where they call Gemma current or

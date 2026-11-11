@@ -8,9 +8,6 @@ resolver = "2"
 members = [
     "crates/ingest",
     "crates/core-engine",
-    "crates/ghost-layer",
-    "crates/opponent-model",
-    "crates/ui",
     "bin",
 ]
 

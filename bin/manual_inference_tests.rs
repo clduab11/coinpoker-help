@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 struct FailedResultPort {
-    completion: Option<Completion<ui::widgets::DecisionView>>,
+    completion: Option<Completion<crate::ui::widgets::DecisionView>>,
     disconnected: bool,
     started: usize,
 }
 
-impl InferencePort<ui::widgets::DecisionView> for FailedResultPort {
+impl InferencePort<crate::ui::widgets::DecisionView> for FailedResultPort {
     fn start(&mut self, job: InferenceJob) -> Result<(), InferenceFailure> {
         self.started += 1;
         self.completion = Some(Completion {
@@ -24,7 +24,7 @@ impl InferencePort<ui::widgets::DecisionView> for FailedResultPort {
     }
     fn try_complete(
         &mut self,
-    ) -> Result<Option<Completion<ui::widgets::DecisionView>>, InferenceFailure> {
+    ) -> Result<Option<Completion<crate::ui::widgets::DecisionView>>, InferenceFailure> {
         if self.disconnected {
             Err(InferenceFailure {
                 code: "synthetic-worker-disconnected",
@@ -90,7 +90,7 @@ fn legacy_result_error_and_disconnected_worker_remain_terminal() {
             stop_on_result_error,
         };
         worker.start(recovery_job()).unwrap();
-        let result: Result<Option<Completion<ui::widgets::DecisionView>>, InferenceFailure> =
+        let result: Result<Option<Completion<crate::ui::widgets::DecisionView>>, InferenceFailure> =
             worker.try_complete();
         assert!(disconnected == result.is_err());
         assert!(failed.get());
@@ -206,16 +206,14 @@ fn automatic_pass_schedule_has_separate_repeated_lanes_and_never_batches() {
 }
 
 #[test]
-fn sustained_readout_schedule_repeats_each_seat_pair_and_bounds_board_pair() {
+fn sustained_readout_schedule_repeats_every_seat_and_bounds_board_pair() {
     let mut schedule = AutomaticSchedule::default();
     for _ in 0..2 {
-        for seat in [1, 3, 5] {
-            for _ in 0..2 {
-                assert_eq!(
-                    schedule.next(SourcePolicy::AutomaticSustained, false),
-                    ObservationPass::ReadoutPair(seat)
-                );
-            }
+        for _ in 0..2 {
+            assert_eq!(
+                schedule.next(SourcePolicy::AutomaticSustained, false),
+                ObservationPass::ReadoutAll
+            );
         }
         for _ in 0..2 {
             assert_eq!(
@@ -228,23 +226,22 @@ fn sustained_readout_schedule_repeats_each_seat_pair_and_bounds_board_pair() {
 }
 
 #[test]
-fn sustained_cpu_board_schedule_keeps_six_distinct_numeric_jobs_and_no_gpu_board() {
+fn sustained_cpu_board_schedule_reads_every_seat_without_a_gpu_board_job() {
     let mut schedule = AutomaticSchedule::new(true);
-    let mut attempts = [Vec::new(), Vec::new(), Vec::new()];
-    for cycle in 0..3 {
-        for step in 0..6 {
-            let seat = (step / 2) * 2 + 1;
+    for _ in 0..3 {
+        for _ in 0..2 {
             assert_eq!(
                 schedule.next(SourcePolicy::AutomaticSustained, false),
-                ObservationPass::ReadoutPair(seat)
+                ObservationPass::ReadoutAll
             );
-            attempts[(seat / 2) as usize].push(cycle * 6 + step);
         }
         assert_eq!(schedule.step, 0);
     }
-    for pair in attempts {
-        assert_eq!(pair.len(), 6);
-        assert_eq!(pair.windows(2).map(|p| p[1] - p[0]).max(), Some(5));
+    for _ in 0..30 {
+        assert_eq!(
+            schedule.next(SourcePolicy::AutomaticSustained, false),
+            ObservationPass::ReadoutAll
+        );
     }
 }
 
@@ -539,7 +536,7 @@ struct WorkerState {
     sustained_schedule: AutomaticSchedule,
     passes: Vec<(Ticket, ObservationPass)>,
     unsaved_starts: usize,
-    recommendations: Vec<(Ticket, ui::widgets::DecisionView)>,
+    recommendations: Vec<(Ticket, crate::ui::widgets::DecisionView)>,
 }
 struct Worker {
     state: Rc<RefCell<WorkerState>>,
@@ -564,7 +561,7 @@ fn rows(root: &Path) -> Vec<Value> {
         .collect()
 }
 
-impl InferencePort<ui::widgets::DecisionView> for Worker {
+impl InferencePort<crate::ui::widgets::DecisionView> for Worker {
     fn start(&mut self, job: InferenceJob) -> Result<(), InferenceFailure> {
         let mut state = self.state.borrow_mut();
         assert!(state.job.is_none(), "one active worker only");
@@ -613,7 +610,7 @@ impl InferencePort<ui::widgets::DecisionView> for Worker {
     }
     fn try_complete(
         &mut self,
-    ) -> Result<Option<Completion<ui::widgets::DecisionView>>, InferenceFailure> {
+    ) -> Result<Option<Completion<crate::ui::widgets::DecisionView>>, InferenceFailure> {
         if self.case == "slow-worker"
             || self.case == "capture-overlap-inflight" && self.time.now_ms() < 1500
             || self.case == "late-worker" && self.time.now_ms() < 6_000
@@ -726,7 +723,7 @@ fn synthetic_analysis(
     deadline: Instant,
     variant: &str,
     selected: Option<ObservationPass>,
-) -> Analysis<ui::widgets::DecisionView> {
+) -> Analysis<crate::ui::widgets::DecisionView> {
     use ingest::laya::client::{Answer, PassAnswers, Segments};
     let (mut partial, diagnostics, cache) = ingest::laya::partial::assemble_partial(
         ingest::laya::question_set(),
@@ -755,6 +752,11 @@ fn synthetic_analysis(
                         || pass.id == "p3_pot"
                         || pass.id == format!("p5_seat_{seat}_stack")
                         || pass.id == format!("p5_seat_{}_stack", seat + 1)
+                }
+                Some(ObservationPass::ReadoutAll) => {
+                    pass.id == "p0_full"
+                        || pass.id == "p3_pot"
+                        || (1..=6).any(|seat| pass.id == format!("p5_seat_{seat}_stack"))
                 }
                 Some(ObservationPass::Wager(_) | ObservationPass::Scene(_)) => false,
             };
@@ -1294,7 +1296,7 @@ fn sustained_board_schedule_and_runtime_admit_above_floor_distinct_unsaved_reads
         .iter()
         .filter(|(_, pass)| *pass == ObservationPass::BoardReadout)
         .collect();
-    assert_eq!(board_jobs.len(), 6);
+    assert_eq!(board_jobs.len(), 12);
     assert!(board_jobs
         .windows(2)
         .all(|pair| pair[1].0.generation > pair[0].0.generation
@@ -1312,7 +1314,8 @@ fn sustained_board_schedule_and_runtime_admit_above_floor_distinct_unsaved_reads
         .iter()
         .filter(|event| event["pot_size"] == 1_050)
         .collect();
-    assert!(pots.len() >= 15);
+    // One admitted Pot per repeated all-seat pair, and every sweep repeats the pair.
+    assert!(pots.len() >= 6);
     // Two Board captures plus the numeric consensus seed consume three gaps
     // before Pot can publish again; the fourth gap is the new admitted read.
     assert!(pots
@@ -1372,8 +1375,8 @@ fn sustained_board_schedule_and_runtime_admit_above_floor_distinct_unsaved_reads
                 .iter()
                 .filter(|seat| !seat["displayed_stack"].is_null())
                 .count()
-                <= 2,
-            "no earlier seat values are merged into this new source generation"
+                <= 6,
+            "one all-seat batch may carry every seat, but never an earlier generation"
         );
     }
     assert!(events
@@ -1402,17 +1405,26 @@ fn sustained_board_schedule_and_runtime_admit_above_floor_distinct_unsaved_reads
 }
 
 #[test]
-fn sustained_pairs_revisit_all_seats_within_ten_seconds_at_one_second_job_latency() {
+fn sustained_pairs_revisit_all_seats_within_one_sweep_at_one_second_job_latency() {
+    let job_ms = 1_000;
     let (_root, events, _, worker) =
-        exercise_sustained_schedule("sustained-positive", 1_000, temp_root());
+        exercise_sustained_schedule("sustained-positive", job_ms, temp_root());
     let worker = worker.borrow();
     for seat in 1..=6 {
-        let captures: Vec<_> = worker.passes.iter().filter_map(|(ticket, pass)| {
-            matches!(pass, ObservationPass::ReadoutPair(first) if seat == *first || seat == *first + 1)
-                .then_some(ticket.captured_at_ms)
-        }).collect();
-        assert_eq!(captures.len(), 6);
-        assert!(captures.windows(2).all(|pair| pair[1] - pair[0] <= 10_000));
+        let captures: Vec<_> = worker
+            .passes
+            .iter()
+            .filter_map(|(ticket, pass)| {
+                (*pass == ObservationPass::ReadoutAll).then_some(ticket.captured_at_ms)
+            })
+            .collect();
+        assert_eq!(captures.len(), 12, "every all-seat sweep reads this seat");
+        // One repeated all-seat pair per sweep, then the bounded Board pair: the
+        // widest revisit gap is the three jobs that span it.
+        assert_eq!(
+            captures.windows(2).map(|pair| pair[1] - pair[0]).max(),
+            Some(job_ms * 3)
+        );
         assert!(events
             .iter()
             .any(|event| event["event"] == "partial_observation"
@@ -1429,19 +1441,23 @@ fn sustained_cpu_board_pairs_keep_native_board_unknown_and_original_numeric_leas
         assert!(worker
             .passes
             .iter()
-            .all(|(_, pass)| matches!(pass, ObservationPass::ReadoutPair(_))));
+            .all(|(_, pass)| matches!(pass, ObservationPass::ReadoutAll)));
         for seat in 1..=6 {
-            let captures: Vec<_> = worker.passes.iter().filter_map(|(ticket, pass)| {
-                matches!(pass, ObservationPass::ReadoutPair(first) if seat == *first || seat == *first + 1)
-                    .then_some((ticket.captured_at_ms, ticket.generation))
-            }).collect();
-            assert_eq!(captures.len(), 8);
+            let captures: Vec<_> = worker
+                .passes
+                .iter()
+                .filter_map(|(ticket, pass)| {
+                    (*pass == ObservationPass::ReadoutAll)
+                        .then_some((ticket.captured_at_ms, ticket.generation))
+                })
+                .collect();
+            assert_eq!(captures.len(), 24);
             assert!(captures
                 .windows(2)
                 .all(|p| p[1].0 > p[0].0 && p[1].1 > p[0].1));
             assert_eq!(
                 captures.windows(2).map(|p| p[1].0 - p[0].0).max(),
-                Some(job_ms * 5)
+                Some(job_ms)
             );
             assert!(events
                 .iter()
@@ -1475,7 +1491,7 @@ fn sustained_cpu_board_pairs_keep_native_board_unknown_and_original_numeric_leas
 }
 
 #[test]
-fn sustained_cpu_board_schedule_does_not_claim_ten_seconds_for_slow_jobs() {
+fn sustained_cpu_board_schedule_keeps_every_seat_current_at_slow_jobs() {
     let (_root, events, _, worker) =
         exercise_sustained_schedule("sustained-cpu-board", 2_500, temp_root());
     let worker = worker.borrow();
@@ -1483,10 +1499,12 @@ fn sustained_cpu_board_schedule_does_not_claim_ten_seconds_for_slow_jobs() {
         .passes
         .iter()
         .filter_map(|(ticket, pass)| {
-            (*pass == ObservationPass::ReadoutPair(1)).then_some(ticket.captured_at_ms)
+            (*pass == ObservationPass::ReadoutAll).then_some(ticket.captured_at_ms)
         })
         .collect();
-    assert_eq!(captures.windows(2).map(|p| p[1] - p[0]).max(), Some(12_500));
+    assert_eq!(captures.windows(2).map(|p| p[1] - p[0]).max(), Some(2_500));
+    // Batching every seat into one job keeps a 2.5 s cadence inside the 5 s lease, so
+    // the seat row stays current instead of expiring between sparse pair visits.
     assert!(events
         .iter()
         .filter(|event| event["event"] == "partial_observation")
@@ -1494,7 +1512,7 @@ fn sustained_cpu_board_schedule_does_not_claim_ten_seconds_for_slow_jobs() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|seat| seat["displayed_stack"].is_null())));
+            .all(|seat| seat["displayed_stack"] == 0)));
 }
 
 #[test]
@@ -1518,8 +1536,8 @@ fn assert_sustained_board_pair_at_latency(job_ms: u64) {
         .collect();
     assert_eq!(
         board_jobs.len(),
-        6,
-        "three bounded Board pairs at {job_ms} ms"
+        12,
+        "six bounded Board pairs at {job_ms} ms"
     );
     assert_eq!(
         board_jobs[1].0.captured_at_ms - board_jobs[0].0.captured_at_ms,
@@ -1605,7 +1623,7 @@ fn sustained_board_pair_rejects_stale_seed_expired_job_and_failed_core() {
                 .iter()
                 .filter(|(_, pass)| *pass == ObservationPass::BoardReadout)
                 .count(),
-            6
+            12
         );
         assert!(events
             .iter()
@@ -2461,8 +2479,23 @@ fn automatic_gate_rejects_duplicate_expired_and_geometry_only_activity_evidence(
         gate.observe(ticket(n), Some(content), n * 500);
     }
     assert!(
+        gate.active,
+        "a change confirmed across a >5 s wall-clock span with no absent samples is activity"
+    );
+    let mut gate = ActivityGate::new(SourcePolicy::AutomaticBounded);
+    for (n, content) in [
+        (1, a.clone()),
+        (2, b.clone()),
+        (3, a.clone()),
+        (4, b.clone()),
+        (5, a.clone()),
+        (6, b.clone()),
+    ] {
+        gate.observe(ticket(n), Some(content), n * 500);
+    }
+    assert!(
         !gate.active,
-        "intermediate jitter cannot renew an old baseline's expiry"
+        "jitter that never repeats a reading twice consecutively cannot qualify"
     );
     let mut gate = ActivityGate::new(SourcePolicy::AutomaticBounded);
     for (n, content) in [(1, a.clone()), (2, a), (3, b.clone()), (4, b)] {

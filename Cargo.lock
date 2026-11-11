@@ -637,15 +637,14 @@ name = "coinpoker"
 version = "0.1.0"
 dependencies = [
  "core-engine",
- "ghost-layer",
+ "eframe",
+ "egui",
  "image",
  "ingest",
- "opponent-model",
  "rand 0.8.8",
  "serde",
  "serde_json",
  "tempfile",
- "ui",
  "url",
 ]
 
@@ -682,6 +681,7 @@ name = "core-engine"
 version = "0.1.0"
 dependencies = [
  "rand 0.8.8",
+ "rand_distr",
  "rs_poker",
  "serde",
  "serde_json",
@@ -1288,17 +1288,6 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi 6.0.0",
-]
-
-[[package]]
-name = "ghost-layer"
-version = "0.1.0"
-dependencies = [
- "rand 0.8.8",
- "rand_distr",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2308,13 +2297,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "opponent-model"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "orbclient"
@@ -3419,16 +3401,6 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "ui"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "serde",
- "serde_json",
 ]
 
 [[package]]
