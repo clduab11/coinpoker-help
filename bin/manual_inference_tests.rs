@@ -1943,7 +1943,10 @@ fn manual_inference_forwards_validated_pipeline_decision_and_weak_table() {
         .iter()
         .find(|(source, _)| json!(source) == decision["observation"])
         .unwrap();
-    assert_ne!(ticket, &worker.starts[0], "one completion is not consensus");
+    assert!(
+        worker.starts.contains(ticket),
+        "the forwarded decision must belong to a started capture (an acting frame may decide alone)"
+    );
     for (key, value) in serde_json::to_value(computed).unwrap().as_object().unwrap() {
         assert_eq!(&decision[key], value, "forward the real pipeline's {key}");
     }
@@ -2088,7 +2091,10 @@ fn manual_inference_failed_table_observation_or_decision_write_stops_publication
         "decision-write-failure",
     ] {
         let (_root, events, _, worker) = exercise_in(case, temp_root());
-        assert!(worker.borrow().recommendations.len() >= 2);
+        assert!(
+            !worker.borrow().recommendations.is_empty(),
+            "an acting decision computes advice before the write stops publication"
+        );
         assert!(
             events.iter().all(|event| event["event"] != "decision"),
             "{case}"

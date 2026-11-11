@@ -1201,7 +1201,11 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                 }
                 match outcome.accepted_state {
                     Some(state) => {
-                        self.needs_analysis = false;
+                        // Keep reading while the run is live: the next frame may
+                        // change (amounts, cards, the bar) and an acting turn
+                        // needs fresh looks, not an idle after one acceptance.
+                        self.needs_analysis = true;
+                        self.next_analysis = now.saturating_add(self.config.poll_ms);
                         self.status("capturing_table", outcome.reason, events);
                         let deadline = completion.ticket.captured_at_ms.saturating_add(
                             self.config

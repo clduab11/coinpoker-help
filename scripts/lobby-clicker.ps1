@@ -1,10 +1,14 @@
-# lobby-clicker.ps1 -- keep any seated hero in rotation. Discovers every live
-# Unity table window each cycle, shoots it, and clicks the bottom-right
+# lobby-clicker.ps1 -- keep the seated hero in rotation. Clicks the bottom-right
 # "Join Now"/"Play Next Game" spot ONLY when the action bar is absent (bar up =
 # the hero is to act and the raise button sits near that spot). Uses clicktop
 # (no uncloak, so a live WGC capture survives). Bar detection mirrors the run's
 # vendored action_buttons red check on a PrintWindow frame.
+#
+# Pass -Hwnds to scope to known hero windows (single-game discipline); with no
+# -Hwnds every live Unity window is used (an observer window's "Find Seat" spot
+# would otherwise spawn extra tables).
 param(
+  [string[]]$Hwnds = @(),
   [int]$EverySec = 8
 )
 Add-Type -AssemblyName System.Drawing
@@ -40,7 +44,8 @@ function Test-BarPresent([string]$hwnd) {
   return ($total -gt 0 -and ($red / $total) -gt 0.05)
 }
 while ($true) {
-  foreach ($h in Get-UnityWindows) {
+  $targets = if ($Hwnds.Count -gt 0) { $Hwnds } else { Get-UnityWindows }
+  foreach ($h in $targets) {
     try {
       if (-not (Test-BarPresent $h)) {
         & (Join-Path $PSScriptRoot 'table-input.ps1') -Action clicktop -Hwnd $h -X 731 -Y 581 -Repeat 1 | Out-Null

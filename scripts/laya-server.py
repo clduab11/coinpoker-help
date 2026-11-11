@@ -800,7 +800,10 @@ class Service:
             return 409, {"error": "manual-session-ended"}
         if self.engine is None:
             return 503, {"error": "model-not-ready"}
-        if not self.inference.acquire(blocking=False):
+        # A short timed wait smooths deadline races: a client that abandoned a
+        # slow request still has the server finishing it on this lock, so an
+        # instant reject would waste the retry it is about to make anyway.
+        if not self.inference.acquire(timeout=0.75):
             return 503, {"error": "inference-busy"}
         self.state.set_busy(True)
         try:

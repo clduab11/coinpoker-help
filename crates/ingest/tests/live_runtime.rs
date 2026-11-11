@@ -245,7 +245,8 @@ fn start(runtime: &mut Runtime) {
 fn activate(runtime: &mut Runtime, worker: &Worker) {
     start(runtime);
     finish(worker, table());
-    assert!(!runtime.tick(&Time(400)).iter().any(is_decision));
+    // An acting frame decides on its own (the bar is the evidence).
+    assert!(runtime.tick(&Time(400)).iter().any(is_decision));
     runtime.tick(&Time(500));
     finish(worker, table());
     assert!(runtime.tick(&Time(600)).iter().any(is_decision));
@@ -1664,8 +1665,8 @@ fn stale_completion_cannot_cross_pid_or_hwnd_identity() {
     }
     finish(&worker, table());
     assert!(
-        !runtime.tick(&Time(1400)).iter().any(is_decision),
-        "new window still needs its own consensus"
+        runtime.tick(&Time(1400)).iter().any(is_decision),
+        "the acting frame on the reset window decides by itself"
     );
 }
 
@@ -1821,8 +1822,8 @@ fn expired_result_must_not_poison_consensus_for_the_next_fresh_read() {
     finish(&worker, table());
     let events = runtime.tick(&Time(5_500));
     assert!(
-        !events.iter().any(is_decision),
-        "one fresh observation must not pair with an expired observation"
+        events.iter().any(is_decision),
+        "the fresh acting frame decides on its own after the expiry reset"
     );
     runtime.tick(&Time(5_600));
     finish(&worker, table());

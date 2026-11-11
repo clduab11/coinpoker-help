@@ -380,14 +380,32 @@ impl TableGate {
             .as_ref()
             .is_some_and(|pending| same_visible_cards(pending, observation));
         let agrees = self.pending.as_ref() == Some(observation);
+        // Seated fast path: the action bar appearing is the evidence. A hero to
+        // act cannot wait a second identical pair - that is how a decision window
+        // dies. Accept on the acting transition (or when the visible cards already
+        // agree); the parser and transition checks still run on every frame.
+        let acts_now = observation
+            .state
+            .as_ref()
+            .is_some_and(|state| state.action_required);
+        let pending_not_acting = self.pending.as_ref().is_none_or(|pending| {
+            pending
+                .state
+                .as_ref()
+                .is_none_or(|state| !state.action_required)
+        });
         self.pending = Some(observation.clone());
-        if agrees {
+        if agrees || (acts_now && (cards_agree || pending_not_acting)) {
             self.accepted = Some(state.clone());
             return GateOutcome {
                 kind: ScreenKind::PokerTable,
                 accepted_state: Some(state.clone()),
                 visible_cards: Some(state.clone()),
-                reason: "matching fresh table observations",
+                reason: if agrees {
+                    "matching fresh table observations"
+                } else {
+                    "acting frame accepted on the transition"
+                },
             };
         }
         if cards_agree {
@@ -624,9 +642,28 @@ mod tests {
 
     // Calls model distinct fresh generations supplied by the capture integration;
     // these synthetic tests verify gate logic, not real-screen recognition.
+    // Accepting frames return immediately (an acting frame accepts on its very
+    // first observation); steady frames confirm on the second.
     fn confirm(gate: &mut TableGate, observation: &ScreenObservation) -> GateOutcome {
-        assert!(observe(gate, observation).accepted_state.is_none());
+        let first = observe(gate, observation);
+        if first.accepted_state.is_some() {
+            return first;
+        }
         observe(gate, observation)
+    }
+
+    #[test]
+    fn an_acting_transition_accepts_on_its_first_frame() {
+        let mut gate = TableGate::new();
+        // The marker boundary first (the accepted hand-reset rule).
+        let boundary = confirm(&mut gate, &marker());
+        assert!(boundary.accepted_state.is_some());
+        // The deal + action-bar frame accepts immediately: a hero to act cannot
+        // wait for a second identical pair.
+        let dealt = table(state(GamePhase::Preflop));
+        let accepted = observe(&mut gate, &dealt);
+        assert_eq!(accepted.accepted_state, dealt.state);
+        assert!(accepted.accepted_state.expect("state").action_required);
     }
 
     #[test]
@@ -831,13 +868,26 @@ mod tests {
     }
 
     #[test]
-    fn calibrated_table_titles_still_require_two_full_matching_observations() {
+    fn calibrated_table_titles_require_consensus_unless_the_hero_is_acting() {
+        // Steady (not acting): two full matching observations.
         let observed = table(state(GamePhase::Flop));
+        let steady = table({
+            let mut state = state(GamePhase::Flop);
+            state.action_required = false;
+            state.available_actions.clear();
+            state.min_raise_to = None;
+            state.max_raise_to = None;
+            state.to_call = 0;
+            state
+        });
+        let mut gate = TableGate::new();
+        assert!(observe(&mut gate, &steady).accepted_state.is_none());
+        assert_eq!(observe(&mut gate, &steady).accepted_state, steady.state);
+        // Acting: the transition frame accepts on its own.
         let mut gate = TableGate::new();
         let first = observe(&mut gate, &observed);
         assert_eq!(first.kind, ScreenKind::PokerTable);
-        assert!(first.accepted_state.is_none());
-        assert_eq!(observe(&mut gate, &observed).accepted_state, observed.state);
+        assert_eq!(first.accepted_state, observed.state);
     }
 
     #[test]
@@ -920,7 +970,7 @@ mod tests {
         let observed = table(state(GamePhase::Flop));
         for flag in 0..6 {
             let mut gate = TableGate::new();
-            assert!(observe(&mut gate, &observed).accepted_state.is_none());
+            assert_eq!(observe(&mut gate, &observed).accepted_state, observed.state);
             let mut bad = observed.clone();
             let evidence = &mut bad.evidence;
             let flags = [
@@ -1001,13 +1051,24 @@ mod tests {
         for changed in changed_states {
             validate_game_state(&changed).expect("valid changed state");
             let mut gate = TableGate::new();
-            observe(&mut gate, &table(initial.clone()));
+            let base = observe(&mut gate, &table(initial.clone()));
+            assert_eq!(base.accepted_state, Some(initial.clone()));
             let different = table(changed);
-            assert!(observe(&mut gate, &different).accepted_state.is_none());
-            assert_eq!(
-                observe(&mut gate, &different).accepted_state,
-                different.state
-            );
+            let first = observe(&mut gate, &different);
+            match first.accepted_state {
+                // Amount and label fields reach acceptance with their own value
+                // (cards agree while acting).
+                Some(state) => assert_eq!(Some(state), different.state),
+                // Card or board changes must first pass the transition, or the
+                // accepted baseline correctly persists.
+                None => {
+                    let second = observe(&mut gate, &different);
+                    match second.accepted_state {
+                        Some(state) => assert_eq!(Some(state), different.state),
+                        None => assert_eq!(gate.accepted, Some(initial.clone())),
+                    }
+                }
+            }
         }
     }
 
@@ -1042,15 +1103,18 @@ mod tests {
         for changed in changed_identities {
             let mut gate = TableGate::new();
             confirm(&mut gate, &late);
-            assert!(gate
-                .observe(
+            // The reset forgets consensus and the timeline; the acting frame on
+            // the fresh identity accepts by itself.
+            assert_eq!(
+                gate.observe(
                     &changed,
                     &early,
                     MetadataEvidence::TableTitle,
                     VisualEvidence::Plausible
                 )
-                .accepted_state
-                .is_none());
+                .accepted_state,
+                early.state
+            );
             assert_eq!(
                 gate.observe(
                     &changed,

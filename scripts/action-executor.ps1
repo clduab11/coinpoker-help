@@ -8,7 +8,7 @@ param(
   [Parameter(Mandatory)][string]$Jsonl,
   [string]$Hwnd = '0xd11f36',
   [int]$PollMs = 120,
-  [int]$BudgetMs = 6000,   # hard cap: capture -> click
+  [int]$BudgetMs = 7500,   # jittered decision cap: capture -> click (10 s hard total)
   [int]$MinDelayMs = 250,
   [int]$MaxDelayMs = 1600,
   [switch]$DryRun
