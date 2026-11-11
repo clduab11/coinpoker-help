@@ -330,6 +330,21 @@ pub fn assemble_partial(
         view.role = Some(ObservationRole::Observing);
         view.hero_seated = Some(false);
     }
+    // A readable numeric hero seat is a seated hero. The action-bar override
+    // forces seat_4 on acting frames; a seat a future model reads survives.
+    let hero_seat_read = p0
+        .choice("hero_seat_index")
+        .and_then(|label| label.strip_prefix("seat_"))
+        .and_then(|seat| seat.parse::<u8>().ok())
+        .is_some_and(|seat| (1..=6).contains(&seat));
+    if hero_seat_read && !unseated {
+        view.hero_seated = Some(true);
+        view.role = Some(if p0.noul("action_on_hero") == Some(true) {
+            ObservationRole::YourTurn
+        } else {
+            ObservationRole::SeatedWaiting
+        });
+    }
     let contradictory = p0.choice("hero_seat_index") == Some("not_seated")
         && (p0.noul("action_on_hero") == Some(true)
             || p0.noul("ev_hero_cards") == Some(true)
@@ -340,14 +355,14 @@ pub fn assemble_partial(
             field,
             None,
             None,
-            if unseated {
+            if unseated || (hero_seat_read && !contradictory) {
                 Status::Accepted
             } else if contradictory {
                 Status::Rejected
             } else {
                 Status::Unknown
             },
-            if unseated {
+            if unseated || (hero_seat_read && !contradictory) {
                 Reason::Accepted
             } else if contradictory {
                 Reason::RoleContradiction

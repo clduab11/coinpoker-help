@@ -300,7 +300,12 @@ impl LayaBackend {
                 if !passes.is_empty() {
                     match self.client.predict_batch_with_deadline(&passes, deadline) {
                         Ok(results) => {
-                            for ((pass, _), result) in passes.into_iter().zip(results) {
+                            for ((pass, _), mut result) in passes.into_iter().zip(results) {
+                                if pass.id == "p0_full" {
+                                    if let Ok(answers) = result.as_mut() {
+                                        apply_action_bar_overrides(answers, &image);
+                                    }
+                                }
                                 batch_answers.insert(pass.id.clone(), result);
                             }
                         }
@@ -326,10 +331,15 @@ impl LayaBackend {
                     .unwrap_or_else(|| Ok(PassAnswers::default()));
             }
             let started = Instant::now();
-            let result = match pass_images(&image, pass)? {
+            let mut result = match pass_images(&image, pass)? {
                 Some(images) => self.client.predict_with_deadline(pass, images, deadline),
                 None => Ok(PassAnswers::default()),
             };
+            if pass.id == "p0_full" {
+                if let Ok(answers) = result.as_mut() {
+                    apply_action_bar_overrides(answers, &image);
+                }
+            }
             pass_times.insert(pass.id.clone(), started.elapsed().as_secs_f64() * 1000.0);
             result
         };
@@ -613,13 +623,19 @@ impl LayaBackend {
             if let Some(deadline) = deadline {
                 remaining_budget(deadline, Instant::now())?;
             }
-            match pass_images(&image, pass)? {
+            let mut result = match pass_images(&image, pass)? {
                 Some(images) => match deadline {
                     Some(deadline) => self.client.predict_with_deadline(pass, images, deadline),
                     None => self.client.predict(pass, images),
                 },
                 None => Ok(PassAnswers::default()),
+            };
+            if pass.id == "p0_full" {
+                if let Ok(answers) = result.as_mut() {
+                    apply_action_bar_overrides(answers, &image);
+                }
             }
+            result
         };
         let text = assemble(question_set(), size, self.lobby, self.threshold, &mut run)?;
         if let Some(deadline) = deadline {
@@ -653,6 +669,76 @@ fn pass_images(frame: &image::RgbaImage, pass: &Pass) -> Result<Option<Vec<Vec<u
         images.push(encode_png(&crop)?);
     }
     Ok(Some(images))
+}
+
+/// Red pixels in the vendored `action_buttons` region. The hero action bar only
+/// renders while the hero is to act; the it1 model never reads the hero lane
+/// (`action_on_hero`, `ev_hero_cards`) on dealt frames, while this region
+/// separated acting frames (red fraction ~0.38) from every saved
+/// waiting/sit-out frame (0.0000) in the live probe set. Threshold 0.05.
+fn action_bar_present(image: &image::RgbaImage) -> bool {
+    let Some((a, b, c, d)) = geometry::region_px("action_buttons", image.width(), image.height())
+    else {
+        return false;
+    };
+    let mut red = 0u32;
+    let mut total = 0u32;
+    for y in b..d {
+        for x in a..c {
+            let pixel = image.get_pixel(x, y);
+            let (r, g, bl) = (
+                i32::from(pixel[0]),
+                i32::from(pixel[1]),
+                i32::from(pixel[2]),
+            );
+            total += 1;
+            if r >= 150 && r - g >= 40 && r - bl >= 40 {
+                red += 1;
+            }
+        }
+    }
+    total > 0 && f64::from(red) / f64::from(total) > 0.05
+}
+
+/// Override the hero lane on acting frames (see [`action_bar_present`]). The
+/// bottom seat is `seat_4` in the vendored layout; a seat the model already
+/// read (a future retrained model) survives. `act_*` forced true keep the
+/// fold/call/raise decision path legal; a check spot is labelled `fold`
+/// (no legal-action error either way).
+fn apply_action_bar_overrides(answers: &mut PassAnswers, image: &image::RgbaImage) {
+    if !action_bar_present(image) {
+        return;
+    }
+    let truth = |p: f64| Answer {
+        choice: None,
+        p,
+        truncated: false,
+    };
+    for id in [
+        "action_on_hero",
+        "ev_action_controls",
+        "ev_hero_cards",
+        "act_fold",
+        "act_call",
+        "act_raise",
+    ] {
+        answers.answers.insert(id.into(), truth(0.99));
+    }
+    let seat_readable = answers
+        .answers
+        .get("hero_seat_index")
+        .and_then(|answer| answer.choice.as_deref())
+        .is_some_and(|label| label.starts_with("seat_"));
+    if !seat_readable {
+        answers.answers.insert(
+            "hero_seat_index".into(),
+            Answer {
+                choice: Some("seat_4".into()),
+                p: 0.99,
+                truncated: false,
+            },
+        );
+    }
 }
 
 impl VlmBackend for LayaBackend {
@@ -808,11 +894,122 @@ mod tests {
         .unwrap()
     }
 
+    /// A generic table texture with a calm action region: the action-bar
+    /// override does not fire unless a test asks it to.
     fn frame(width: u32, height: u32) -> Frame {
-        let rgba = (0..width * height)
+        frame_rgba(width, height, false)
+    }
+
+    /// The same texture with hero action-bar red in the vendored region.
+    fn frame_with_action_bar(width: u32, height: u32) -> Frame {
+        frame_rgba(width, height, true)
+    }
+
+    fn frame_rgba(width: u32, height: u32, bar: bool) -> Frame {
+        let mut rgba: Vec<u8> = (0..width * height)
             .flat_map(|i| [(i % 251) as u8, 40, 90, 255])
             .collect();
+        if let Some((a, b, c, d)) = geometry::region_px("action_buttons", width, height) {
+            for y in b..d {
+                for x in a..c {
+                    let i = ((y * width + x) * 4) as usize;
+                    let (r, g, bl) = if bar { (220, 40, 40) } else { (40, 40, 90) };
+                    rgba[i] = r;
+                    rgba[i + 1] = g;
+                    rgba[i + 2] = bl;
+                    rgba[i + 3] = 255;
+                }
+            }
+        }
         Frame::new(width, height, rgba).unwrap()
+    }
+
+    fn calm_image(width: u32, height: u32) -> image::RgbaImage {
+        image::RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]))
+    }
+
+    fn with_red_bar(mut image: image::RgbaImage) -> image::RgbaImage {
+        let (a, b, c, d) = geometry::region_px("action_buttons", image.width(), image.height())
+            .expect("vendored action region");
+        for y in b..d {
+            for x in a..c {
+                image.put_pixel(x, y, image::Rgba([220, 40, 40, 255]));
+            }
+        }
+        image
+    }
+
+    #[test]
+    fn action_bar_presence_tracks_red_button_pixels() {
+        assert!(!action_bar_present(&calm_image(800, 613)));
+        assert!(action_bar_present(&with_red_bar(calm_image(800, 613))));
+    }
+
+    #[test]
+    fn action_bar_overrides_force_the_hero_lane_and_keep_a_model_read_seat() {
+        let image = with_red_bar(calm_image(800, 613));
+        let mut answers = PassAnswers::default();
+        apply_action_bar_overrides(&mut answers, &image);
+        assert_eq!(answers.answers["action_on_hero"].p, 0.99);
+        assert_eq!(
+            answers.answers["hero_seat_index"].choice.as_deref(),
+            Some("seat_4")
+        );
+        answers.answers.insert(
+            "hero_seat_index".into(),
+            Answer {
+                choice: Some("seat_2".into()),
+                p: 0.9,
+                truncated: false,
+            },
+        );
+        apply_action_bar_overrides(&mut answers, &image);
+        assert_eq!(
+            answers.answers["hero_seat_index"].choice.as_deref(),
+            Some("seat_2")
+        );
+        let mut calm = PassAnswers::default();
+        apply_action_bar_overrides(&mut calm, &calm_image(800, 613));
+        assert!(calm.answers.is_empty());
+    }
+
+    #[test]
+    fn action_bar_frame_turns_a_scripted_waiting_reply_into_an_actionable_state() {
+        let (port, _requests) = scripted_server(|request| {
+            let pass_id = request["pass"].as_str().unwrap_or_default().to_string();
+            let mut response = unseated_flop(request);
+            match pass_id.as_str() {
+                "p1_hero_cards" => {
+                    response["answers"] = json!({
+                        "hero_1_rank": choice("A"), "hero_1_suit": choice("spades"),
+                        "hero_2_rank": choice("K"), "hero_2_suit": choice("diamonds")
+                    });
+                }
+                "p3_to_call" => {
+                    response["answers"] = json!({"g1": choice("5")});
+                    response["segments"] = json!({"n": 1, "overflow": false});
+                }
+                "p3_hero_chips" => {
+                    response["answers"] = json!({"g1": choice("1"), "g2": choice("0"),
+                        "g3": choice("0")});
+                    response["segments"] = json!({"n": 3, "overflow": false});
+                }
+                _ => {}
+            }
+            response
+        });
+        let result = backend(port, None)
+            .analyze_observation_with_deadline(
+                &frame_with_action_bar(800, 613),
+                Instant::now() + std::time::Duration::from_secs(5),
+            )
+            .expect("bar frame assembles");
+        let parsed = parse_screen_output(&result.output).expect("parseable envelope");
+        let state = parsed.state.expect("actionable seated state");
+        assert!(state.action_required);
+        assert_eq!(state.hero_cards.len(), 2);
+        assert_eq!(state.to_call, 500);
+        assert_eq!(state.hero_chips, 10_000);
     }
 
     #[test]

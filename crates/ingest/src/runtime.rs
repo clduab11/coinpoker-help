@@ -1154,46 +1154,16 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                         valid_for_ms: deadline.saturating_sub(now),
                     });
                 }
-                if self.field_observation {
-                    // This opt-in path cannot promote a partial read to GameState/advice.
-                    // A missing optional field must not clear a different current field.
-                    if !partial_pending {
-                        self.invalidate_observation("screen-not-accepted", events);
-                    }
-                    // Independently leased field lanes keep refreshing even without
-                    // activity/history qualification; no five-second lane starvation.
-                    self.needs_analysis = true;
-                    // Capture already supplied a distinct fresh frame this tick.
-                    // Do not skip it while qualifying/confirming fields: the outer
-                    // capture cadence and single worker still bound all work.
-                    self.next_analysis = if partial_pending {
-                        now
-                    } else {
-                        now.saturating_add(self.config.retry_ms)
-                    };
-                    self.status(
-                        if partial_admitted {
-                            "capturing_table"
-                        } else {
-                            "candidate_table"
-                        },
-                        if partial_admitted {
-                            "matching-partial-fields"
-                        } else {
-                            "waiting-for-field-consensus"
-                        },
-                        events,
-                    );
-                    return;
-                }
                 if let Some(reason) = strict_source_veto {
                     // Additional source veto, never a relaxation of GameState/R17 validation.
                     self.gate.break_consensus();
                     self.clear(reason, events);
-                    if !partial_admitted {
+                    // Field lanes keep polling through a veto (independent witnesses);
+                    // without them the veto pauses analysis until a fresh pair.
+                    if !partial_admitted && (!self.field_observation || !partial_pending) {
                         self.invalidate_observation(reason, events);
                     }
-                    self.needs_analysis = !partial_admitted;
+                    self.needs_analysis = !partial_admitted || self.field_observation;
                     self.next_analysis = now.saturating_add(self.config.retry_ms);
                     self.status(
                         if partial_admitted {
@@ -1262,7 +1232,11 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                     }
                     None => {
                         self.clear("screen-not-accepted", events);
-                        if !partial_admitted {
+                        // Field lanes own the observation lease through their partial
+                        // candidates: invalidate only when no candidate is pending (or
+                        // without field lanes, immediately as before). This is what
+                        // lets a field-mode run promote and expire full observations.
+                        if !partial_admitted && (!self.field_observation || !partial_pending) {
                             self.invalidate_observation("screen-not-accepted", events);
                         }
                         let state = match outcome.kind {
@@ -1296,7 +1270,16 @@ impl<S: CaptureSource, W: InferencePort<T>, T> LiveRuntime<S, W, T> {
                         );
                     }
                 }
-                if self.activity_probe && activity_eligible {
+                if self.field_observation {
+                    // Field lanes keep refreshing on the pre-promotion cadence even
+                    // while the gate qualifies or accepts the same frames.
+                    self.needs_analysis = true;
+                    self.next_analysis = if partial_pending {
+                        now
+                    } else {
+                        now.saturating_add(self.config.retry_ms)
+                    };
+                } else if self.activity_probe && activity_eligible {
                     // The startup probe needs distinct fresh candidates even after
                     // partial consensus. Waiting for force_refresh_ms (5 s) would
                     // exhaust the same 5 s evidence lease. Keep the existing single

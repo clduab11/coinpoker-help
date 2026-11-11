@@ -1121,21 +1121,29 @@ fn published_partial_expiry_preserves_only_independently_fresh_source_current_se
 }
 
 #[test]
-fn automatic_observation_never_promotes_even_a_valid_full_state_or_recommendation() {
+fn automatic_observation_promotes_a_valid_full_state_after_matching_consensus() {
     let (mut runtime, _, worker) = partial_rig();
     runtime.enable_activity_probe();
+    let (mut observed, mut recommended, mut tabled) = (false, false, false);
     for now in (0..=4000).step_by(100) {
         if runtime.active_count() == 1 {
             finish(&worker, table());
         }
         let events = runtime.tick(&Time(now));
-        assert!(!events.iter().any(|event| matches!(
-            event,
-            LiveEvent::Observation { .. }
-                | LiveEvent::Recommendation { .. }
-                | LiveEvent::Table { .. }
-        )));
+        observed |= events
+            .iter()
+            .any(|event| matches!(event, LiveEvent::Observation { .. }));
+        recommended |= events
+            .iter()
+            .any(|event| matches!(event, LiveEvent::Recommendation { .. }));
+        tabled |= events
+            .iter()
+            .any(|event| matches!(event, LiveEvent::Table { .. }));
     }
+    assert!(
+        observed && recommended && tabled,
+        "two matching full states must promote observation, table and advice"
+    );
 }
 
 #[test]

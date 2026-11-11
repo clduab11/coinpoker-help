@@ -826,7 +826,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
     block_on_close = False
     allow_reuse_address = True
 
-    def __init__(self, address, handler, max_requests=64):
+    def __init__(self, address, handler, max_requests=256):
         self.requests = threading.BoundedSemaphore(max_requests)
         super().__init__(address, handler)
 
@@ -834,7 +834,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         if not self.requests.acquire(blocking=False):
             try:
                 request.settimeout(SOCKET_TIMEOUT)
-                request.sendall(b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                request.sendall(b"HTTP/1.0 503 no-slots\r\nContent-Length: 8\r\nConnection: close\r\n\r\nno-slots")
             except OSError:
                 pass
             self.shutdown_request(request)
