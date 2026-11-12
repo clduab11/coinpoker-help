@@ -1,18 +1,22 @@
 //! The decision pipeline: observed state → legal, humanized decision view.
 //!
-//! Shared by every input mode (stdin replay, capture, overlay UI) so the
-//! decision logic cannot drift between them.
+//! Shared by every input mode (stdin replay, live capture, overlay UI) so the
+//! decision logic cannot drift between them. Seeded mode keeps replayable
+//! decisions (PLAN §7); unseeded mode keeps production realism.
 
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 use core_engine::decision::{Action, DecisionEngine, DecisionInput};
 use core_engine::equity::{Card, EquityConfig, EquityEstimator, Rank, Suit};
-use ghost_layer::betting_entropy::{BettingEntropy, BettingEntropyConfig};
+use core_engine::mimicry::betting_entropy::{BettingEntropy, BettingEntropyConfig};
+use core_engine::opponent::classifier::{Archetype, Classifier, ClassifierConfig};
+use core_engine::opponent::exploit::ExploitEngine;
+use core_engine::opponent::features::StatsAccumulator;
 use ingest::parser::{GamePhase, GameState};
-use opponent_model::classifier::{Archetype, Classification, Classifier, ClassifierConfig};
-use opponent_model::exploit::ExploitEngine;
-use opponent_model::features::StatsAccumulator;
-use ui::widgets::DecisionView;
+use rand::SeedableRng as _;
+
+use crate::ui::widgets::DecisionView;
 
 /// Minimum model-reported confidence for a state to drive a decision.
 ///
@@ -20,68 +24,71 @@ use ui::widgets::DecisionView;
 /// suppressed rather than acted on.
 pub const MIN_PERCEPTION_CONFIDENCE: f64 = 0.5;
 
-/// Accumulates the opponent observations exposed by successive game states.
-#[derive(Debug, Default)]
-struct OpponentTracker {
-    stats: HashMap<String, StatsAccumulator>,
-    last_preflop_hand: Option<String>,
-    last_actions: HashMap<String, (GamePhase, Option<String>, u32)>,
+/// Session-scoped opponent reads for the exploit layer (PLAN Phase 1).
+///
+/// Heuristic v1: fed from each accepted preflop action-required state, so it
+/// counts observed opportunities rather than true hands; the classifier's
+/// `min_hands` gate keeps sparse reads at `Unknown`. Interior mutability lets
+/// the decision path be `&self` while the worker folds states in.
+#[derive(Default)]
+pub struct ArchetypeFeed {
+    stats: RwLock<HashMap<String, StatsAccumulator>>,
 }
 
-impl OpponentTracker {
-    fn observe(&mut self, state: &GameState) {
-        if state.game_phase == GamePhase::Preflop {
-            let hand = state
-                .hero_cards
-                .iter()
-                .map(|card| format!("{}:{}", card.rank, card.suit))
-                .collect::<Vec<_>>()
-                .join("|");
-            if self.last_preflop_hand.as_deref() != Some(hand.as_str()) {
-                self.last_preflop_hand = Some(hand);
-                for player in state.players.iter().filter(|player| player.name != "Hero") {
-                    let action = player.last_action.as_deref().unwrap_or_default();
-                    self.stats
-                        .entry(player.name.clone())
-                        .or_default()
-                        .observe_hand(
-                            matches!(action, "call" | "raise" | "allin" | "bet"),
-                            matches!(action, "raise" | "allin"),
-                        );
-                }
-            }
+impl ArchetypeFeed {
+    fn classifier() -> Classifier {
+        Classifier::new(ClassifierConfig::default())
+    }
+
+    /// Fold one observed state into per-name stats. Preflop action moments only.
+    pub fn observe_state(&self, state: &GameState) {
+        if state.game_phase != GamePhase::Preflop || !state.action_required {
+            return;
         }
-
-        for player in state.players.iter().filter(|player| player.name != "Hero") {
-            let observation = (
-                state.game_phase,
-                player.last_action.clone(),
-                player.bet_amount,
-            );
-            if self.last_actions.get(&player.name) == Some(&observation) {
+        let Ok(mut stats) = self.stats.write() else {
+            return;
+        };
+        for player in &state.players {
+            if player.name == "Hero" || player.chips == 0 {
                 continue;
             }
-            self.last_actions.insert(player.name.clone(), observation);
-
-            if state.game_phase == GamePhase::Preflop {
-                continue;
-            }
-            let stats = self.stats.entry(player.name.clone()).or_default();
-            match player.last_action.as_deref().unwrap_or_default() {
-                "bet" | "raise" | "allin" => stats.observe_aggressive_action(),
-                "call" => stats.observe_passive_call(),
+            let action = player.last_action.as_deref().unwrap_or("");
+            let entered = matches!(action, "call" | "bet" | "raise" | "allin");
+            let entry = stats.entry(player.name.clone()).or_default();
+            entry.observe_hand(entered, action == "raise");
+            match action {
+                "bet" | "raise" | "allin" => entry.observe_aggressive_action(),
+                "call" => entry.observe_passive_call(),
                 _ => {}
             }
         }
     }
 
-    fn classify(&self, name: &str, classifier: &Classifier) -> Classification {
-        let stats = self
-            .stats
+    /// The classified archetype for one name; `Unknown` without a trusted read.
+    pub fn archetype_for(&self, name: &str) -> Archetype {
+        let Ok(stats) = self.stats.read() else {
+            return Archetype::Unknown;
+        };
+        stats
             .get(name)
-            .map(StatsAccumulator::stats)
-            .unwrap_or_default();
-        classifier.classify(&stats)
+            .map(|accumulator| Self::classifier().classify(&accumulator.stats()).archetype)
+            .unwrap_or(Archetype::Unknown)
+    }
+
+    /// First active opponent with a trusted read, plus that read's confidence.
+    pub fn classification_for_state(&self, state: &GameState) -> (Archetype, f64) {
+        let Ok(stats) = self.stats.read() else {
+            return (Archetype::Unknown, 0.0);
+        };
+        state
+            .players
+            .iter()
+            .filter(|player| player.name != "Hero" && player.chips > 0)
+            .filter_map(|player| stats.get(&player.name))
+            .map(|accumulator| Self::classifier().classify(&accumulator.stats()))
+            .find(|classification| classification.archetype != Archetype::Unknown)
+            .map(|classification| (classification.archetype, classification.confidence))
+            .unwrap_or((Archetype::Unknown, 0.0))
     }
 }
 
@@ -91,21 +98,34 @@ pub struct Pipeline {
     exploit: ExploitEngine,
     estimator: EquityEstimator,
     betting: BettingEntropy,
-    classifier: Classifier,
-    opponents: OpponentTracker,
+    /// Seeded RNG (PLAN §7). `None` keeps entropy-based production realism.
+    seed: Option<u64>,
+    feed: ArchetypeFeed,
 }
 
 impl Pipeline {
-    /// Construct a pipeline with production defaults.
     pub fn new() -> Self {
+        Self::with_seed(None)
+    }
+
+    pub fn with_seed(seed: Option<u64>) -> Self {
+        let estimator = EquityEstimator::new(EquityConfig { iterations: 5_000 });
         Self {
             engine: DecisionEngine::new(),
             exploit: ExploitEngine::new(),
-            estimator: EquityEstimator::new(EquityConfig { iterations: 5_000 }),
+            estimator: match seed {
+                Some(seed) => estimator.with_seed(seed),
+                None => estimator,
+            },
             betting: BettingEntropy::new(BettingEntropyConfig::default()),
-            classifier: Classifier::new(ClassifierConfig::default()),
-            opponents: OpponentTracker::default(),
+            seed,
+            feed: ArchetypeFeed::default(),
         }
+    }
+
+    /// Shared per-session opponent reads (worker threads fold states in).
+    pub fn feed(&self) -> &ArchetypeFeed {
+        &self.feed
     }
 
     /// Convert an observed state into a legal decision view.
@@ -115,7 +135,7 @@ impl Pipeline {
     /// Returns a human-readable reason when the state must not drive a
     /// decision: low model confidence, unreadable cards, multiway all-in
     /// side-pot risk, or an illegal engine recommendation.
-    pub fn decide(&mut self, state: &GameState) -> Result<DecisionView, String> {
+    pub fn decide(&self, state: &GameState) -> Result<DecisionView, String> {
         // Low model-reported confidence suppresses output entirely.
         if let Some(confidence) = state.confidence {
             if confidence < MIN_PERCEPTION_CONFIDENCE {
@@ -124,6 +144,10 @@ impl Pipeline {
                 ));
             }
         }
+
+        // Explicit Unknown until the session feed has a trusted read.
+        let (archetype, classification_confidence) = self.feed.classification_for_state(state);
+        let adjustment = self.exploit.adjust(archetype);
 
         let hero = convert_cards(&state.hero_cards)?;
         if hero.len() != 2 {
@@ -158,13 +182,6 @@ impl Pipeline {
                 "multiway all-in state requires side-pot-aware EV and is not supported".to_string(),
             );
         }
-
-        self.opponents.observe(state);
-        let classification = active_opponents
-            .first()
-            .map(|player| self.opponents.classify(&player.name, &self.classifier))
-            .unwrap_or_else(|| self.classifier.classify(&Default::default()));
-        let adjustment = self.exploit.adjust(classification.archetype);
 
         let equity = self
             .estimator
@@ -205,7 +222,10 @@ impl Pipeline {
             } else {
                 let min_increment = min_raise_to.saturating_sub(hero_contribution);
                 let max_increment = max_raise_to.saturating_sub(hero_contribution);
-                let mut rng = rand::thread_rng();
+                let mut rng = match self.seed {
+                    Some(seed) => rand::rngs::StdRng::seed_from_u64(seed),
+                    None => rand::rngs::StdRng::from_entropy(),
+                };
                 let size = self
                     .betting
                     .humanize_bounded_with_provenance(
@@ -284,8 +304,8 @@ impl Pipeline {
             pot_odds: decision.pot_odds,
             equity: decision.equity,
             break_even: decision.break_even,
-            opponent: Some(archetype_label(classification.archetype).to_string()),
-            confidence: Some(classification.confidence),
+            opponent: Some(archetype_label(archetype).to_string()),
+            confidence: Some(classification_confidence),
         })
     }
 }
@@ -348,16 +368,54 @@ pub fn convert_cards(cards: &[ingest::parser::Card]) -> Result<Vec<Card>, String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ingest::parser::{parse_vlm_output, Card, GamePhase, PlayerState};
+    use ingest::parser::{parse_vlm_output, Card, PlayerState};
     use ingest::vlm::VlmOutput;
 
     const ACTION_STATE: &str = r#"{"game_phase":"flop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"A","suit":"hearts"}],"board":[{"rank":"K","suit":"diamonds"},{"rank":"7","suit":"clubs"},{"rank":"2","suit":"spades"}],"pot_size":1000,"to_call":0,"hero_chips":5000,"min_raise_to":500,"max_raise_to":5000,"players":[{"name":"Hero","chips":5000,"last_action":"check","bet_amount":0},{"name":"Villain","chips":5000,"last_action":"check","bet_amount":0}],"action_required":true,"available_actions":["check","raise"]}"#;
 
-    fn actionable_state() -> GameState {
+    const FLOP_STATE: &str = r#"{
+        "game_phase": "flop",
+        "hero_cards": [{"rank": "A", "suit": "spades"}, {"rank": "K", "suit": "hearts"}],
+        "board": [{"rank": "A", "suit": "diamonds"}, {"rank": "7", "suit": "clubs"}, {"rank": "2", "suit": "spades"}],
+        "pot_size": 1000,
+        "to_call": 500,
+        "hero_chips": 5000,
+        "min_raise_to": 1000,
+        "max_raise_to": 5000,
+        "players": [
+            {"name": "Hero", "chips": 5000, "last_action": "check", "bet_amount": 0},
+            {"name": "Villain", "chips": 5000, "last_action": "bet", "bet_amount": 500}
+        ],
+        "action_required": true,
+        "available_actions": ["fold", "call", "raise"]
+    }"#;
+
+    const PREFLOP_STATE: &str = r#"{
+        "game_phase": "preflop",
+        "hero_cards": [{"rank": "A", "suit": "spades"}, {"rank": "K", "suit": "hearts"}],
+        "board": [],
+        "pot_size": 300,
+        "to_call": 200,
+        "hero_chips": 5000,
+        "min_raise_to": 400,
+        "max_raise_to": 5000,
+        "players": [
+            {"name": "Hero", "chips": 5000, "last_action": "check", "bet_amount": 0},
+            {"name": "Villain", "chips": 5000, "last_action": "call", "bet_amount": 200}
+        ],
+        "action_required": true,
+        "available_actions": ["fold", "call", "raise"]
+    }"#;
+
+    fn state(json: &str) -> GameState {
         parse_vlm_output(&VlmOutput {
-            text: ACTION_STATE.to_string(),
+            text: json.to_string(),
         })
-        .expect("fixture state")
+        .expect("state")
+    }
+
+    fn actionable_state() -> GameState {
+        state(ACTION_STATE)
     }
 
     #[test]
@@ -482,27 +540,54 @@ mod tests {
     }
 
     #[test]
+    fn seeded_pipeline_replays_identically() {
+        let flop = state(FLOP_STATE);
+        let first = Pipeline::with_seed(Some(9))
+            .decide(&flop)
+            .expect("decision");
+        let second = Pipeline::with_seed(Some(9))
+            .decide(&flop)
+            .expect("decision");
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn feed_classifies_villains_and_changes_sizing() {
+        let preflop = state(PREFLOP_STATE);
+        let flop = state(FLOP_STATE);
+        let observed = Pipeline::with_seed(Some(3));
+        for _ in 0..30 {
+            observed.feed().observe_state(&preflop);
+        }
+        assert_eq!(
+            observed.feed().archetype_for("Villain"),
+            Archetype::LoosePassive
+        );
+        let plain = Pipeline::with_seed(Some(3))
+            .decide(&flop)
+            .expect("decision");
+        let tuned = observed.decide(&flop).expect("decision");
+        assert_ne!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::to_value(&tuned).unwrap()
+        );
+    }
+
+    #[test]
     fn observed_opponent_history_drives_a_real_classification() {
-        let classifier = Classifier::new(ClassifierConfig::default());
-        let mut tracker = OpponentTracker::default();
         let mut state = actionable_state();
         state.game_phase = GamePhase::Preflop;
         state.board.clear();
-        state.players[1].last_action = Some("call".to_string());
+        state.players[1].last_action = Some("raise".to_string());
 
-        for hand in 0..20 {
-            state.hero_cards[0].rank = format!("hand-{hand}");
-            tracker.observe(&state);
-            state.game_phase = GamePhase::Flop;
-            state.players[1].last_action = Some("raise".to_string());
-            tracker.observe(&state);
-            state.game_phase = GamePhase::Preflop;
-            state.players[1].last_action = Some("call".to_string());
+        let feed = ArchetypeFeed::default();
+        for _ in 0..30 {
+            feed.observe_state(&state);
         }
-
-        let classification = tracker.classify("Villain", &classifier);
-        assert_eq!(classification.archetype, Archetype::Lag);
-        assert!(classification.confidence > 0.5);
+        assert_eq!(feed.archetype_for("Villain"), Archetype::Lag);
     }
 
     #[test]

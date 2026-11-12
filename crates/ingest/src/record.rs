@@ -161,6 +161,7 @@ mod tests {
             width,
             height,
             rgba: vec![value; width as usize * height as usize * 4],
+            ..Frame::default()
         }
     }
 
@@ -230,6 +231,7 @@ mod tests {
             width: 2,
             height: 2,
             rgba: vec![0; 15],
+            ..Frame::default()
         };
         assert!(!recorder.record(&malformed).expect("malformed skipped"));
         assert_eq!(recorder.written(), 0);

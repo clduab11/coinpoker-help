@@ -1,0 +1,2 @@
+# Optional real-browser smoke runner; not required by the default unit suite.
+playwright==1.64.0

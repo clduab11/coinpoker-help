@@ -96,6 +96,7 @@ fn malformed_frame_fails_safe_and_keeps_the_good_baseline() {
         width: 96,
         height: 64,
         rgba: vec![0; 15],
+        ..Frame::default()
     };
     let result = detector.detect(&malformed);
     assert!(result.changed);

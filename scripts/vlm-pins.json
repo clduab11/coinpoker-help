@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "model": {
+    "repository": "ggml-org/gemma-4-E2B-it-GGUF",
+    "revision": "b4243c156154b6dca9324415f8c7ccc098b4aed1",
+    "directory": "gemma-4-E2B-it-GGUF",
+    "alias": "coinpoker-gemma-4-e2b",
+    "files": [
+      {
+        "name": "gemma-4-E2B-it-Q4_0.gguf",
+        "size": 2841481184,
+        "sha256": "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
+      },
+      {
+        "name": "mmproj-gemma-4-E2B-it-BF16.gguf",
+        "size": 986833664,
+        "sha256": "711e1e8f43fa0664adbac493129be1e6c25b81af4b4cdea97c7d798b25c0a3a4"
+      }
+    ]
+  },
+  "runtime": {
+    "repository": "ggml-org/llama.cpp",
+    "tag": "b10964",
+    "commit": "b29c606e28a01b1bc8c1351026a0fa6e616bf6c4",
+    "asset": "llama-b10964-bin-win-vulkan-x64.zip",
+    "sha256": "1ee3ad952f4ba71f438bd6d7bebef19e1c7af04adcaa35d08b4ddabb27d4c642"
+  }
+}

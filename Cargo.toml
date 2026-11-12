@@ -8,9 +8,6 @@ resolver = "2"
 members = [
     "crates/ingest",
     "crates/core-engine",
-    "crates/ghost-layer",
-    "crates/opponent-model",
-    "crates/ui",
     "bin",
 ]
 
@@ -23,8 +20,8 @@ authors = ["coinpoker-help contributors"]
 description = "A modular decision-support framework for stochastic gaming environments"
 
 # Shared dependency versions. Crates opt in by referencing these keys as
-# `dep = { workspace = true }`. macOS-only dependencies are declared per-crate
-# under `[target.'cfg(target_os = "macos")'.dependencies]`.
+# `dep = { workspace = true }`. Windows capture dependencies are declared by
+# the ingest crate under its target-specific section.
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip` makes f64 parsing exact (serde_json's fast parser can be

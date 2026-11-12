@@ -12,15 +12,29 @@ publish = false
 name = "coinpoker"
 path = "main.rs"
 
+[features]
+default = ["desktop"]
+# Native transparent study overlay (`--ui`).
+desktop = ["dep:egui", "dep:eframe"]
+# Loopback WebSocket mirror of overlay events (used with `--ui`).
+ws = []
+
 [dependencies]
 ingest = { path = "../crates/ingest" }
 core-engine = { path = "../crates/core-engine" }
-ghost-layer = { path = "../crates/ghost-layer" }
-opponent-model = { path = "../crates/opponent-model" }
-ui = { path = "../crates/ui", features = ["desktop"] }
 rand = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+image = { workspace = true }
 url = { workspace = true }
+egui = { workspace = true, optional = true }
+eframe = { workspace = true, optional = true }
 
-[features]
-ws = ["ui/ws"]
+[dev-dependencies]
+tempfile = "3.27"
+insta = { workspace = true }
+
+[[test]]
+name = "ws"
+path = "tests/ws.rs"
+required-features = ["ws"]

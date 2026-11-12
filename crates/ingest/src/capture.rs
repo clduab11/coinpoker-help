@@ -1,108 +1,206 @@
-//! Window capture via ScreenCaptureKit (macOS).
+//! Selected-window capture on Windows 10 version 1903 and later.
 //!
-//! Targets the CoinPoker application window by title/application-name match
-//! and delivers frames through a continuous [`SCStream`] that uses a
-//! window-scoped [`SCContentFilter`]. Frames arrive on a ScreenCaptureKit
-//! dispatch queue via an output-handler callback (an SCStream delegate
-//! pattern); the capturer exposes the most recent complete frame to callers
-//! without blocking.
-//!
-//! The delegate records unexpected stream stops (window closed, permission
-//! revoked) so the pipeline can distinguish "no new frame yet" from "the
-//! stream is gone". Set `COINPOKER_RECORD_FRAMES_DIR` to mirror captured
-//! frames to disk as PNG fixtures for offline testing (see [`crate::record`]).
-//!
-//! On non-macOS hosts the crate remains buildable, but capturer construction
-//! fails immediately with [`CaptureError::UnsupportedPlatform`].
+//! Discovery reads Win32 window metadata without pixels. Selection rechecks the
+//! executable, PID, HWND, title, visibility, and bounds before creating a
+//! `Windows.Graphics.Capture` item with `CreateForWindow`. The explicit visible
+//! desktop adapter copies displayed pixels with regional owned-popup masks;
+//! neither adapter focuses windows or supplies input. Other platforms retain stdin.
 
+use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use thiserror::Error;
+
+use crate::discovery::TableIdentity;
+pub use crate::discovery::{ApplicationInfo, DiscoverySnapshot};
 
 /// Errors produced by the capture layer.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CaptureError {
-    /// Screen capture is only implemented for macOS 14+.
-    #[error("screen capture is only supported on macOS 14+")]
+    #[error("live window capture is supported only on Windows 10 version 1903 or later")]
     UnsupportedPlatform,
-    /// The capture backend returned an error.
+    #[error("Windows Graphics Capture requires Windows 10 version 1903 (build 18362) or later")]
+    UnsupportedWindowsVersion,
     #[error("capture backend error: {0}")]
     Backend(String),
-    /// No window matching the configured title/application name was found.
-    #[error("target window not found (title/app: {0})")]
+    #[error("target window not found: {0}")]
     WindowNotFound(String),
-    /// Screen Recording permission has not been granted.
-    #[error(
-        "permission denied: grant Screen Recording access in System Settings > Privacy & Security"
-    )]
+    #[error("configure an exact executable name before capture")]
+    ConfigurationRequired,
+    #[error("multiple matching windows; configure an HWND or a narrower table title")]
+    AmbiguousWindows,
+    #[error("window 0x{hwnd:x} is stale or unavailable; rediscover before capture")]
+    StaleWindow { hwnd: usize },
+    #[error("no window selected; discover and select a window before capture")]
+    NoWindowSelected,
+    #[error("Windows denied access to this window's capture content")]
     PermissionDenied,
-    /// The capture stream was stopped unexpectedly and must be restarted.
-    #[error("capture stream stopped: {0}")]
-    StreamStopped(String),
 }
 
-/// Errors produced when constructing or converting a [`Frame`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FrameError {
-    /// The declared dimensions cannot be represented as a packed RGBA buffer.
     #[error("frame dimensions {width}x{height} overflow the RGBA buffer size")]
     DimensionsOverflow { width: u32, height: u32 },
-    /// The pixel buffer length does not match the declared dimensions.
     #[error("invalid RGBA buffer length: expected {expected} bytes, got {actual}")]
     InvalidBufferLength { expected: usize, actual: usize },
+    #[error("invalid frame visibility or popup capture metadata")]
+    InvalidVisibility,
 }
 
-/// Configuration for the window capturer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CaptureConfig {
-    /// Substring matched against window titles to find the target window.
-    pub window_title: String,
-    /// Fallback substring matched against the owning application name.
-    pub app_name: String,
-    /// Target capture width in pixels.
-    pub width: u32,
-    /// Target capture height in pixels.
-    pub height: u32,
+pub const MAX_OWNED_POPUPS: usize = 4;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelSource {
+    /// Caller-supplied/offline pixels, not a verified desktop-source assertion.
+    #[default]
+    Unspecified,
+    SelectedWindowSurface,
+    VisibleDesktopPixels,
 }
 
-impl Default for CaptureConfig {
-    fn default() -> Self {
-        Self {
-            window_title: "CoinPoker".to_string(),
-            app_name: "CoinPoker".to_string(),
-            width: 1920,
-            height: 1080,
-        }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameReadability {
+    #[default]
+    Full,
+    Regional,
+    Unknown,
+}
+
+/// OS ownership is not profile/seat/player qualification. Bounds are original
+/// table-relative edges, intentionally signed and NOT clipped to the table PNG.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnedPopup {
+    #[serde(with = "crate::discovery::hwnd_serde")]
+    pub hwnd: usize,
+    #[serde(with = "crate::discovery::hwnd_serde")]
+    pub owner_hwnd: usize,
+    #[serde(with = "crate::discovery::hwnd_serde")]
+    pub root_owner_hwnd: usize,
+    pub process_id: u32,
+    pub process_created_at_100ns: u64,
+    pub window_class: String,
+    pub relative_bounds: [i64; 4],
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameVisibility {
+    pub pixel_source: PixelSource,
+    pub source_process_created_at_100ns: Option<u64>,
+    pub readability: FrameReadability,
+    /// Clipped table-relative half-open rectangles. Any overlap is unreadable.
+    pub occluded_regions: Vec<[u32; 4]>,
+    pub owned_popups: Vec<OwnedPopup>,
+}
+
+impl FrameVisibility {
+    fn valid_for(&self, width: u32, height: u32) -> bool {
+        self.occluded_regions.len() <= MAX_OWNED_POPUPS
+            && self.owned_popups.len() <= MAX_OWNED_POPUPS
+            && (self.pixel_source != PixelSource::VisibleDesktopPixels
+                || self.source_process_created_at_100ns.is_some_and(|n| n > 0))
+            && (self.readability != FrameReadability::Full || self.occluded_regions.is_empty())
+            && self
+                .occluded_regions
+                .iter()
+                .all(|[l, t, r, b]| l < r && t < b && *r <= width && *b <= height)
+            && self.owned_popups.iter().all(|popup| {
+                let [l, t, r, b] = popup.relative_bounds;
+                let clipped = [
+                    l.max(0),
+                    t.max(0),
+                    r.min(i64::from(width)),
+                    b.min(i64::from(height)),
+                ];
+                popup.hwnd != 0
+                    && popup.owner_hwnd != 0
+                    && popup.root_owner_hwnd != 0
+                    && popup.process_id != 0
+                    && popup.process_created_at_100ns != 0
+                    && !popup.window_class.is_empty()
+                    && l < r
+                    && t < b
+                    && r.checked_sub(l).is_some_and(|n| n <= i64::from(i32::MAX))
+                    && b.checked_sub(t).is_some_and(|n| n <= i64::from(i32::MAX))
+                    && (clipped[0] >= clipped[2]
+                        || clipped[1] >= clipped[3]
+                        || self.occluded_regions.contains(&clipped.map(|n| n as u32)))
+            })
+    }
+
+    pub fn region_readable(&self, width: u32, height: u32, bounds: [u32; 4]) -> bool {
+        let [l, t, r, b] = bounds;
+        self.valid_for(width, height)
+            && self.readability != FrameReadability::Unknown
+            && l < r
+            && t < b
+            && r <= width
+            && b <= height
+            && !self
+                .occluded_regions
+                .iter()
+                .any(|[a, c, d, e]| l < *d && r > *a && t < *e && b > *c)
     }
 }
 
-/// A single captured frame as tightly-packed RGBA8 pixels.
+/// A distinct synchronous desktop copy, never composited into the table frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Frame {
-    /// Frame width in pixels.
+pub struct CapturedPopup {
+    pub window: OwnedPopup,
+    pub frame: Box<Frame>,
+    pub source_utc_unix_ms: u64,
+    pub started: Instant,
+}
+
+/// Original capture-call receipt carried WITH the queued pixels, not looked up
+/// by nearby timestamps. Paths, window titles and popup ownership stay private.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OriginalCapture {
+    pub schema_version: u8,
+    pub timestamp_basis: &'static str,
+    pub frame_index: u64,
+    pub recording_session_id: String,
+    pub capture_session_id: Option<String>,
+    /// Decimal text preserves the complete u64 namespace in browser JSON.
+    pub native_source_id: Option<String>,
+    pub source_utc_unix_ms: u64,
+    pub captured_at_monotonic_ms: u64,
     pub width: u32,
-    /// Frame height in pixels.
+    pub height: u32,
+    pub sha256: String,
+    pub pixel_source: PixelSource,
+    pub readability: FrameReadability,
+    pub occluded_regions: Vec<[u32; 4]>,
+}
+
+/// A single captured frame as tightly packed RGBA8 pixels.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Frame {
+    pub width: u32,
     pub height: u32,
     /// `width * height * 4` bytes, row-major, RGBA order.
     pub rgba: Vec<u8>,
+    pub visibility: FrameVisibility,
+    pub popup_frames: Vec<CapturedPopup>,
+    pub original_capture: Option<OriginalCapture>,
 }
 
 impl Frame {
-    /// Construct a frame after checking that the buffer matches its dimensions.
     pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self, FrameError> {
         let frame = Self {
             width,
             height,
             rgba,
+            ..Self::default()
         };
         frame.validate()?;
         Ok(frame)
     }
 
-    /// Number of bytes per row (tightly packed).
     pub fn bytes_per_row(&self) -> usize {
         self.width as usize * 4
     }
 
-    /// Check that the pixel buffer exactly matches the declared dimensions.
     pub fn validate(&self) -> Result<(), FrameError> {
         let expected = self.expected_rgba_len()?;
         if self.rgba.len() != expected {
@@ -111,10 +209,45 @@ impl Frame {
                 actual: self.rgba.len(),
             });
         }
+        if !self.visibility.valid_for(self.width, self.height)
+            || self.popup_frames.len() > MAX_OWNED_POPUPS
+            || self.popup_frames.iter().any(|popup| {
+                let [l, t, r, b] = popup.window.relative_bounds;
+                !self.visibility.owned_popups.contains(&popup.window)
+                    || popup.source_utc_unix_ms == 0
+                    || !popup.frame.popup_frames.is_empty()
+                    || popup.frame.visibility.pixel_source != PixelSource::VisibleDesktopPixels
+                    || popup.frame.visibility.readability != FrameReadability::Full
+                    || !popup.frame.visibility.owned_popups.is_empty()
+                    || r.checked_sub(l) != Some(i64::from(popup.frame.width))
+                    || b.checked_sub(t) != Some(i64::from(popup.frame.height))
+                    || popup.frame.validate().is_err()
+            })
+        {
+            return Err(FrameError::InvalidVisibility);
+        }
+        if self.original_capture.as_ref().is_some_and(|original| {
+            original.width != self.width
+                || original.height != self.height
+                || original.schema_version != 1
+                || original.timestamp_basis != "capture_call_start"
+                || original.frame_index == 0
+                || original.sha256.len() != 64
+                || !original
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) {
+            return Err(FrameError::InvalidVisibility);
+        }
         Ok(())
     }
 
-    /// Convert into an `image`-crate RGBA image for downstream consumers.
+    pub fn region_readable(&self, bounds: [u32; 4]) -> bool {
+        self.visibility
+            .region_readable(self.width, self.height, bounds)
+    }
+
     pub fn to_rgba_image(&self) -> Result<image::RgbaImage, FrameError> {
         self.validate()?;
         image::RgbaImage::from_raw(self.width, self.height, self.rgba.clone()).ok_or(
@@ -136,457 +269,191 @@ impl Frame {
     }
 }
 
-/// On-screen bounds of the captured window in global display coordinates
-/// (top-left origin, points).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WindowBounds {
-    /// Left edge of the window.
-    pub x: f64,
-    /// Top edge of the window.
-    pub y: f64,
-    /// Window width.
-    pub width: f64,
-    /// Window height.
-    pub height: f64,
+/// Shareable metadata only; constructing this descriptor captures no pixels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    #[serde(with = "crate::discovery::hwnd_serde")]
+    pub hwnd: usize,
+    pub process_id: u32,
+    pub exe_name: String,
+    pub title: Option<String>,
+    pub on_screen: bool,
+    /// Window bounds from Win32; frame dimensions come from the WGC item.
+    pub width: u32,
+    pub height: u32,
 }
 
-impl WindowBounds {
-    /// Build bounds from a CoreGraphics-style rect, rejecting non-finite or
-    /// non-positive extents.
-    pub fn from_cg_rect(x: f64, y: f64, width: f64, height: f64) -> Option<Self> {
-        if ![x, y, width, height].iter().all(|value| value.is_finite()) {
-            return None;
+impl WindowInfo {
+    pub fn identity(&self) -> TableIdentity {
+        TableIdentity {
+            exe_name: self.exe_name.clone(),
+            process_id: self.process_id,
+            hwnd: self.hwnd,
         }
-        if width <= 0.0 || height <= 0.0 {
-            return None;
-        }
-        Some(Self {
-            x,
-            y,
-            width,
-            height,
-        })
     }
 }
 
-/// A shareable window descriptor, used for calibration and debugging.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WindowInfo {
-    pub title: Option<String>,
-    pub app_name: Option<String>,
-    pub on_screen: bool,
+/// Mockable discovery, selection, and capture boundary.
+#[derive(Debug, Clone, Copy)]
+pub struct CaptureTiming {
+    pub monotonic_ms: u64,
+    pub utc_unix_ms: u64,
+    pub started: Instant,
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn match_priority(
-    title: Option<&str>,
-    app_name: Option<&str>,
-    config: &CaptureConfig,
-) -> Option<u8> {
-    if !config.window_title.is_empty()
-        && title.is_some_and(|title| title.contains(&config.window_title))
-    {
-        Some(0)
-    } else if !config.app_name.is_empty()
-        && app_name.is_some_and(|app| app.contains(&config.app_name))
-    {
-        Some(1)
-    } else {
+/// A source may provide the exact call-start clock shared with the runtime.
+pub trait CaptureSource {
+    fn discover(&mut self) -> Result<DiscoverySnapshot, CaptureError>;
+    fn select(&mut self, window: &WindowInfo) -> Result<(), CaptureError>;
+    fn capture(&mut self) -> Result<Frame, CaptureError>;
+    fn reset(&mut self);
+    fn last_capture_timing(&self) -> Option<CaptureTiming> {
         None
     }
 }
 
-/// Captures frames from a target application window via a continuous
-/// ScreenCaptureKit stream.
-///
-/// Construction locates the window and prepares the stream; [`Self::start`]
-/// begins frame delivery, [`Self::latest_frame`] returns each new frame
-/// exactly once, and the SCStream delegate records unexpected stops for
-/// [`Self::take_stop_error`].
-///
-/// The macOS backend is selected at compile time; construction fails with
-/// [`CaptureError::UnsupportedPlatform`] on other platforms.
+/// Default platform adapter. Construction performs no discovery or capture.
+#[derive(Default)]
+pub struct PlatformCapture {
+    capturer: Option<WindowCapturer>,
+    visible_window: Option<WindowInfo>,
+    visible_process_created_at_100ns: Option<u64>,
+    visible_desktop_pixels: bool,
+}
+
+impl PlatformCapture {
+    /// Explicit screen pixels; only selected-owned transients get regional masks.
+    pub fn visible_desktop_pixels() -> Self {
+        Self {
+            visible_desktop_pixels: true,
+            ..Self::default()
+        }
+    }
+}
+
+impl CaptureSource for PlatformCapture {
+    fn discover(&mut self) -> Result<DiscoverySnapshot, CaptureError> {
+        let result = WindowCapturer::discover();
+        if result.is_err() {
+            self.reset();
+        }
+        result
+    }
+
+    fn select(&mut self, window: &WindowInfo) -> Result<(), CaptureError> {
+        self.reset();
+        if self.visible_desktop_pixels {
+            self.visible_process_created_at_100ns =
+                Some(WindowCapturer::verify_visible_window(window)?);
+            self.visible_window = Some(window.clone());
+            return Ok(());
+        }
+        self.capturer = Some(WindowCapturer::for_window(window)?);
+        Ok(())
+    }
+
+    fn capture(&mut self) -> Result<Frame, CaptureError> {
+        let result = if self.visible_desktop_pixels {
+            WindowCapturer::capture_visible_frame(
+                self.visible_window
+                    .as_ref()
+                    .ok_or(CaptureError::NoWindowSelected)?,
+                self.visible_process_created_at_100ns
+                    .ok_or(CaptureError::NoWindowSelected)?,
+            )
+        } else {
+            self.capturer
+                .as_mut()
+                .ok_or(CaptureError::NoWindowSelected)?
+                .capture_frame()
+        };
+        if result.is_err() {
+            self.reset();
+        }
+        result
+    }
+
+    fn reset(&mut self) {
+        self.capturer = None;
+        self.visible_window = None;
+        self.visible_process_created_at_100ns = None;
+    }
+}
+
+/// Captures a selected Windows application window.
 pub struct WindowCapturer {
-    #[cfg(target_os = "macos")]
-    inner: macos::StreamCapturer,
+    #[cfg(target_os = "windows")]
+    inner: crate::windows::WindowsCapturer,
 }
 
 impl WindowCapturer {
-    /// Locate the target window and prepare the capture stream.
-    ///
-    /// The stream is not running until [`Self::start`] is called.
-    pub fn new(config: CaptureConfig) -> Result<Self, CaptureError> {
-        #[cfg(target_os = "macos")]
+    fn verify_visible_window(window: &WindowInfo) -> Result<u64, CaptureError> {
+        #[cfg(target_os = "windows")]
         {
-            Ok(Self {
-                inner: macos::StreamCapturer::new(&config)?,
-            })
+            crate::windows::verify_visible_window(window)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_os = "windows"))]
         {
-            let _ = config;
+            let _ = window;
             Err(CaptureError::UnsupportedPlatform)
         }
     }
 
-    /// List all windows currently exposed by the platform's shareable-content API.
-    ///
-    /// This is an associated function so calibration does not require locating a
-    /// configured target window first.
+    fn capture_visible_frame(
+        window: &WindowInfo,
+        process_created_at_100ns: u64,
+    ) -> Result<Frame, CaptureError> {
+        #[cfg(target_os = "windows")]
+        {
+            crate::windows::capture_visible_frame(window, process_created_at_100ns)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (window, process_created_at_100ns);
+            Err(CaptureError::UnsupportedPlatform)
+        }
+    }
+
+    pub fn discover() -> Result<DiscoverySnapshot, CaptureError> {
+        #[cfg(target_os = "windows")]
+        {
+            crate::windows::discover()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err(CaptureError::UnsupportedPlatform)
+        }
+    }
+
+    /// Select a window after revalidating its identity and current metadata.
+    pub fn for_window(window: &WindowInfo) -> Result<Self, CaptureError> {
+        #[cfg(target_os = "windows")]
+        {
+            Ok(Self {
+                inner: crate::windows::WindowsCapturer::for_window(window)?,
+            })
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = window;
+            Err(CaptureError::UnsupportedPlatform)
+        }
+    }
+
     pub fn list_windows() -> Result<Vec<WindowInfo>, CaptureError> {
-        #[cfg(target_os = "macos")]
-        {
-            macos::list_windows()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err(CaptureError::UnsupportedPlatform)
-        }
+        Self::discover().map(|snapshot| snapshot.windows)
     }
 
-    /// Start the capture stream. Idempotent: starting twice is a no-op.
-    pub fn start(&mut self) -> Result<(), CaptureError> {
-        #[cfg(target_os = "macos")]
+    pub fn capture_frame(&mut self) -> Result<Frame, CaptureError> {
+        #[cfg(target_os = "windows")]
         {
-            self.inner.start()
+            self.inner.capture()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_os = "windows"))]
         {
             let _ = self;
             Err(CaptureError::UnsupportedPlatform)
         }
-    }
-
-    /// Stop the capture stream. Idempotent.
-    pub fn stop(&mut self) -> Result<(), CaptureError> {
-        #[cfg(target_os = "macos")]
-        {
-            self.inner.stop()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = self;
-            Err(CaptureError::UnsupportedPlatform)
-        }
-    }
-
-    /// Return the newest frame if one arrived since the last call.
-    ///
-    /// This never blocks: `Ok(None)` means no new complete frame has been
-    /// delivered by the stream yet.
-    pub fn latest_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
-        #[cfg(target_os = "macos")]
-        {
-            self.inner.latest_frame()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = self;
-            Err(CaptureError::UnsupportedPlatform)
-        }
-    }
-
-    /// On-screen bounds of the captured window in global display coordinates.
-    ///
-    /// Consumers use this to position overlays relative to the table window.
-    pub fn window_bounds(&self) -> Option<WindowBounds> {
-        #[cfg(target_os = "macos")]
-        {
-            Some(self.inner.bounds())
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = self;
-            None
-        }
-    }
-
-    /// Take the error recorded when the stream stopped unexpectedly, if any.
-    ///
-    /// Reading clears the recorded error; a subsequent unexpected stop records
-    /// a new one. A stopped stream needs [`Self::start`] to resume delivery.
-    pub fn take_stop_error(&self) -> Option<String> {
-        #[cfg(target_os = "macos")]
-        {
-            self.inner.take_stop_error()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = self;
-            None
-        }
-    }
-
-    /// List candidate windows matching the configured title/application name.
-    ///
-    /// Useful for calibration: run once to confirm the target window is
-    /// discoverable and to inspect the exact title used by the client.
-    pub fn list_candidate_windows(&self) -> Result<Vec<WindowInfo>, CaptureError> {
-        #[cfg(target_os = "macos")]
-        {
-            macos::list_candidate_windows(&self.inner.config)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = self;
-            Err(CaptureError::UnsupportedPlatform)
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod macos {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex};
-
-    use screencapturekit::cm::{
-        CMSampleBuffer, CMSampleBufferExt, CMSampleBufferSCExt, SCFrameStatus,
-    };
-    use screencapturekit::error::SCError;
-    use screencapturekit::prelude::*;
-    use screencapturekit::screenshot_manager::CGImageExt;
-    use screencapturekit::shareable_content::SCShareableContent;
-    use screencapturekit::stream::output_type::SCStreamOutputType;
-    use screencapturekit::stream::sc_stream::SCStream;
-
-    use super::{match_priority, CaptureConfig, CaptureError, Frame, WindowBounds, WindowInfo};
-
-    /// State shared between the capturer owner and the stream callbacks.
-    #[derive(Default)]
-    struct StreamShared {
-        latest: Mutex<Option<Frame>>,
-        sequence: AtomicU64,
-        stop_error: Mutex<Option<String>>,
-    }
-
-    impl StreamShared {
-        /// Publish a frame and bump the sequence so consumers see it as new.
-        fn publish(&self, frame: Frame) {
-            *self.latest.lock().expect("frame lock") = Some(frame);
-            self.sequence.fetch_add(1, Ordering::AcqRel);
-        }
-    }
-
-    /// SCStream delegate capturing unexpected stream stops.
-    struct StreamDelegate {
-        shared: Arc<StreamShared>,
-    }
-
-    impl screencapturekit::stream::delegate_trait::SCStreamDelegateTrait for StreamDelegate {
-        fn did_stop_with_error(&self, error: SCError) {
-            *self.shared.stop_error.lock().expect("stop-error lock") = Some(error.to_string());
-        }
-    }
-
-    /// macOS backend: a window-scoped SCStream with delegate-driven delivery.
-    pub(super) struct StreamCapturer {
-        pub(super) config: CaptureConfig,
-        stream: SCStream,
-        shared: Arc<StreamShared>,
-        bounds: WindowBounds,
-        seen_sequence: u64,
-        started: bool,
-    }
-
-    impl StreamCapturer {
-        pub(super) fn new(config: &CaptureConfig) -> Result<Self, CaptureError> {
-            let content =
-                SCShareableContent::get().map_err(|e| CaptureError::Backend(e.to_string()))?;
-
-            let window = find_window(&content, config)
-                .ok_or_else(|| CaptureError::WindowNotFound(config.window_title.clone()))?;
-
-            let frame_rect = window.frame();
-            let bounds = WindowBounds::from_cg_rect(
-                frame_rect.origin.x,
-                frame_rect.origin.y,
-                frame_rect.size.width,
-                frame_rect.size.height,
-            )
-            .ok_or_else(|| {
-                CaptureError::Backend(format!(
-                    "window {:?} reported unusable bounds {:?}",
-                    window.title(),
-                    frame_rect
-                ))
-            })?;
-
-            // Window-scoped filter: only the target window's content is
-            // captured, excluding the rest of the display.
-            let filter = SCContentFilter::create().with_window(&window).build();
-            let stream_config = SCStreamConfiguration::new()
-                .with_width(config.width)
-                .with_height(config.height)
-                .with_pixel_format(PixelFormat::BGRA)
-                .with_shows_cursor(false)
-                .with_queue_depth(3);
-
-            let shared = Arc::new(StreamShared::default());
-
-            let delegate = StreamDelegate {
-                shared: Arc::clone(&shared),
-            };
-            let mut stream = SCStream::new_with_delegate(&filter, &stream_config, delegate);
-
-            let handler_shared = Arc::clone(&shared);
-            let handler_recorder = Arc::new(Mutex::new(crate::record::FrameRecorder::from_env()));
-            stream.add_output_handler(
-                move |sample: CMSampleBuffer, output_type| {
-                    if output_type != SCStreamOutputType::Screen {
-                        return;
-                    }
-                    if sample.frame_status() != Some(SCFrameStatus::Complete) {
-                        return;
-                    }
-                    let frame = match sample_buffer_to_frame(&sample) {
-                        Some(frame) => frame,
-                        None => return,
-                    };
-                    if let Ok(mut guard) = handler_recorder.lock() {
-                        if let Some(recorder) = guard.as_mut() {
-                            if let Err(error) = recorder.record(&frame) {
-                                eprintln!("frame recording failed: {error}");
-                            }
-                        }
-                    }
-                    handler_shared.publish(frame);
-                },
-                SCStreamOutputType::Screen,
-            );
-
-            Ok(Self {
-                config: config.clone(),
-                stream,
-                shared,
-                bounds,
-                seen_sequence: 0,
-                started: false,
-            })
-        }
-
-        pub(super) fn start(&mut self) -> Result<(), CaptureError> {
-            if self.started {
-                return Ok(());
-            }
-            self.stream
-                .start_capture()
-                .map_err(|e| CaptureError::Backend(e.to_string()))?;
-            self.started = true;
-            Ok(())
-        }
-
-        pub(super) fn stop(&mut self) -> Result<(), CaptureError> {
-            if !self.started {
-                return Ok(());
-            }
-            self.stream
-                .stop_capture()
-                .map_err(|e| CaptureError::Backend(e.to_string()))?;
-            self.started = false;
-            Ok(())
-        }
-
-        pub(super) fn latest_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
-            if let Some(error) = self.take_stop_error() {
-                return Err(CaptureError::StreamStopped(error));
-            }
-            let sequence = self.shared.sequence.load(Ordering::Acquire);
-            if sequence <= self.seen_sequence {
-                return Ok(None);
-            }
-            let frame = self.shared.latest.lock().expect("frame lock").clone();
-            self.seen_sequence = sequence;
-            Ok(frame)
-        }
-
-        pub(super) fn bounds(&self) -> WindowBounds {
-            // The SCWindow used to create the stream has a startup-time frame.
-            // Refresh shareable content while the overlay is polling so table
-            // moves and resizes are reflected in subsequent position events.
-            SCShareableContent::get()
-                .ok()
-                .and_then(|content| find_window(&content, &self.config))
-                .and_then(|window| {
-                    let frame = window.frame();
-                    WindowBounds::from_cg_rect(
-                        frame.origin.x,
-                        frame.origin.y,
-                        frame.size.width,
-                        frame.size.height,
-                    )
-                })
-                .unwrap_or(self.bounds)
-        }
-
-        pub(super) fn take_stop_error(&self) -> Option<String> {
-            self.shared
-                .stop_error
-                .lock()
-                .expect("stop-error lock")
-                .take()
-        }
-    }
-
-    /// Convert a complete screen sample buffer into a validated [`Frame`].
-    ///
-    /// Returns `None` for samples that cannot be decoded or that fail
-    /// validation; the caller skips them rather than interrupting the stream.
-    fn sample_buffer_to_frame(sample: &CMSampleBuffer) -> Option<Frame> {
-        let image = sample.cg_image().ok()?;
-        let width = image.width() as u32;
-        let height = image.height() as u32;
-        let rgba = image.rgba_data().ok()?;
-        Frame::new(width, height, rgba).ok()
-    }
-
-    /// Find the first on-screen title match, falling back to the first owning
-    /// application match only when no title matches.
-    fn find_window(
-        content: &SCShareableContent,
-        config: &CaptureConfig,
-    ) -> Option<screencapturekit::shareable_content::window::SCWindow> {
-        content
-            .windows()
-            .into_iter()
-            .filter(|window| window.is_on_screen())
-            .filter_map(|window| {
-                let title = window.title();
-                let app_name = window
-                    .owning_application()
-                    .map(|application| application.application_name());
-                match_priority(title.as_deref(), app_name.as_deref(), config)
-                    .map(|priority| (priority, window))
-            })
-            .min_by_key(|(priority, _)| *priority)
-            .map(|(_, window)| window)
-    }
-
-    pub(super) fn list_windows() -> Result<Vec<WindowInfo>, CaptureError> {
-        let content =
-            SCShareableContent::get().map_err(|e| CaptureError::Backend(e.to_string()))?;
-
-        Ok(content
-            .windows()
-            .into_iter()
-            .map(|w| WindowInfo {
-                title: w.title(),
-                app_name: w.owning_application().map(|a| a.application_name()),
-                on_screen: w.is_on_screen(),
-            })
-            .collect())
-    }
-
-    pub(super) fn list_candidate_windows(
-        config: &CaptureConfig,
-    ) -> Result<Vec<WindowInfo>, CaptureError> {
-        Ok(list_windows()?
-            .into_iter()
-            .filter(|window| {
-                window.on_screen
-                    && match_priority(window.title.as_deref(), window.app_name.as_deref(), config)
-                        .is_some()
-            })
-            .collect())
     }
 }
 
@@ -595,120 +462,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_targets_coinpoker() {
-        let cfg = CaptureConfig::default();
-        assert_eq!(cfg.window_title, "CoinPoker");
-        assert_eq!(cfg.app_name, "CoinPoker");
-        assert_eq!(cfg.width, 1920);
-        assert_eq!(cfg.height, 1080);
+    fn visible_desktop_capture_requires_explicit_selection_and_reset_keeps_policy() {
+        let mut default = PlatformCapture::default();
+        assert!(!default.visible_desktop_pixels);
+        assert_eq!(default.capture(), Err(CaptureError::NoWindowSelected));
+        let mut visible = PlatformCapture::visible_desktop_pixels();
+        assert!(visible.visible_desktop_pixels);
+        assert_eq!(visible.capture(), Err(CaptureError::NoWindowSelected));
+        visible.reset();
+        assert!(visible.visible_desktop_pixels);
+        assert!(visible.visible_window.is_none());
+        assert!(visible.capturer.is_none());
     }
 
     #[test]
-    fn title_matches_take_priority_over_application_fallbacks() {
-        let config = CaptureConfig {
-            window_title: "Table 42".to_string(),
-            app_name: "CoinPoker".to_string(),
-            ..CaptureConfig::default()
-        };
-
-        assert_eq!(
-            match_priority(Some("Table 42 - NLH"), Some("CoinPoker"), &config),
-            Some(0)
-        );
-        assert_eq!(
-            match_priority(Some("Lobby"), Some("CoinPoker"), &config),
-            Some(1)
-        );
-        assert_eq!(
-            match_priority(Some("Other"), Some("Browser"), &config),
-            None
-        );
-    }
-
-    #[test]
-    fn empty_selectors_do_not_match_every_window() {
-        let config = CaptureConfig {
-            window_title: String::new(),
-            app_name: String::new(),
-            ..CaptureConfig::default()
-        };
-        assert_eq!(
-            match_priority(Some("Any window"), Some("Any app"), &config),
-            None
-        );
-    }
-
-    #[test]
-    fn frame_bytes_per_row_is_tightly_packed() {
-        let frame = Frame {
-            width: 3,
-            height: 2,
-            rgba: vec![0u8; 3 * 2 * 4],
-        };
-        assert_eq!(frame.bytes_per_row(), 12);
-        let img = frame.to_rgba_image().expect("valid frame");
-        assert_eq!(img.width(), 3);
-        assert_eq!(img.height(), 2);
-    }
-
-    #[test]
-    fn malformed_frame_conversion_returns_error() {
-        let frame = Frame {
-            width: 2,
-            height: 2,
-            rgba: vec![0u8; 15],
-        };
-
-        assert_eq!(
-            frame.to_rgba_image(),
-            Err(FrameError::InvalidBufferLength {
-                expected: 16,
-                actual: 15,
-            })
-        );
+    fn frame_requires_exact_packed_rgba_length() {
         assert!(matches!(
-            Frame::new(2, 2, vec![0u8; 15]),
+            Frame::new(2, 2, vec![0; 15]),
             Err(FrameError::InvalidBufferLength { .. })
         ));
+        let frame = Frame::new(2, 2, vec![7; 16]).unwrap();
+        assert_eq!(frame.bytes_per_row(), 8);
+        assert_eq!(frame.to_rgba_image().unwrap().as_raw(), &vec![7; 16]);
     }
 
     #[test]
-    fn window_bounds_rejects_unusable_rects() {
-        assert_eq!(
-            WindowBounds::from_cg_rect(10.0, 20.0, 800.0, 600.0),
-            Some(WindowBounds {
-                x: 10.0,
-                y: 20.0,
-                width: 800.0,
-                height: 600.0
-            })
-        );
-        assert_eq!(WindowBounds::from_cg_rect(0.0, 0.0, 0.0, 100.0), None);
-        assert_eq!(WindowBounds::from_cg_rect(0.0, 0.0, 100.0, -1.0), None);
-        assert_eq!(
-            WindowBounds::from_cg_rect(f64::NAN, 0.0, 100.0, 100.0),
-            None
-        );
-        assert_eq!(
-            WindowBounds::from_cg_rect(0.0, f64::INFINITY, 100.0, 100.0),
-            None
-        );
+    fn regional_readability_rejects_stationary_covered_pixels_and_keeps_adjacent_crops() {
+        let mut frame = Frame::new(8, 6, vec![7; 8 * 6 * 4]).unwrap();
+        frame.visibility = FrameVisibility {
+            pixel_source: PixelSource::VisibleDesktopPixels,
+            source_process_created_at_100ns: Some(100),
+            readability: FrameReadability::Regional,
+            occluded_regions: vec![[2, 2, 4, 4]],
+            ..FrameVisibility::default()
+        };
+        let stationary = frame.clone();
+        assert_eq!(stationary.rgba, frame.rgba);
+        assert!(!stationary.region_readable([0, 0, 8, 6]));
+        assert!(!stationary.region_readable([3, 3, 5, 5]));
+        assert!(stationary.region_readable([4, 2, 8, 4]));
+        assert!(stationary.region_readable([0, 0, 2, 2]));
+        frame.visibility.readability = FrameReadability::Unknown;
+        assert!(!frame.region_readable([0, 0, 2, 2]));
+        frame.visibility.readability = FrameReadability::Full;
+        assert_eq!(frame.validate(), Err(FrameError::InvalidVisibility));
+        assert!(!frame.region_readable([0, 0, 2, 2]));
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
-    fn non_macos_capture_fails_fast() {
-        assert!(matches!(
-            WindowCapturer::new(CaptureConfig::default()),
-            Err(CaptureError::UnsupportedPlatform)
-        ));
+    fn invalid_masks_and_unverified_desktop_source_are_never_readable() {
+        let mut frame = Frame::new(8, 6, vec![7; 8 * 6 * 4]).unwrap();
+        frame.visibility.readability = FrameReadability::Regional;
+        for bounds in [[2, 2, 2, 4], [4, 2, 2, 4], [2, 2, 9, 4], [2, 2, 4, 7]] {
+            frame.visibility.occluded_regions = vec![bounds];
+            assert_eq!(frame.validate(), Err(FrameError::InvalidVisibility));
+            assert!(!frame.region_readable([0, 0, 1, 1]));
+        }
+        frame.visibility.occluded_regions.clear();
+        frame.visibility.pixel_source = PixelSource::VisibleDesktopPixels;
+        assert_eq!(frame.validate(), Err(FrameError::InvalidVisibility));
+        frame.visibility.source_process_created_at_100ns = Some(100);
+        assert!(frame.validate().is_ok());
+        for bounds in [[0, 0, 0, 1], [2, 0, 1, 1], [0, 0, 9, 1], [0, 0, 1, 7]] {
+            assert!(!frame.region_readable(bounds));
+        }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn non_macos_window_listing_fails_without_construction() {
+    fn live_capture_is_unsupported_off_windows() {
         assert_eq!(
-            WindowCapturer::list_windows(),
+            WindowCapturer::discover(),
             Err(CaptureError::UnsupportedPlatform)
         );
     }

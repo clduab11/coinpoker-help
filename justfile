@@ -18,12 +18,13 @@ test:
 clippy:
 	cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-shellcheck:
-	bash -n download-model.sh
+# PowerShell syntax check for the operator scripts (Windows host).
+syntax:
+	pwsh -NoProfile -Command "$paths = @(Get-ChildItem scripts -Filter '*.ps1' -File | ForEach-Object FullName); foreach ($path in $paths) { $tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { throw \"PowerShell syntax errors in $path\" } }"
 
-# Coverage (default features only; desktop feature has no tests)
+# Coverage (excludes the opt-in private-capture replays)
 coverage:
 	cargo llvm-cov --workspace --all-targets --locked
 
 # Aggregate validation
-validate: fmt check test clippy shellcheck
+validate: fmt check test clippy syntax

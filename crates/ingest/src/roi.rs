@@ -120,6 +120,7 @@ mod tests {
             width,
             height,
             rgba,
+            ..Frame::default()
         }
     }
 
@@ -207,6 +208,7 @@ mod tests {
             width: 4,
             height: 4,
             rgba: vec![0; 15],
+            ..Frame::default()
         };
         let err = apply_roi(&frame, &RoiConfig::default()).expect_err("malformed");
         assert!(matches!(err, RoiError::InvalidFrame(_)));

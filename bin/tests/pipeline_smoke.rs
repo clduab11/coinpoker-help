@@ -3,16 +3,16 @@
 //!
 //! Runs on any host (no screen capture or VLM server required).
 
+use coinpoker::ui::widgets::DecisionView;
 use core_engine::decision::{DecisionEngine, DecisionInput};
 use core_engine::equity::{Card, EquityConfig, EquityEstimator, Rank, Suit};
-use ghost_layer::betting_entropy::{BettingEntropy, BettingEntropyConfig};
+use core_engine::mimicry::betting_entropy::{BettingEntropy, BettingEntropyConfig};
+use core_engine::opponent::classifier::{Archetype, Classifier, ClassifierConfig};
+use core_engine::opponent::exploit::ExploitEngine;
 use ingest::parser::{parse_vlm_output, GameState};
 use ingest::state_machine::{StateMachine, TableEvent};
 use ingest::vlm::VlmOutput;
-use opponent_model::classifier::{Archetype, Classifier, ClassifierConfig};
-use opponent_model::exploit::ExploitEngine;
 use rand::SeedableRng;
-use ui::widgets::DecisionView;
 
 const FLOP_STATE: &str = include_str!("fixtures/flop_state.json");
 

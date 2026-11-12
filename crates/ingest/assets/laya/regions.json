@@ -1,0 +1,36 @@
+{
+ "schema": "coinpoker-laya-regions/1",
+ "version": "0.4.0",
+ "layout": "six_max",
+ "status": "agent_numeric_verified; human_unverified",
+ "geometry": {
+  "title_bar_px": 28,
+  "title_bar_range_px": [20, 48],
+  "content_aspect": 1.3677,
+  "min_crop_px": 8
+ },
+ "regions": {
+  "board_slot_1": [0.3112, 0.375, 0.3852, 0.518],
+  "board_slot_2": [0.3871, 0.375, 0.4611, 0.518],
+  "board_slot_3": [0.4630, 0.375, 0.5370, 0.518],
+  "board_slot_4": [0.5389, 0.375, 0.6129, 0.518],
+  "board_slot_5": [0.6148, 0.375, 0.6888, 0.518],
+  "pot": [0.400, 0.333, 0.640, 0.373],
+  "seat_controls": [0.640, 0.905, 1.000, 0.990],
+  "hero_card_1": [0.430, 0.620, 0.500, 0.830],
+  "hero_card_2": [0.500, 0.620, 0.570, 0.830],
+  "action_buttons": [0.600, 0.880, 1.000, 1.000],
+  "to_call": [0.640, 0.905, 0.820, 0.990],
+  "hero_chips": [0.4350, 0.8863, 0.5650, 0.9223],
+  "min_raise_to": [0.640, 0.830, 0.820, 0.900],
+  "max_raise_to": [0.820, 0.830, 1.000, 0.900],
+  "seat_1_stack": [0.4355, 0.2031, 0.5655, 0.2391],
+  "seat_2_stack": [0.7966, 0.2866, 0.9266, 0.3226],
+  "seat_3_stack": [0.8168, 0.6983, 0.9468, 0.7343],
+  "seat_4_stack": [0.4350, 0.8863, 0.5650, 0.9223],
+  "seat_5_stack": [0.0542, 0.6983, 0.1842, 0.7343],
+  "seat_6_stack": [0.0734, 0.2866, 0.2034, 0.3226]
+ },
+ "provisional": ["hero_card_1", "hero_card_2", "action_buttons", "to_call", "hero_chips", "min_raise_to", "max_raise_to"],
+ "notes": "board_slot_k, pot, seat_k_stack, seat_controls measured numerically on 1015x770 and 800x613 captures (card columns, text components). Seated regions are provisional: no seated capture exists."
+}

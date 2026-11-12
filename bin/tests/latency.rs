@@ -12,12 +12,12 @@
 use std::time::{Duration, Instant};
 
 use coinpoker::pipeline::Pipeline;
+use coinpoker::ui::widgets::DecisionView;
 use ingest::capture::Frame;
 use ingest::consensus::{ConsensusConfig, ConsensusOutcome, ConsensusTracker};
 use ingest::parser::{parse_vlm_output, validate_game_state};
 use ingest::state_machine::{StateMachine, TableEvent};
 use ingest::vlm::{VlmBackend, VlmError, VlmOutput};
-use ui::widgets::DecisionView;
 
 const FLOP_STATE: &str = include_str!("fixtures/flop_state.json");
 
@@ -49,6 +49,7 @@ fn tiny_frame() -> Frame {
         width: 2,
         height: 2,
         rgba: vec![255; 2 * 2 * 4],
+        ..Frame::default()
     }
 }
 
@@ -66,7 +67,7 @@ fn cycle(backend: &MockVlm) -> Duration {
     let mut consensus =
         ConsensusTracker::try_new(ConsensusConfig::default()).expect("valid consensus config");
     let mut state_machine = StateMachine::new();
-    let mut pipeline = Pipeline::new();
+    let pipeline = Pipeline::new();
 
     let start = Instant::now();
     let mut decision: Option<DecisionView> = None;
