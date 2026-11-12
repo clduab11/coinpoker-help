@@ -217,6 +217,14 @@ def pinned_file_entries(ft):
     return files
 
 
+def _canonical(value):
+    # Case-normalized real form via os.path.realpath (unpatched by tests that
+    # patch Path.resolve); raw and resolved strings can differ without any
+    # redirection (8.3 short names on CI, junctions).
+    import os
+    return Path(os.path.normcase(os.path.realpath(os.fspath(value))))
+
+
 def load_acceptance_floors_from_repo(pins, repo, reject_constant):
     """Read the separately pinned fitted report; this is not quality approval."""
     model = pins.get("model") if isinstance(pins, dict) else None
@@ -235,11 +243,12 @@ def load_acceptance_floors_from_repo(pins, repo, reject_constant):
             or not isinstance(checkpoint, str) or not checkpoint
             or Path(checkpoint).is_absolute() or ".." in Path(checkpoint).parts):
         raise ValueError("acceptance-report-invalid")
-    root = Path(repo).resolve()
-    base = (root / checkpoint).resolve()
-    path = (base / filename).resolve()
-    if (base != root / checkpoint or not base.is_relative_to(root) or path != base / filename
-            or path.stat().st_size != size):
+    root = Path(repo)
+    expected = _canonical(root) / checkpoint
+    base = root / checkpoint
+    path = base / filename
+    if (base.resolve() != expected or not _canonical(path).is_relative_to(_canonical(root))
+            or path.resolve() != expected / filename or path.stat().st_size != size):
         raise ValueError("acceptance-report-invalid")
     with path.open("rb") as stream:
         data = stream.read(MAX_ACCEPTANCE_REPORT + 1)

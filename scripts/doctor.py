@@ -106,17 +106,28 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def _canonical(value):
+    # Case-normalized real form via os.path.realpath (unpatched by tests that
+    # patch Path.resolve). Raw and resolved strings can differ without any
+    # redirection (8.3 short names on CI, junctions), so checks compare
+    # canonical forms.
+    return Path(os.path.normcase(os.path.realpath(os.fspath(value))))
+
+
 def _check_files(root, files, what, allowed_root=None):
-    root = root.resolve()
-    allowed_root = (allowed_root or root).resolve()
+    root = _canonical(root)
+    allowed_root = _canonical(allowed_root or root)
     if not files:
         raise ValueError("no pinned %s files" % what)
     for artifact in files:
         relative = Path(artifact["path"])
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError("escaping %s artifact path" % what)
+        # `.resolve()` keeps the tests' redirect mapping patchable; the
+        # containment baseline is canonical so alias forms compare equal.
         path = (root / relative).resolve()
-        if not path.is_relative_to(allowed_root) or not path.is_file() or path.stat().st_size != artifact["size"]:
+        if (not _canonical(path).is_relative_to(allowed_root) or not path.is_file()
+                or path.stat().st_size != artifact["size"]):
             raise ValueError("missing, wrong-sized, or escaping %s artifact" % what)
         if sha256_file(path) != artifact["sha256"]:
             raise ValueError("%s artifact SHA256 mismatch" % what)

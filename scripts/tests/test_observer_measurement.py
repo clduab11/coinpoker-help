@@ -84,8 +84,8 @@ path = Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location('clean_measurement_tests', path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-assert module.measurement.ROOT == path.parents[2]
-assert module.measurement.PRIVATE == path.parents[2] / '.local'
+assert module.measurement.ROOT == path.parents[2].resolve()
+assert module.measurement.PRIVATE == (path.parents[2] / '.local').resolve()
 assert not module.measurement.PRIVATE.exists()
 module.measurement.measurement_self_test()
 assert not module.measurement.PRIVATE.exists()

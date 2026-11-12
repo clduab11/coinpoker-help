@@ -10,6 +10,11 @@ import re
 import threading
 
 
+def _canonical(value):
+    from laya_capture import _canonical as canonical
+    return canonical(value)
+
+
 class EventEvidence:
     def __init__(self, root, instance_id, *, max_bytes=256 * 1024 * 1024,
                  max_frames=512, max_log_bytes=16 * 1024 * 1024):
@@ -90,7 +95,7 @@ class EventEvidence:
                 event = {"schema_version": 1, "event_id": self.count + 1, "kind": kind,
                          "capture": copy.deepcopy(capture), "changes": copy.deepcopy(changes),
                          "evidence_id": evidence_id, "crops": crop_refs,
-                         "original_path": str(self.paths[evidence_id].relative_to(self.root)),
+                         "original_path": str(_canonical(self.paths[evidence_id]).relative_to(_canonical(self.root))),
                          "order_status": "capture-order-not-gameplay-order"}
                 line = json.dumps(event, allow_nan=False, separators=(",", ":")).encode() + b"\n"
                 if len(line) > 64 * 1024 or self.log_bytes + len(line) > self.max_log_bytes:

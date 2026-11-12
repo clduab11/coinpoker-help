@@ -55,8 +55,8 @@ unittest.main(verbosity=2)
             commands = []
 
             def run_command(command_root, command_out, name, command):
-                self.assertEqual(command_root, root)
-                self.assertEqual(command_out, out)
+                self.assertEqual(command_root, root.resolve())
+                self.assertEqual(command_out, out.resolve())
                 commands.append((name, command))
                 return {"check": name, "command": command, "exit_code": 0}
 

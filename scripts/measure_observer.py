@@ -11,6 +11,7 @@ import hashlib
 import http.client
 import json
 import math
+import os
 from pathlib import Path
 import re
 import statistics
@@ -338,10 +339,24 @@ def reject_constant(value):
     raise ValueError("nonfinite-json")
 
 
+def _canonical(value):
+    # Case-normalized real form via os.path.realpath (unpatched by tests that
+    # patch Path.resolve). Raw and resolved strings can differ without any
+    # redirection (8.3 short names on CI, junctions), so checks compare
+    # canonical forms.
+    return Path(os.path.normcase(os.path.realpath(os.fspath(value))))
+
+
+def _relative(value):
+    # Repo-relative form of a path of any raw/canonical shape.
+    return _canonical(value).relative_to(_canonical(ROOT))
+
+
 def private_path(value, base=PRIVATE):
     supplied = Path(value)
-    path = (ROOT / supplied).resolve()
-    if ".." in supplied.parts or not path.is_relative_to(base) or path == base:
+    path = _canonical(ROOT / supplied)
+    canonical_base = _canonical(base)
+    if ".." in supplied.parts or not path.is_relative_to(canonical_base) or path == canonical_base:
         raise ValueError("path-must-be-private")
     return path
 
@@ -367,7 +382,7 @@ def write_json(path, value):
 
 
 def read_rows(path, metadata, byte_limit=INPUT_LIMIT, boundary_size=None, row_limit=None):
-    info = {"path": str(path.relative_to(ROOT)), "rows": 0, "bytes": 0,
+    info = {"path": str(_relative(path)), "rows": 0, "bytes": 0,
             "scanned_rows": 0, "invalid_rows": 0, "partial_tail": False, "capped": False}
     metadata.append(info)
     if not path.is_file():
@@ -453,9 +468,9 @@ class VisualNamespaces:
                 raise ValueError("namespace-log-schema")
             path = private_path(log["path"], PRIVATE / "laya/events")
             # Exact service-hash/UUID/log binding also rejects symlink/junction substitutions.
-            if path != directory / ("visual.jsonl" if kind == "visual_log" else "context.jsonl"):
+            if path != _canonical(directory) / ("visual.jsonl" if kind == "visual_log" else "context.jsonl"):
                 raise ValueError("namespace-log-path")
-            result[kind]["path"] = str(path.relative_to(ROOT))
+            result[kind]["path"] = str(_relative(path))
         archive = value.get("archive")
         if (not isinstance(archive, dict) or any(not self.integer(archive.get(key)) for key in ("frames", "bytes", "log_bytes"))
                 or type(archive.get("complete")) is not bool):
@@ -997,7 +1012,7 @@ def validate_stats(stats, seat, context_capture, table_context_id=None, sampled_
 def load_ui_receipts(path, metadata):
     if path is None:
         return [], {"requested": False, "coverage": "NOT OBSERVED"}
-    info = {"path": str(path.relative_to(ROOT)), "requested": True, "read_at_unix_ms": utc_ms(),
+    info = {"path": str(_relative(path)), "requested": True, "read_at_unix_ms": utc_ms(),
             "rows": 0, "invalid_rows": 0, "capped": False, "partial_tail": False,
             "byte_limit": UI_RECEIPT_LIMIT, "row_limit": EVENT_LIMIT}
     metadata.append(info)
@@ -1661,7 +1676,7 @@ def analyze(out, report_name="timing.json", run=None, context=None, ui_receipts=
     boundaries = run.get("input_sizes_at_end", {})
 
     def input_rows(path, byte_limit=INPUT_LIMIT):
-        return read_rows(path, inputs, byte_limit, boundaries.get(str(path.relative_to(ROOT))))
+        return read_rows(path, inputs, byte_limit, boundaries.get(str(_relative(path))))
 
     api_rows = input_rows(out / "api.jsonl")
     api = [(offset, row) for offset, row in api_rows
@@ -1724,7 +1739,7 @@ def analyze(out, report_name="timing.json", run=None, context=None, ui_receipts=
         status_rows = [row["state"]["context_diagnostics"] for _, row in api
             if isinstance(row.get("state"), dict) and isinstance(row["state"].get("context_diagnostics"), dict)
             and row["state"]["context_diagnostics"].get("log_path") == context_log]
-        boundary = boundaries.get(str(log_path.relative_to(ROOT)))
+        boundary = boundaries.get(str(_relative(log_path)))
         if boundary is None and status_rows:
             boundary = status_rows[-1].get("bytes", status_rows[-1].get("log_bytes"))
         if type(boundary) is int and boundary >= 0:
@@ -2046,8 +2061,8 @@ def collect(args, out):
     namespaces, last_context_path = VisualNamespaces(), None
     evidence_paths = [answers, manifest, manifest.with_name("visual.jsonl"), *(
         session / name for name in ("stdout.jsonl", "ledger.jsonl", "readouts.jsonl", "perception.jsonl"))]
-    run = {"format": 1, "session": args.session, "session_dir": str(session.relative_to(ROOT)),
-           "answers_log": str(answers.relative_to(ROOT)), "manifest": str(manifest.relative_to(ROOT)),
+    run = {"format": 1, "session": args.session, "session_dir": str(_relative(session)),
+           "answers_log": str(_relative(answers)), "manifest": str(_relative(manifest)),
            "started_at_unix_ms": wall, "requested_seconds": args.seconds, "poll_ms": args.poll_ms,
            "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "limits": {"api_response_bytes": API_LIMIT, "api_output_bytes": OUTPUT_LIMIT,
@@ -2058,7 +2073,7 @@ def collect(args, out):
                         "diagnostic_namespaces": NAMESPACE_LIMIT, "namespace_log_bytes": NAMESPACE_BYTES,
                         "namespace_log_rows": NAMESPACE_ROWS},
             "api_samples_projected": True, "response_hash_basis": "unprojected-http-body",
-           "input_sizes_at_start": {str(path.relative_to(ROOT)): path.stat().st_size
+           "input_sizes_at_start": {str(_relative(path)): path.stat().st_size
                                     for path in (answers, manifest, session / "stdout.jsonl", session / "ledger.jsonl", session / "readouts.jsonl")
                                     if path.is_file()}}
     print(dump({"event": "measurement-start", **run}), flush=True)
@@ -2131,11 +2146,11 @@ def collect(args, out):
                                     last_context_path = supplied
                         else:
                             path = private_path(diagnostics["log_path"], PRIVATE / "laya/events")
-                            if last_context_path is not None and Path(last_context_path) != path.relative_to(ROOT):
+                            if last_context_path is not None and Path(last_context_path) != _relative(path):
                                 if reason == "duration-limit":
                                     reason = "context-log-changed"
                             else:
-                                run["context_log"] = str(path.relative_to(ROOT))
+                                run["context_log"] = str(_relative(path))
                                 last_context_path = run["context_log"]
                                 if path not in evidence_paths:
                                     evidence_paths.append(path)
@@ -2176,9 +2191,9 @@ def collect(args, out):
                     projection_incomplete_samples=projection_failures,
                     collection_complete=reason == "duration-limit" and failures == 0 and projection_failures == 0 and count > 0
                         and not any(projection.counts[key] for key in ("event_drops", "row_drops", "invalid_events")),
-                    input_sizes_at_end={str(path.relative_to(ROOT)): path.stat().st_size
+                    input_sizes_at_end={str(_relative(path)): path.stat().st_size
                                         for path in evidence_paths if path.is_file()})
-        run["input_sizes_at_end"][str((out / "api.jsonl").relative_to(ROOT))] = bytes_written
+        run["input_sizes_at_end"][str(_relative(out / "api.jsonl"))] = bytes_written
         if namespaces.present:
             run["visual_namespaces"] = namespaces.snapshot()
             run["collection_complete"] &= not namespaces.issues
@@ -2301,8 +2316,8 @@ def main():
                 parser.error("source requires an elapsed --start-unix-ms/--end-unix-ms window <=600000ms")
             reason = "source-window-analysis-api-coverage-is-subset"
         run = {"session": args.session, "session_dir": f".local/laya/manual-capture/{args.session}",
-               "answers_log": str(private_path(args.answers).relative_to(ROOT)),
-               "manifest": str(private_path(args.manifest).relative_to(ROOT)),
+               "answers_log": str(_relative(private_path(args.answers))),
+               "manifest": str(_relative(private_path(args.manifest))),
                "started_at_unix_ms": start, "ended_at_unix_ms": end,
                "elapsed_ms": end - start, "stop_reason": reason}
         analyze(out, args.report, run, context, args.ui_receipts_path)

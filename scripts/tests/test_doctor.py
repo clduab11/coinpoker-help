@@ -98,7 +98,7 @@ class DoctorTests(unittest.TestCase):
             original = Path.resolve
 
             def resolve(path, *args, **kwargs):
-                if path == snapshot / "model.bin":
+                if original(path) == original(snapshot) / "model.bin":
                     return original(blob)
                 return original(path, *args, **kwargs)
 
@@ -108,7 +108,7 @@ class DoctorTests(unittest.TestCase):
                     doctor._check_files(snapshot, [artifact], "fine-tuned")
 
             def escaping(path, *args, **kwargs):
-                if path == snapshot / "model.bin":
+                if original(path) == original(snapshot) / "model.bin":
                     return original(outside)
                 return original(path, *args, **kwargs)
 

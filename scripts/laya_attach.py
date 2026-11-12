@@ -157,14 +157,23 @@ def _private_path(value, root):
     return path
 
 
+def _canonical(value):
+    # Case-normalized real form via os.path.realpath (unpatched by tests that
+    # patch Path.resolve). Raw and resolved strings can differ without any
+    # redirection (8.3 short names on CI, junctions), so checks compare
+    # canonical forms.
+    return Path(os.path.normcase(os.path.realpath(os.fspath(value))))
+
+
 def resolve_binary(root=ROOT):
     """Only fixed built paths, debug first; never search PATH or accept profile argv."""
-    root = Path(root).resolve()
+    root = Path(root)
     for build in ("debug", "release"):
         path = root / "target" / build / "coinpoker.exe"
         resolved = path.resolve()
         # Refuse redirected targets, including junctions to other checkout files.
-        if resolved != path or not resolved.is_relative_to(root):
+        canonical = _canonical(root)
+        if resolved != canonical / "target" / build / "coinpoker.exe" or not resolved.is_relative_to(canonical):
             raise AttachError("native-binary-unsafe")
         if path.is_file():
             return path
@@ -333,7 +342,7 @@ def list_windows(*, root=ROOT):
     binary = resolve_binary(root)
     env = {key: value for key, value in os.environ.items() if not key.upper().startswith("COINPOKER_")}
     try:
-        process = subprocess.Popen([str(binary), "--list-windows"], cwd=Path(root).resolve(),
+        process = subprocess.Popen([str(binary), "--list-windows"], cwd=Path(root),
                                    env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, shell=False)
     except OSError:
@@ -420,7 +429,7 @@ class PracticeAttachment:
     """Selection only; a supervisor owns the sole LiveFeed and retry/backoff policy."""
 
     def __init__(self, path=DEFAULT_PROFILE, *, root=ROOT, require_profile=False):
-        self.path, self.root = path, Path(root).resolve()
+        self.path, self.root = path, Path(root)
         self.require_profile = require_profile
 
     def select(self, listing=None):

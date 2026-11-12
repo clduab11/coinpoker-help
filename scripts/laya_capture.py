@@ -76,15 +76,30 @@ def now_ms():
     return time.time_ns() // 1_000_000
 
 
+def _canonical(value):
+    # Case-normalized real form via os.path.realpath, deliberately unpatched by
+    # tests that patch Path.resolve for redirect mapping. Raw and resolved
+    # strings can differ without any redirection (8.3 short names on CI,
+    # junctions), so all containment checks compare canonical forms; callers
+    # keep their own form.
+    return Path(os.path.normcase(os.path.realpath(os.fspath(value))))
+
+
 def private_path(relative, *, root=ROOT):
-    root = Path(root).resolve()
+    root = Path(root)
     path = root / relative
-    if not path.is_absolute() or not path.is_relative_to(root / ".local"):
+    if not path.is_absolute() or not _canonical(path).is_relative_to(_canonical(root) / ".local"):
         raise ValueError("private-path-required")
+    # Junction/symlink check applies inside the tree only: how the caller
+    # reached `root` (a junctioned or 8.3-aliased prefix) is the trust anchor.
+    canonical_root = _canonical(root)
     for part in (path, *path.parents):
+        canonical_part = _canonical(part)
+        if canonical_part == canonical_root or not canonical_part.is_relative_to(canonical_root):
+            break
         if part.exists() and (part.is_symlink() or getattr(part, "is_junction", lambda: False)()):
             raise ValueError("redirected-private-path")
-    if path.resolve() != path:
+    if _canonical(path) != _canonical(_canonical(root) / relative):
         raise ValueError("redirected-private-path")
     return path
 
@@ -1047,8 +1062,9 @@ def mark_session(session_id, opportunity_id, kind, frame_index, note="", *, root
         raise ValueError("marker-bound")
     status = read_json(path / "status.json")
     directory = private_path(Path(status["capture_directory"]), root=root)
-    capture_root = Path(root).resolve() / ".local/captures"
-    if directory.parent != capture_root or not re.fullmatch(r"utc-[0-9]+-[0-9]{9}-practice", directory.name):
+    capture_root = Path(root) / ".local/captures"
+    canonical_directory = _canonical(directory)
+    if canonical_directory.parent != _canonical(capture_root) or not re.fullmatch(r"utc-[0-9]+-[0-9]{9}-practice", canonical_directory.name):
         raise ValueError("invalid-capture-receipt")
     manifest = private_path(directory / "manifest.jsonl", root=root)
     receipt = None

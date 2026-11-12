@@ -576,10 +576,11 @@ class VisualLanes:
                 or any(type(frame.get(k)) is not int or not 1 <= frame[k] <= 4096 for k in ("width", "height"))):
             return
         directory = Path(row.get("capture_directory", ""))
-        from laya_capture import private_path
+        from laya_capture import _canonical, private_path
         directory = private_path(directory, root=self.root)
-        if (directory.parent != self.root / ".local/captures"
-                or not re.fullmatch(r"utc-[0-9]+-[0-9]{9}-practice", directory.name)):
+        canonical_directory = _canonical(directory)
+        if (canonical_directory.parent != _canonical(self.root / ".local/captures")
+                or not re.fullmatch(r"utc-[0-9]+-[0-9]{9}-practice", canonical_directory.name)):
             return
         filename = private_path(directory / frame["filename"], root=self.root)
         # Pin validated bytes now, before either async lane can race slot reuse.
@@ -1284,11 +1285,12 @@ class VisualWorker:
         self.wake.set()
 
     def _pin(self, row):
-        from laya_capture import private_path
+        from laya_capture import _canonical, private_path
         from PIL import Image
         directory = private_path(Path(row["capture_directory"]), root=self.root)
-        if (directory.parent != self.root / ".local/captures"
-                or not re.fullmatch(r"utc-[0-9]+-[0-9]{9}-practice", directory.name)):
+        canonical_directory = _canonical(directory)
+        if (canonical_directory.parent != _canonical(self.root / ".local/captures")
+                or not re.fullmatch(r"utc-[0-9]+-[0-9]{9}-practice", canonical_directory.name)):
             raise ValueError("invalid-capture-path")
         frame = row["frame"]
         def read(metadata):

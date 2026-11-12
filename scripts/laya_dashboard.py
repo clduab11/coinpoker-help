@@ -190,6 +190,13 @@ def code(value, fallback="source-status"):
     return value if isinstance(value, str) and CODE.fullmatch(value) else fallback
 
 
+def _canonical(value):
+    # Case-normalized real form via os.path.realpath (unpatched by tests that
+    # patch Path.resolve). Raw and resolved strings can differ without any
+    # redirection (8.3 short names on CI, junctions).
+    return Path(os.path.normcase(os.path.realpath(os.fspath(value))))
+
+
 def local_path(value, directory=".local"):
     if not isinstance(value, (str, Path)):
         raise ValueError("invalid private path")
@@ -204,13 +211,13 @@ def local_path(value, directory=".local"):
             or any(part.endswith((".", " ")) or part.split(".", 1)[0].upper() in reserved
                    for part in windows.parts if part != windows.anchor)):
         raise ValueError("invalid private path")
-    root = ROOT.resolve()
+    root = Path(ROOT)
     base = root / directory
     supplied = root / value
-    path = supplied.resolve()
-    if base.resolve() != base or path != supplied or not path.is_relative_to(base) or path == base:
+    if (base.resolve() != _canonical(base) or supplied.resolve() != _canonical(supplied)
+            or not _canonical(supplied).is_relative_to(_canonical(base)) or _canonical(supplied) == _canonical(base)):
         raise ValueError("private path must remain under " + directory)
-    return path
+    return supplied
 
 
 def cards(values, maximum):
@@ -1788,7 +1795,7 @@ class ManualSessionFeed:
     """
 
     def __init__(self, state, instance_id, *, root=ROOT):
-        self.state, self.instance_id, self.root = state, instance_id, Path(root).resolve()
+        self.state, self.instance_id, self.root = state, instance_id, Path(root)
         self.session_id = self.stream_id = self.path = None
         self.offset, self.pending = 0, b""
         self.seen = set()
@@ -2323,13 +2330,14 @@ def capture_argv(config):
     name = config.get("binary", "target/release/coinpoker.exe")
     if not isinstance(name, str):
         raise ValueError("invalid native binary")
-    root = ROOT.resolve()
+    root = Path(ROOT)
     supplied = root / name
-    binary = supplied.resolve()
-    if (binary != supplied or binary not in {root / "target" / build / "coinpoker.exe" for build in ("debug", "release")}
-            or not binary.is_file()):
+    canonical = _canonical(supplied)
+    if (canonical != _canonical(root) / name
+            or canonical not in {_canonical(root) / "target" / build / "coinpoker.exe" for build in ("debug", "release")}
+            or not supplied.is_file()):
         raise ValueError("native binary must be a built coinpoker binary inside the checkout")
-    argv = [str(binary)]
+    argv = [str(supplied)]
     flags = {"exe_name": "--exe-name", "pid": "--pid", "window_hwnd": "--window-hwnd",
              "window_title": "--table-title", "lobby_title": "--lobby-title", "lobby_size": "--lobby-size"}
     for field, flag in flags.items():
@@ -2356,7 +2364,7 @@ def capture_argv(config):
     if "record_dir" in config:
         if config["record_dir"] != ".local/captures":
             raise ValueError("recording must use the private capture base")
-        if not local_path(config["record_dir"]).is_relative_to(ROOT.resolve()):
+        if not _canonical(local_path(config["record_dir"])).is_relative_to(_canonical(ROOT)):
             raise ValueError("recording base cannot leave the checkout")
         argv.extend(("--record-dir", ".local/captures"))
         for field, (flag, default, minimum, maximum) in recording.items():
