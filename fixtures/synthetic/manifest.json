@@ -151,7 +151,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -209,7 +210,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -257,7 +259,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -315,7 +318,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -366,7 +370,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": true,
       "tags": [
@@ -426,7 +431,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": null
@@ -477,7 +483,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": true,
       "tags": [
@@ -537,7 +544,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": null
@@ -598,7 +606,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -669,7 +678,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -730,7 +740,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -801,7 +812,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -865,7 +877,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": true,
       "tags": [
@@ -938,7 +951,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": null
@@ -1002,7 +1016,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": true,
       "tags": [
@@ -1075,7 +1090,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": null
@@ -1140,7 +1156,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -1215,7 +1232,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -1280,7 +1298,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -1355,7 +1374,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -1423,7 +1443,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": true,
       "tags": [
@@ -1500,7 +1521,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": null
@@ -1568,7 +1590,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": true,
       "tags": [
@@ -1645,7 +1668,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": null
@@ -1714,7 +1738,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -1793,7 +1818,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -1862,7 +1888,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -1941,7 +1968,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -2013,7 +2041,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": true,
       "tags": [
@@ -2094,7 +2123,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": null
@@ -2166,7 +2196,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": true,
       "tags": [
@@ -2247,7 +2278,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": null
@@ -2316,7 +2348,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -2395,7 +2428,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -2464,7 +2498,8 @@
           }
         ],
         "action_required": false,
-        "available_actions": []
+        "available_actions": [],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -2543,7 +2578,8 @@
             }
           ],
           "action_required": false,
-          "available_actions": []
+          "available_actions": [],
+        "confidence": null
         }
       },
       "freshness": null
@@ -2630,7 +2666,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -2689,7 +2726,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": {
@@ -2753,7 +2791,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -2812,7 +2851,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": {
@@ -2876,7 +2916,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -2935,7 +2976,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": {
@@ -2999,7 +3041,8 @@
         "available_actions": [
           "check",
           "raise"
-        ]
+        ],
+        "confidence": null
       },
       "recommendation_allowed": false,
       "tags": [
@@ -3058,7 +3101,8 @@
           "available_actions": [
             "check",
             "raise"
-          ]
+          ],
+        "confidence": null
         }
       },
       "freshness": {

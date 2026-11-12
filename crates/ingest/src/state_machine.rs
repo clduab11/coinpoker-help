@@ -177,6 +177,7 @@ mod tests {
             } else {
                 vec![]
             },
+            confidence: None,
         }
     }
 
@@ -523,5 +524,163 @@ mod tests {
         let lobby = state(GamePhase::Lobby, false, 0, 0);
         assert!(validate_transition(&previous, &lobby).is_err());
         assert!(validate_transition(&lobby, &previous).is_err());
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use crate::parser::{Card, GamePhase, GameState};
+    use proptest::prelude::*;
+
+    fn arb_game_state() -> impl Strategy<Value = GameState> {
+        (
+            prop_oneof![
+                Just(GamePhase::Lobby),
+                Just(GamePhase::Preflop),
+                Just(GamePhase::Flop),
+                Just(GamePhase::Turn),
+                Just(GamePhase::River),
+                Just(GamePhase::Showdown),
+            ],
+            prop::bool::ANY,
+            0u32..1_000_000,
+            0usize..5,
+        )
+            .prop_map(|(game_phase, action_required, pot_size, board_count)| {
+                let cards = [
+                    ("Q", "diamonds"),
+                    ("7", "clubs"),
+                    ("2", "spades"),
+                    ("9", "hearts"),
+                    ("J", "clubs"),
+                ];
+                GameState {
+                    game_phase,
+                    hero_cards: vec![],
+                    board: cards
+                        .into_iter()
+                        .take(board_count)
+                        .map(|(rank, suit)| Card {
+                            rank: rank.to_string(),
+                            suit: suit.to_string(),
+                        })
+                        .collect(),
+                    pot_size,
+                    to_call: 0,
+                    hero_chips: 0,
+                    min_raise_to: None,
+                    max_raise_to: None,
+                    players: vec![],
+                    action_required,
+                    available_actions: if action_required {
+                        vec!["fold".to_string(), "call".to_string()]
+                    } else {
+                        vec![]
+                    },
+                    confidence: None,
+                }
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn unchanged_state_always_emits_no_change(s in arb_game_state()) {
+            let mut sm = StateMachine::new();
+            let _ = sm.update(s.clone());
+            let event = sm.update(s);
+            prop_assert_eq!(event, TableEvent::NoChange);
+        }
+
+        #[test]
+        fn reset_always_returns_to_first_observation_semantics(s in arb_game_state()) {
+            let mut sm = StateMachine::new();
+            let _ = sm.update(s.clone());
+            sm.reset();
+            let event = sm.update(s.clone());
+            if s.action_required {
+                prop_assert!(matches!(event, TableEvent::ActionRequired(_)));
+            } else if s.game_phase == GamePhase::Showdown {
+                prop_assert!(matches!(event, TableEvent::Showdown(_)));
+            } else {
+                prop_assert!(matches!(event, TableEvent::StateChanged(_)));
+            }
+        }
+
+        #[test]
+        fn pot_change_always_emits_state_changed(
+            base in arb_game_state(),
+            new_pot in 1..=1_000_000u32,
+        ) {
+            if new_pot == base.pot_size {
+                return Ok(());
+            }
+            let mut sm = StateMachine::new();
+            let _ = sm.update(base.clone());
+            let mut changed = base;
+            changed.pot_size = new_pot;
+            let event = sm.update(changed);
+            prop_assert!(matches!(event, TableEvent::StateChanged(_)));
+        }
+
+        #[test]
+        fn action_turning_on_always_emits_action_required_once(
+            base in arb_game_state().prop_filter("no action", |s| !s.action_required),
+        ) {
+            let mut sm = StateMachine::new();
+            let _ = sm.update(base.clone());
+            let mut changed = base;
+            changed.action_required = true;
+            changed.available_actions = vec!["fold".to_string(), "call".to_string()];
+            let event = sm.update(changed.clone());
+            prop_assert!(matches!(event, TableEvent::ActionRequired(_)));
+
+            // Second observation with action still required should be NoChange
+            let event = sm.update(changed);
+            prop_assert_eq!(event, TableEvent::NoChange);
+        }
+
+        #[test]
+        fn street_transition_always_emits_state_changed(
+            from_phase in prop_oneof![
+                Just(GamePhase::Lobby),
+                Just(GamePhase::Preflop),
+                Just(GamePhase::Flop),
+                Just(GamePhase::Turn),
+                Just(GamePhase::River),
+            ],
+            to_phase in prop_oneof![
+                Just(GamePhase::Preflop),
+                Just(GamePhase::Flop),
+                Just(GamePhase::Turn),
+                Just(GamePhase::River),
+                Just(GamePhase::Showdown),
+            ],
+        ) {
+            if from_phase == to_phase {
+                return Ok(());
+            }
+            let mut sm = StateMachine::new();
+            let from_state = GameState {
+                game_phase: from_phase,
+                hero_cards: vec![],
+                board: vec![],
+                pot_size: 100,
+                to_call: 0,
+                hero_chips: 0,
+                min_raise_to: None,
+                max_raise_to: None,
+                players: vec![],
+                action_required: false,
+                available_actions: vec![],
+                confidence: None,
+            };
+            let mut to_state = from_state.clone();
+            to_state.game_phase = to_phase;
+
+            let _ = sm.update(from_state);
+            let event = sm.update(to_state);
+            prop_assert!(matches!(event, TableEvent::StateChanged(_)) | matches!(event, TableEvent::Showdown(_)));
+        }
     }
 }

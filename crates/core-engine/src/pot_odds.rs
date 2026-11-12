@@ -136,3 +136,101 @@ mod tests {
         assert!(ev_raise(0.5, max, max, max, 0.0).is_finite());
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn pot_odds_fraction_is_bounded(
+            pot in 0..=u32::MAX,
+            to_call in 1..=u32::MAX,
+        ) {
+            let odds = pot_odds_fraction(pot, to_call).unwrap();
+            prop_assert!((0.0..=1.0).contains(&odds));
+        }
+
+        #[test]
+        fn pot_odds_ratio_is_positive(
+            pot in 1..=u32::MAX,
+            to_call in 1..=u32::MAX,
+        ) {
+            let ratio = pot_odds_ratio(pot, to_call).unwrap();
+            prop_assert!(ratio > 0.0);
+        }
+
+        #[test]
+        fn implied_odds_improve_over_pot_odds(
+            pot in 0..=u32::MAX,
+            to_call in 1..=u32::MAX,
+            future_bet in 1..=u32::MAX,
+        ) {
+            let plain = pot_odds_fraction(pot, to_call).unwrap();
+            let implied = implied_odds_fraction(pot, to_call, future_bet).unwrap();
+            prop_assert!(implied <= plain);
+        }
+
+        #[test]
+        fn break_even_equity_equals_pot_odds(
+            pot in 0..=u32::MAX,
+            to_call in 1..=u32::MAX,
+        ) {
+            let be = break_even_equity(pot, to_call).unwrap();
+            let odds = pot_odds_fraction(pot, to_call).unwrap();
+            prop_assert!((be - odds).abs() < 1e-12);
+        }
+
+        #[test]
+        fn ev_call_zero_at_break_even(
+            pot in 0..=u32::MAX,
+            to_call in 1..=u32::MAX,
+        ) {
+            let be = break_even_equity(pot, to_call).unwrap();
+            let ev = ev_call(be, pot, to_call);
+            // Use relative tolerance for large values
+            let expected = 0.0;
+            let tol = (f64::from(pot) + f64::from(to_call)) * 1e-15 + 1e-12;
+            prop_assert!((ev - expected).abs() <= tol);
+        }
+
+        #[test]
+        fn ev_call_monotonic_in_equity(
+            pot in 0..=u32::MAX,
+            to_call in 1..=u32::MAX,
+            e1 in 0.0..1.0f64,
+            e2 in 0.0..1.0f64,
+        ) {
+            let ev1 = ev_call(e1, pot, to_call);
+            let ev2 = ev_call(e2, pot, to_call);
+            if e1 < e2 {
+                prop_assert!(ev1 <= ev2 + 1e-12);
+            }
+        }
+
+        #[test]
+        fn ev_raise_with_full_fold_equity_wins_pot(
+            equity in 0.0..1.0f64,
+            pot in 0..=u32::MAX,
+            hero_cost in 1..=u32::MAX,
+            caller_contrib in 0..=u32::MAX,
+        ) {
+            let ev = ev_raise(equity, pot, hero_cost, caller_contrib, 1.0);
+            prop_assert!((ev - f64::from(pot)).abs() < 1e-9);
+        }
+
+        #[test]
+        fn ev_raise_with_zero_fold_equity_is_called_ev(
+            equity in 0.0..1.0f64,
+            pot in 0..=u32::MAX,
+            hero_cost in 1..=u32::MAX,
+            caller_contrib in 0..=u32::MAX,
+        ) {
+            let ev = ev_raise(equity, pot, hero_cost, caller_contrib, 0.0);
+            let called_pot = f64::from(pot) + f64::from(hero_cost) + f64::from(caller_contrib);
+            let expected = equity * called_pot - f64::from(hero_cost);
+            prop_assert!((ev - expected).abs() < 1e-9);
+        }
+    }
+}

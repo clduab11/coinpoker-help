@@ -46,6 +46,7 @@ Poker state rules (only for poker_table with a non-null state):
 - available_actions lists only the actions currently offered to the hero: fold, check, call, raise, allin. Do not repeat actions.
 - to_call must equal the highest non-folded opponent street contribution minus Hero's current bet, floored at zero. With to_call zero, offer check and never fold/call. With positive to_call, offer fold plus call (or allin for a short all-in call), and never check. Do not fabricate an action to satisfy these rules; unreadable or inconsistent controls require readable false and state null.
 - min_raise_to and max_raise_to are integer raise-to totals when raise is offered; otherwise use null. Both bounds must be readable when raise is offered. min_raise_to must exceed Hero's current bet plus to_call and cannot exceed max_raise_to. max_raise_to cannot exceed Hero's current bet plus remaining stack.
+- confidence is required in every non-null state: your own 0.0-1.0 certainty that the whole state is correct. Use a lower value when the screen is degraded; the caller suppresses decisions below 0.5.
 
 Non-table envelope example (illustrative, not a classification of the attached image):
 {
@@ -86,7 +87,8 @@ Table envelope example (illustrative only; do not copy these cards or values):
       {"name": "Seat1", "chips": 3200, "last_action": "raise", "bet_amount": 1000}
     ],
     "action_required": true,
-    "available_actions": ["fold", "call", "raise"]
+    "available_actions": ["fold", "call", "raise"],
+    "confidence": 0.9
   }
 }"#;
 
@@ -169,6 +171,7 @@ mod tests {
             "players",
             "action_required",
             "available_actions",
+            "confidence",
         ] {
             assert!(poker.get(field).is_some(), "state field {field}");
         }

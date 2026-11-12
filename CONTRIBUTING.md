@@ -30,29 +30,102 @@ do not treat capture-frame counters as image recording. Typed `-LiveConfig`
 target settings do not add a `--record-dir` option; recorder readiness stays
 at the later manual-data checkpoint.
 
-## Toolchain and checks
+## Setting up
 
-The workspace pins Rust 1.95.0 in `rust-toolchain.toml`. Windows live capture also
-needs the MSVC build tools and Windows SDK. Linux remains useful for structured
-stdin replay and platform-neutral library checks.
+The workspace pins Rust 1.95.0 with `rustfmt`, `clippy`, and
+`llvm-tools-preview` in `rust-toolchain.toml`. Install Rust through
+[rustup](https://rustup.rs); the first time you enter the repository the pinned
+toolchain is selected automatically. Windows live capture also needs the MSVC
+build tools and Windows SDK. Linux remains useful for structured stdin replay
+and platform-neutral library checks.
 
-These checks require a source checkout with Cargo, `scripts/validate.py` and the
-test suite. Run from PowerShell before submitting a source change:
+Optional tools that match what CI runs:
 
-```powershell
+- **[just](https://github.com/casey/just)** — a command runner (`cargo install just`).
+- **cargo-llvm-cov** — measures test coverage (`cargo install cargo-llvm-cov`).
+- **cargo-audit** — checks dependencies against RustSec (`cargo install cargo-audit`).
+
+## Validating a change
+
+Run the same checks CI runs before submitting a pull request. The quickest way
+is a single command via `just`, which stops at the first failure:
+
+```bash
+just validate
+```
+
+The individual checks are:
+
+```bash
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features --locked
 cargo test --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --doc --workspace --all-features --locked
 python -m unittest discover -s scripts/tests -v
 cargo run --locked --bin coinpoker -- --evaluate fixtures/synthetic/manifest.json
 python scripts/validate.py
+bash -n download-model.sh
 ```
 
 `scripts/validate.py` records individual outcomes under ignored `.local/`.
 Synthetic fixtures verify contracts, not real visual recognition. Capture changes
 also require the physical checks in [Windows acceptance](docs/WINDOWS_ACCEPTANCE_V1.md).
 Keep gates `UNRUN` until a real observation and evidence exist.
+
+### Coverage (enforced)
+
+CI fails when line coverage on default features falls below **80%**. Check it
+locally:
+
+```bash
+rustup run 1.95.0 cargo llvm-cov --workspace --all-targets --locked
+```
+
+The desktop overlay is part of the default binary build and has headless state
+and rendering tests, so no GPU is needed for CI. Test live capture and overlay
+placement manually on a Windows host after changing those integrations.
+
+### Dependency audit (enforced)
+
+```bash
+cargo audit --locked
+```
+
+If an advisory appears, update the affected crate. If no fixed version exists
+yet, open an issue rather than silencing the check.
+
+### Shell scripts (enforced)
+
+`download-model.sh` is checked with `bash -n` (syntax) everywhere and with
+`shellcheck` when it is installed. If you change that script, run both locally.
+
+## Tests we write
+
+Tests do not require model weights, and CI never exercises live screen capture,
+window discovery, or VLM calls. Verify those behaviors manually on a Windows
+host when you change capture code.
+
+### Property tests (`proptest`)
+
+- Put them in a `#[cfg(test)] mod proptests` module next to the code under test.
+- Use `proptest` strategies for pure, deterministic functions.
+- Do not property-test Monte Carlo code (for example `equity`), because random
+  sampling makes results nondeterministic. Keep seeded unit tests for those.
+
+### Snapshot tests (`insta`)
+
+- Put them in a `#[cfg(test)] mod snapshot_tests` module.
+- Use `insta::assert_json_snapshot!`.
+- Commit the generated `.snap` files alongside the source.
+- Review changes with `cargo insta test --review` to accept or reject them.
+
+### Integration test fixtures
+
+End-to-end tests for the `coinpoker` binary live in `bin/tests/` and read
+shared JSON `GameState` inputs from `bin/tests/fixtures/`. Load them with
+`include_str!` instead of copying JSON into test code. If a test needs a new
+input shape, add it as a fixture file rather than inlining a string.
 
 ## Change rules
 
@@ -78,7 +151,7 @@ Keep gates `UNRUN` until a real observation and evidence exist.
   Preserve the lobby veto and explicit multi-window ambiguity.
 - Implement capabilities within the user's requested bug-bounty proof-of-concept
   scope. There is no repository-wide read-only restriction. Distinguish missing
-  functionality from authorization restrictions; the native desktop panel remains unwired.
+  functionality from authorization restrictions.
 - `scripts/start-vlm.ps1 -DashboardOnly` is planned to load no model/use no GPU;
   default startup loads the pinned model asynchronously. Optional
   `-LiveConfig .local/profile.json` explicitly supervises one native passive
@@ -86,9 +159,11 @@ Keep gates `UNRUN` until a real observation and evidence exist.
   behavior in coordinator tests before calling the instructions tested.
 - Keep the historical Gate F scores/receipts and dated Gemma/port evidence.
   `scripts/vlm-pins.json` is an orphaned historical manifest, not an active pin
-  source. Laya server/dashboard support and the user's local fine-tuned weights
-  are omitted from historical packaging; this phase does not edit releases or
-  workflows to hide that gap.
+  source.
+- Keep coverage at or above 80%; if a change reduces it, add tests for the new
+  or changed code.
+- Add tests for behavior changes and update user-facing documentation when CLI
+  behavior changes.
 
 The candidate workflow can package and optionally sign an archive. A build or CI
 pass does not change the physical acceptance status or version `0.1.0`.

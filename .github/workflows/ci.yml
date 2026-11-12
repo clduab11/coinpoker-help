@@ -17,6 +17,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -35,6 +38,8 @@ jobs:
         run: cargo +1.95.0 test --workspace --all-targets --all-features --locked
       - name: Clippy
         run: cargo +1.95.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Doc tests
+        run: cargo +1.95.0 test --doc --workspace --all-features --locked
       - name: Python diagnostics
         run: python -B -m unittest discover -s scripts/tests -v
       - name: Workflow YAML validation
@@ -52,3 +57,44 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
             if ($errors.Count -gt 0) { throw "PowerShell syntax errors in $path`: $($errors -join '; ')" }
           }
+
+  coverage:
+    name: Coverage (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --component llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Run coverage
+        run: cargo +1.95.0 llvm-cov --workspace --all-targets --locked --fail-under-lines 80
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run audit
+        run: cargo audit --locked
+
+  shell-syntax:
+    name: Shell syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate downloader syntax
+        shell: bash
+        run: bash -n download-model.sh
+      - name: Run shellcheck
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck download-model.sh
+          else
+            echo "shellcheck not installed, skipping (bash -n passed)"
+          fi

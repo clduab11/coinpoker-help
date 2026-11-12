@@ -276,6 +276,7 @@ pub fn assemble(
         "players": [],
         "action_required": false,
         "available_actions": [],
+        "confidence": null,
     });
     let evidence = Evidence {
         readable: true,
@@ -514,6 +515,7 @@ fn seated_state(
             "players": players,
             "action_required": false,
             "available_actions": [],
+            "confidence": null,
         });
         let evidence = Evidence {
             readable: true,
@@ -585,6 +587,7 @@ fn seated_state(
         "players": players,
         "action_required": true,
         "available_actions": available,
+        "confidence": null,
     });
     let evidence = Evidence {
         readable: true,
@@ -965,7 +968,7 @@ mod tests {
                         {"rank": "7", "suit": "clubs"}],
                     "pot_size": 123450, "to_call": 0, "hero_chips": 0,
                     "min_raise_to": null, "max_raise_to": null, "players": [],
-                    "action_required": false, "available_actions": []}
+                    "action_required": false, "available_actions": [], "confidence": null}
             })
         );
     }

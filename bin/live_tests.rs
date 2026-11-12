@@ -138,7 +138,7 @@ fn safe_category_live_screen_failures_do_not_leak_rejected_fields() {
             "min_raise_to":null,"max_raise_to":null,"players":[
                 {"name":"Hero","chips":1000,"last_action":null,"bet_amount":50},
                 {"name":SENTINEL,"chips":1000,"last_action":null,"bet_amount":50}],
-            "action_required":true,"available_actions":["check"]}
+            "action_required":true,"available_actions":["check"],"confidence":null}
     });
     for category in [
         "board-count",
@@ -405,6 +405,7 @@ fn decision_publication_uses_the_same_total_deadline() {
     let value = crate::ui::widgets::DecisionView {
         action: "check".into(),
         amount: 0,
+        sizing_provenance: None,
         ev: 0.0,
         pot_odds: None,
         equity: 0.0,

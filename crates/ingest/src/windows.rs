@@ -229,6 +229,25 @@ fn window_metadata(hwnd: HWND, exe_name: String) -> Option<WindowInfo> {
     })
 }
 
+/// On-screen bounds `(left, top, width, height)` of a live window, when valid.
+///
+/// Used to position overlays relative to the selected table window without an
+/// extra capture dependency.
+pub fn window_bounds(hwnd: usize) -> Option<(f64, f64, f64, f64)> {
+    let hwnd = HWND(hwnd as _);
+    if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+        return None;
+    }
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut rect) }.ok()?;
+    let width = f64::from(rect.right.saturating_sub(rect.left));
+    let height = f64::from(rect.bottom.saturating_sub(rect.top));
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some((f64::from(rect.left), f64::from(rect.top), width, height))
+}
+
 struct EnumContext<'a> {
     processes: &'a HashMap<u32, String>,
     windows: Vec<WindowInfo>,

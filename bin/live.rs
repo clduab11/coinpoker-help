@@ -25,6 +25,7 @@ use ingest::vlm::VlmBackend;
 use serde_json::json;
 
 use crate::config::Options;
+use crate::ui::overlay::{OverlayEvent, TableBounds};
 use crate::{Pipeline, RunError};
 
 pub fn emit(value: &serde_json::Value) -> Result<(), RunError> {
@@ -855,6 +856,47 @@ pub(crate) fn run_cdp_poller(
 }
 
 pub fn run(options: Options) -> Result<(), RunError> {
+    run_with_sink(options, None::<fn(&OverlayEvent)>)
+}
+
+/// Run the overlay UI: the live loop on a worker thread feeding an egui window.
+///
+/// The worker owns the loop; when it stops (lost source, configuration error,
+/// stream EOF) the process exits `0`/`1`, so a headless `--ui` run stays
+/// fail-closed instead of leaving an orphaned window. Closing the overlay
+/// window returns from `run_overlay` and ends the process.
+#[cfg(feature = "desktop")]
+pub fn run_ui_overlay(options: Options) -> Result<(), RunError> {
+    let settings = options.overlay;
+    let (tx, rx) = std::sync::mpsc::channel::<OverlayEvent>();
+    #[cfg(feature = "ws")]
+    let mirror = crate::ui::ws::EventMirrorServer::bind().map_err(|error| {
+        RunError::Message(format!("WebSocket overlay mirror failed to bind: {error}"))
+    })?;
+    #[cfg(feature = "ws")]
+    eprintln!("overlay mirror listening on ws://{}", mirror.local_addr());
+    std::thread::spawn(move || {
+        let mut sink = move |event: &OverlayEvent| {
+            #[cfg(feature = "ws")]
+            mirror.publish(event);
+            let _ = tx.send(event.clone());
+        };
+        match run_with_sink(options, Some(&mut sink)) {
+            Ok(()) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    });
+    crate::ui::app::run_overlay(rx, settings)
+        .map_err(|error| RunError::Message(format!("overlay window failed: {error}")))
+}
+
+fn run_with_sink<S: FnMut(&OverlayEvent)>(
+    options: Options,
+    mut sink: Option<S>,
+) -> Result<(), RunError> {
     if !cfg!(target_os = "windows") {
         return Err(RunError::Message(
             "live capture requires Windows 10 version 1903 or later; use --stdin on this platform"
@@ -965,6 +1007,21 @@ pub fn run(options: Options) -> Result<(), RunError> {
                 }),
                 _ => None,
             };
+            let overlay_event = match &event {
+                LiveEvent::Recommendation { value, .. } => {
+                    Some(OverlayEvent::Decision(value.clone()))
+                }
+                LiveEvent::Clear { reason, .. } => Some(OverlayEvent::Clear(reason.to_string())),
+                _ => None,
+            };
+            let position = match &event {
+                LiveEvent::CaptureHealth {
+                    identity: Some(identity),
+                    fresh_capture: true,
+                    ..
+                } => window_position(identity.hwnd),
+                _ => None,
+            };
             let emitted_at = unix_ms()?;
             match event_record(
                 event,
@@ -1002,6 +1059,14 @@ pub fn run(options: Options) -> Result<(), RunError> {
                     )?;
                 }
             }
+            if let Some(sink) = sink.as_mut() {
+                if let Some(position) = position {
+                    sink(&position);
+                }
+                if let Some(overlay_event) = overlay_event {
+                    sink(&overlay_event);
+                }
+            }
         }
         // Event-driven wait (Phase 1): wake on the worker doorbell or at the
         // runtime's next due deadline; `poll_ms` survives only as the capture
@@ -1014,6 +1079,24 @@ pub fn run(options: Options) -> Result<(), RunError> {
             let _ = cvar.wait_timeout(guard, wait);
         }
     }
+}
+
+/// Screen-space bounds of the selected table window (Windows only).
+#[cfg(target_os = "windows")]
+fn window_position(hwnd: usize) -> Option<OverlayEvent> {
+    ingest::windows::window_bounds(hwnd).map(|(x, y, width, height)| {
+        OverlayEvent::Position(TableBounds {
+            x,
+            y,
+            width,
+            height,
+        })
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn window_position(_hwnd: usize) -> Option<OverlayEvent> {
+    None
 }
 
 pub fn support_script(name: &str) -> Result<PathBuf, RunError> {

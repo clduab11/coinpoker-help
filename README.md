@@ -349,6 +349,26 @@ clears an active recommendation once; later valid input may recover.
 {"game_phase":"flop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"K","suit":"hearts"}],"board":[{"rank":"A","suit":"diamonds"},{"rank":"7","suit":"clubs"},{"rank":"2","suit":"spades"}],"pot_size":1000,"to_call":500,"hero_chips":5000,"min_raise_to":1500,"max_raise_to":5000,"players":[{"name":"Hero","chips":5000,"last_action":"check","bet_amount":0},{"name":"Villain","chips":4500,"last_action":"bet","bet_amount":500}],"action_required":true,"available_actions":["fold","call","raise"]}
 ```
 
+## Study overlay (`--ui`)
+
+`--ui` runs the same live loop with a transparent, click-through decision panel
+beside the table. It compiles by default (the `desktop` feature); build without
+default features for a lean headless binary. `--features ws` additionally mirrors
+every panel event as JSON text frames over a loopback WebSocket.
+
+```powershell
+# Show the study overlay beside the table
+cargo run --release --bin coinpoker -- --ui
+# Dim panel on the left, and mirror events to a local WS consumer
+cargo run --release --features ws --bin coinpoker -- --ui --overlay-opacity 0.65 --overlay-position left
+```
+
+`--overlay-position` is `right|left|above|below`; both overlay options are only
+valid with `--ui`. The overlay is fail-closed: if the live loop stops (source
+lost, configuration error, stream EOF) the process exits instead of leaving a
+stale window, and closing the overlay window ends the run. The overlay is
+presentation only — it never clicks.
+
 ## Known limits
 
 - Pixel checks reject malformed, blank and tiny frames; they do not positively

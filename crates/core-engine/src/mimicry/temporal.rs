@@ -244,3 +244,132 @@ mod tests {
         samples[samples.len() / 2]
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+    use rand::Rng;
+    use rand::SeedableRng;
+
+    fn median_of<R: Rng + ?Sized>(
+        sampler: &TemporalSampler,
+        rng: &mut R,
+        complexity: DecisionComplexity,
+    ) -> u128 {
+        let mut samples: Vec<u128> = (0..2000)
+            .map(|_| sampler.sample(rng, complexity).as_millis())
+            .collect();
+        samples.sort_unstable();
+        samples[samples.len() / 2]
+    }
+
+    proptest! {
+        #[test]
+        fn samples_are_positive_and_within_bounds(
+            config in any::<TemporalConfig>().prop_filter("valid", |c| c.validate().is_ok()),
+            complexity in any::<DecisionComplexity>(),
+            seed in 0..=u64::MAX,
+        ) {
+            let sampler = TemporalSampler::new(config.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let duration = sampler.sample(&mut rng, complexity);
+            let ms = duration.as_millis();
+            prop_assert!(ms >= config.min_ms.round() as u128);
+            prop_assert!(ms <= config.max_ms.round() as u128);
+        }
+
+        #[test]
+        fn medians_increase_with_complexity(
+            config in (0.05..1.0f64, 0.0..400.0f64, 2600.0..5000.0f64)
+                .prop_map(|(sigma_log, min_ms, max_ms)| TemporalConfig {
+                    sigma_log,
+                    min_ms,
+                    max_ms,
+                }),
+            seed in 0..=u64::MAX,
+        ) {
+            let sampler = TemporalSampler::new(config);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+
+            let fold = median_of(&sampler, &mut rng, DecisionComplexity::PreflopFold);
+            let call = median_of(&sampler, &mut rng, DecisionComplexity::PostflopCall);
+            let allin = median_of(&sampler, &mut rng, DecisionComplexity::RiverAllin);
+
+            prop_assert!(fold < call);
+            prop_assert!(call < allin);
+        }
+
+        #[test]
+        fn sampling_is_deterministic_for_a_seed(
+            config in any::<TemporalConfig>().prop_filter("valid", |c| c.validate().is_ok()),
+            complexity in any::<DecisionComplexity>(),
+            seed in 0..=u64::MAX,
+        ) {
+            let sampler = TemporalSampler::new(config);
+            let mut a = rand::rngs::StdRng::seed_from_u64(seed);
+            let mut b = rand::rngs::StdRng::seed_from_u64(seed);
+            let x = sampler.sample(&mut a, complexity);
+            let y = sampler.sample(&mut b, complexity);
+            prop_assert_eq!(x, y);
+        }
+
+        #[test]
+        fn invalid_config_does_not_panic(
+            sigma_log in -100.0..100.0f64,
+            min_ms in -1000.0..1000.0f64,
+            max_ms in -1000.0..1000.0f64,
+            seed in 0..=u64::MAX,
+        ) {
+            let config = TemporalConfig {
+                sigma_log,
+                min_ms,
+                max_ms,
+            };
+            let sampler = TemporalSampler::new(config);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let _ = sampler.sample(&mut rng, DecisionComplexity::PreflopFold);
+        }
+    }
+}
+
+// Proptest strategy for DecisionComplexity
+#[cfg(test)]
+mod proptest_strategies {
+    use super::*;
+    use proptest::prelude::*;
+
+    impl Arbitrary for DecisionComplexity {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                Just(DecisionComplexity::PreflopFold),
+                Just(DecisionComplexity::PreflopCall),
+                Just(DecisionComplexity::PreflopRaise),
+                Just(DecisionComplexity::PostflopSimple),
+                Just(DecisionComplexity::PostflopCall),
+                Just(DecisionComplexity::PostflopRaise),
+                Just(DecisionComplexity::RiverAllin),
+            ]
+            .boxed()
+        }
+    }
+
+    // Proptest strategy for TemporalConfig
+    impl Arbitrary for TemporalConfig {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            (0.01..10.0f64, 0.0..5000.0f64, 0.0..5000.0f64)
+                .prop_map(|(sigma, min_ms, max_ms)| TemporalConfig {
+                    sigma_log: sigma,
+                    min_ms,
+                    max_ms,
+                })
+                .boxed()
+        }
+    }
+}

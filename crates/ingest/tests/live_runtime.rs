@@ -93,7 +93,7 @@ type Runtime = LiveRuntime<Source, Worker, &'static str>;
 fn table() -> ScreenObservation {
     parse_screen_output(&VlmOutput { text: json!({
         "screen_kind":"poker_table", "evidence":{"table_layout":true,"hero_cards":true,"board_area":true,"pot":true,"action_controls":true,"readable":true},
-        "state":{"game_phase":"preflop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"K","suit":"hearts"}],"board":[],"pot_size":100,"to_call":0,"hero_chips":1000,"min_raise_to":null,"max_raise_to":null,"players":[{"name":"Hero","chips":1000,"last_action":null,"bet_amount":50},{"name":"Seat1","chips":1000,"last_action":null,"bet_amount":50}],"action_required":true,"available_actions":["check"]}
+        "state":{"game_phase":"preflop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"K","suit":"hearts"}],"board":[],"pot_size":100,"to_call":0,"hero_chips":1000,"min_raise_to":null,"max_raise_to":null,"players":[{"name":"Hero","chips":1000,"last_action":null,"bet_amount":50},{"name":"Seat1","chips":1000,"last_action":null,"bet_amount":50}],"action_required":true,"available_actions":["check"],"confidence":null}
     }).to_string() }).unwrap()
 }
 fn lobby() -> ScreenObservation {

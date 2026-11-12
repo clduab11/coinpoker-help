@@ -6,7 +6,7 @@
 
 use std::io::{self, Write};
 
-use crate::ui::widgets::DecisionView;
+use super::widgets::DecisionView;
 
 /// A transport for headless output.
 pub trait Emit {
@@ -78,6 +78,7 @@ mod tests {
         DecisionView {
             action: "raise".to_string(),
             amount: 750,
+            sizing_provenance: None,
             ev: 0.67,
             pot_odds: Some(0.238),
             equity: 0.412,

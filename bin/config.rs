@@ -4,6 +4,8 @@ use ingest::runtime::RuntimeConfig;
 use ingest::vlm::VlmConfig;
 use std::collections::HashMap;
 
+use crate::ui::overlay::{OverlaySettings, PositionPreset};
+
 pub const USAGE: &str = "Usage: coinpoker [OPTION] [CONFIGURATION]\n\n\
   (no option)        Run the Windows capture pipeline\n\
   --stdin            Read legacy GameState JSON lines (all platforms)\n\
@@ -13,7 +15,9 @@ pub const USAGE: &str = "Usage: coinpoker [OPTION] [CONFIGURATION]\n\n\
   --experimental-bet-action  Explicit unvalidated diagnostics, only with matching bounded automatic inference approval/service\n\
   --doctor           Run local installation/model/capture diagnostics\n\
   --evaluate PATH    Evaluate a version-2 local visual fixture manifest\n\
-  --ui               Unavailable: native UI is not implemented (exit 2)\n\
+  --ui               Live pipeline with a transparent click-through decision overlay\n\
+  --overlay-opacity N     Overlay opacity 0.0..=1.0 (requires --ui; default 0.9)\n\
+  --overlay-position SIDE Overlay placement right|left|above|below (requires --ui)\n\
   -h, --help         Print this help\n\n\
 Configuration (CLI > nonempty environment > defaults):\n\
   --exe-name NAME             COINPOKER_EXE_NAME (exact; calibrate first)\n\
@@ -58,6 +62,7 @@ pub enum Mode {
     ListWindows,
     Doctor,
     Evaluate(String),
+    Ui,
     Help,
 }
 #[derive(Debug, Clone)]
@@ -76,6 +81,8 @@ pub struct Options {
     pub cdp_port: u16,
     /// False silences the lobby poller (`--cdp 0` / `COINPOKER_CDP=0`).
     pub cdp_enabled: bool,
+    /// Study-overlay presentation settings (`--ui`; validated at parse time).
+    pub overlay: OverlaySettings,
 }
 
 const RECORD_FLAGS: &[&str] = &[
@@ -84,6 +91,8 @@ const RECORD_FLAGS: &[&str] = &[
     "--record-max-bytes",
     "--record-interval-ms",
 ];
+
+const OVERLAY_FLAGS: &[&str] = &["--overlay-opacity", "--overlay-position"];
 
 const FLAGS: &[(&str, &str)] = &[
     ("--exe-name", "COINPOKER_EXE_NAME"),
@@ -128,10 +137,10 @@ pub fn parse(
             "--experimental-bet-action" => return Err("--experimental-bet-action requires the separately approved --manual-inference bounded automatic route; legacy capture and ambient activation are refused".into()),
             "--help" | "-h" => Some(Mode::Help),
             "--evaluate" => Some(Mode::Evaluate(args.next().ok_or("--evaluate requires a manifest path")?)),
-            "--ui" => return Err("--ui is unavailable: no native interactive UI; open the separately launched browser dashboard at http://127.0.0.1:18090/ or use --stdin for legacy JSON-lines output".into()),
+            "--ui" => Some(Mode::Ui),
             _ => {
                 if let Some(flag) = FLAGS.iter().map(|(flag, _)| *flag)
-                    .chain(RECORD_FLAGS.iter().copied()).chain(["--wager-registry", "--scene-registry"]).find(|flag| *flag == arg) {
+                    .chain(RECORD_FLAGS.iter().copied()).chain(OVERLAY_FLAGS.iter().copied()).chain(["--wager-registry", "--scene-registry"]).find(|flag| *flag == arg) {
                     let value = args.next().filter(|v| !v.trim().is_empty() && !v.starts_with("--"))
                         .ok_or_else(|| format!("{flag} requires a nonempty value"))?;
                     if overrides.insert(flag, value).is_some() { return Err(format!("duplicate option {flag}")); }
@@ -157,14 +166,34 @@ pub fn parse(
         seed: None,
         cdp_port: 9222,
         cdp_enabled: true,
+        overlay: OverlaySettings::default(),
     };
+    // Overlay settings apply only to --ui; validate even for --help so bad
+    // values fail loudly instead of being silently ignored.
+    let mut overlay = OverlaySettings::default();
+    let has_overlay_option = OVERLAY_FLAGS
+        .iter()
+        .any(|flag| overrides.contains_key(flag));
+    if let Some(value) = overrides.get("--overlay-opacity") {
+        overlay.opacity = value.parse::<f32>().map_err(|_| {
+            format!("invalid --overlay-opacity value {value:?}; expected 0.0 through 1.0")
+        })?;
+    }
+    if let Some(value) = overrides.get("--overlay-position") {
+        overlay.position = PositionPreset::parse(value)?;
+    }
+    overlay.validate()?;
+    if has_overlay_option && !matches!(options.mode, Mode::Ui) {
+        return Err("overlay options require --ui".into());
+    }
+    options.overlay = overlay;
     let recording_requested = RECORD_FLAGS.iter().any(|flag| overrides.contains_key(flag));
-    if recording_requested && !matches!(options.mode, Mode::Capture | Mode::Help) {
-        return Err("private recording is available only in capture mode".into());
+    if recording_requested && !matches!(options.mode, Mode::Capture | Mode::Ui | Mode::Help) {
+        return Err("private recording is available only in capture or --ui mode".into());
     }
     for flag in ["--wager-registry", "--scene-registry"] {
         if let Some(path) = overrides.get(flag) {
-            if !matches!(options.mode, Mode::Capture | Mode::Help) {
+            if !matches!(options.mode, Mode::Capture | Mode::Ui | Mode::Help) {
                 return Err("wager registry is available only in capture mode".into());
             }
             let file = std::path::Path::new(path);

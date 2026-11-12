@@ -1,6 +1,9 @@
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
+const ACTION_STATE: &str = include_str!("fixtures/action_state.json");
+const CLEAR_STATE: &str = include_str!("fixtures/clear_state.json");
+
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_coinpoker"))
         .args(args)
@@ -24,8 +27,6 @@ fn run_with_stdin(args: &[&str], input: &str) -> Output {
         .expect("write stdin");
     child.wait_with_output().expect("wait for coinpoker")
 }
-
-const ACTION_STATE: &str = r#"{"game_phase":"flop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"A","suit":"hearts"}],"board":[{"rank":"K","suit":"diamonds"},{"rank":"7","suit":"clubs"},{"rank":"2","suit":"spades"}],"pot_size":1000,"to_call":0,"hero_chips":5000,"min_raise_to":500,"max_raise_to":5000,"players":[{"name":"Hero","chips":5000,"last_action":"check","bet_amount":0},{"name":"Villain","chips":5000,"last_action":"check","bet_amount":0}],"action_required":true,"available_actions":["check","raise"]}"#;
 
 const REJECTED_SENTINEL: &str = "SYNTHETIC_REJECTED_FIELD_SENTINEL";
 
@@ -187,7 +188,8 @@ fn help_prints_usage_and_succeeds() {
     assert!(stdout.contains("--exe-name"));
     assert!(stdout.contains("--window-hwnd"));
     assert!(stdout.contains("--decision-budget-ms"));
-    assert!(stdout.contains("native UI is not implemented"));
+    assert!(stdout.contains("--ui"));
+    assert!(stdout.contains("--overlay-position"));
     assert!(!stdout.contains("read-only"));
     assert!(stdout.contains("18090"));
 }
@@ -260,15 +262,14 @@ fn retired_product_ports_fail_before_doctor_or_capture_can_start() {
 }
 
 #[test]
-fn unimplemented_native_ui_points_to_the_separately_launched_browser_dashboard() {
+fn ui_mode_requires_a_calibrated_identity_or_windows() {
     let output = run(&["--ui"]);
-    assert_eq!(output.status.code(), Some(2));
+    assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
-    assert!(stderr.contains("no native interactive UI"));
-    assert!(stderr.contains("http://127.0.0.1:18090/"));
-    assert!(stderr.contains("browser dashboard"));
-    assert!(!stderr.contains("read-only"));
-    assert!(stderr.contains("--stdin"));
+    assert!(
+        stderr.contains("identity") || stderr.contains("Windows"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -303,8 +304,7 @@ fn stdin_rejects_states_missing_critical_numeric_fields() {
 
 #[test]
 fn stdin_emits_legal_decision_then_clear_event() {
-    let clear_state = r#"{"game_phase":"flop","hero_cards":[{"rank":"A","suit":"spades"},{"rank":"A","suit":"hearts"}],"board":[{"rank":"K","suit":"diamonds"},{"rank":"7","suit":"clubs"},{"rank":"2","suit":"spades"}],"pot_size":1000,"to_call":0,"hero_chips":5000,"min_raise_to":null,"max_raise_to":null,"players":[{"name":"Hero","chips":5000,"last_action":"check","bet_amount":0},{"name":"Villain","chips":5000,"last_action":"check","bet_amount":0}],"action_required":false,"available_actions":[]}"#;
-    let input = format!("{ACTION_STATE}\n{clear_state}\n");
+    let input = format!("{ACTION_STATE}\n{CLEAR_STATE}\n");
 
     let output = run_with_stdin(&["--stdin"], &input);
     assert!(output.status.success());

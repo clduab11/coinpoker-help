@@ -20,12 +20,10 @@ fn every_range_token_parses_with_the_engine_dialect() {
     let ranges = load("preflop_ranges.json");
     fn walk(value: &serde_json::Value, checked: &mut usize) {
         match value {
-            serde_json::Value::String(text) => {
-                if !text.is_empty() && !text.contains(' ') {
-                    core_engine::ranges::expand_notation(text)
-                        .unwrap_or_else(|error| panic!("token {text}: {error}"));
-                    *checked += 1;
-                }
+            serde_json::Value::String(text) if !text.is_empty() && !text.contains(' ') => {
+                core_engine::ranges::expand_notation(text)
+                    .unwrap_or_else(|error| panic!("token {text}: {error}"));
+                *checked += 1;
             }
             serde_json::Value::Array(items) => {
                 for item in items {

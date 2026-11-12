@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8ef6ba5632aeb4588727d2c0746bd58fecd774ef90478db83e4538e95df33f14 # shrinks to state = GameState { game_phase: Lobby, hero_cards: [], board: [], pot_size: 0, to_call: 0, hero_chips: 388077, min_raise_to: None, max_raise_to: Some(738753), players: [PlayerState { name: "Y", chips: 501580, last_action: None, bet_amount: 742043 }, PlayerState { name: "e_eg_sf7__h", chips: 642276, last_action: None, bet_amount: 88063 }, PlayerState { name: "xl", chips: 79853, last_action: Some("LFpbIvkHos"), bet_amount: 777369 }], action_required: true, available_actions: ["raise", "raise", "fold", "call", "fold"], confidence: Some(0.24834553503991177) }

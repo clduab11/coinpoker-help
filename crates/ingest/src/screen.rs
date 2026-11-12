@@ -43,7 +43,9 @@ pub struct ScreenEvidence {
 /// A screen envelope. Non-table payloads are discarded without parsing poker
 /// fields. Table payloads have no implicit field defaults, unlike legacy stdin
 /// deserialization. Use [`parse_screen_output`] for semantic validation as well.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` only: `GameState` carries an optional `f64` confidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(from = "ScreenEnvelope")]
 pub struct ScreenObservation {
     pub screen_kind: ScreenKind,
@@ -116,6 +118,8 @@ struct CompleteGameState {
     players: Vec<PlayerState>,
     action_required: bool,
     available_actions: Vec<String>,
+    #[serde(deserialize_with = "required_nullable")]
+    confidence: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -258,7 +262,7 @@ pub fn inspect_frame(frame: &Frame) -> VisualEvidence {
 /// Only an accepted, readable table carries a state. Rejections never return the
 /// last accepted state as a fallback recommendation, even though it is retained
 /// internally for checking continuity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GateOutcome {
     pub kind: ScreenKind,
     pub accepted_state: Option<GameState>,
@@ -468,6 +472,7 @@ mod tests {
         let action = !matches!(phase, GamePhase::Lobby | GamePhase::Showdown);
         let state = GameState {
             game_phase: phase,
+            confidence: None,
             hero_cards: vec![card("A", "spades"), card("K", "hearts")],
             board: [
                 ("Q", "diamonds"),

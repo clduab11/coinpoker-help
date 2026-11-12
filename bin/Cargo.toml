@@ -13,8 +13,11 @@ name = "coinpoker"
 path = "main.rs"
 
 [features]
-default = []
+default = ["desktop"]
+# Native transparent study overlay (`--ui`).
 desktop = ["dep:egui", "dep:eframe"]
+# Loopback WebSocket mirror of overlay events (used with `--ui`).
+ws = []
 
 [dependencies]
 ingest = { path = "../crates/ingest" }
@@ -29,3 +32,9 @@ eframe = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3.27"
+insta = { workspace = true }
+
+[[test]]
+name = "ws"
+path = "tests/ws.rs"
+required-features = ["ws"]

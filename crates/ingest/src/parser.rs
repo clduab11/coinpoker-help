@@ -113,7 +113,10 @@ pub struct PlayerState {
 }
 
 /// Structured description of the visible table state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Derives `PartialEq` only: the optional `confidence` is an `f64`, which
+/// has no `Eq` implementation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameState {
     pub game_phase: GamePhase,
     #[serde(default)]
@@ -133,6 +136,12 @@ pub struct GameState {
     pub action_required: bool,
     #[serde(default)]
     pub available_actions: Vec<String>,
+    /// Model-reported confidence that this observation is correct (0.0..=1.0).
+    ///
+    /// VLM output is untrusted: the value is validated like every other
+    /// field, and callers must suppress decisions when it is low.
+    #[serde(default)]
+    pub confidence: Option<f64>,
 }
 
 /// Parse and validate a [`VlmOutput`] into a [`GameState`].
@@ -202,6 +211,14 @@ pub fn validate_game_state(state: &GameState) -> Result<(), ParseError> {
     let expected = state.game_phase.expected_board_cards();
     if state.board.len() != expected {
         return Err(ParseError::BoardCount);
+    }
+
+    // VLM output is untrusted: an out-of-range confidence is treated as a
+    // hallucination indicator and rejected like any other invalid field.
+    if let Some(confidence) = state.confidence {
+        if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
+            return Err(ParseError::InvalidState);
+        }
     }
 
     let mut seen_cards = HashSet::new();
@@ -791,5 +808,334 @@ mod tests {
         assert_eq!(GamePhase::Turn.expected_board_cards(), 4);
         assert_eq!(GamePhase::River.expected_board_cards(), 5);
         assert_eq!(GamePhase::Showdown.expected_board_cards(), 5);
+    }
+
+    #[test]
+    fn confidence_defaults_to_none_and_deserializes_when_present() {
+        let state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
+        assert_eq!(state.confidence, None);
+
+        let with_confidence = VALID_STATE.replace(
+            "\"action_required\": true",
+            "\"action_required\": true, \"confidence\": 0.85",
+        );
+        let state = parse_vlm_output(&output(&with_confidence)).expect("valid state");
+        assert_eq!(state.confidence, Some(0.85));
+    }
+
+    #[test]
+    fn rejects_out_of_range_confidence() {
+        for bad in [1.5, -0.1, f64::NAN, f64::INFINITY] {
+            let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
+            state.confidence = Some(bad);
+            assert!(matches!(
+                validate_game_state(&state),
+                Err(ParseError::InvalidState)
+            ));
+        }
+
+        for good in [0.0, 0.5, 1.0] {
+            let mut state: GameState = serde_json::from_str(VALID_STATE).expect("fixture");
+            state.confidence = Some(good);
+            validate_game_state(&state).expect("in-range confidence is valid");
+        }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::vlm::VlmOutput;
+
+    fn output(text: &str) -> VlmOutput {
+        VlmOutput {
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn parses_representative_vlm_json() {
+        let json = r#"{
+            "game_phase": "flop",
+            "hero_cards": [{"rank": "A", "suit": "spades"}, {"rank": "K", "suit": "hearts"}],
+            "board": [{"rank": "Q", "suit": "diamonds"}, {"rank": "7", "suit": "clubs"}, {"rank": "2", "suit": "spades"}],
+            "pot_size": 1250,
+            "to_call": 500,
+            "hero_chips": 2500,
+            "min_raise_to": 1500,
+            "max_raise_to": 3000,
+            "players": [
+                {"name": "Hero", "chips": 2500, "last_action": "raise", "bet_amount": 500},
+                {"name": "Villain", "chips": 3200, "last_action": "call", "bet_amount": 1000}
+            ],
+            "action_required": true,
+            "available_actions": ["fold", "call", "raise"]
+        }"#;
+
+        let state = parse_vlm_output(&output(json)).expect("valid state");
+        insta::assert_json_snapshot!(state);
+    }
+
+    #[test]
+    fn parses_minimal_preflop_state() {
+        let json = r#"{
+            "game_phase": "preflop",
+            "pot_size": 0,
+            "to_call": 0,
+            "hero_chips": 1000,
+            "players": [
+                {"name": "Hero", "chips": 1000},
+                {"name": "Villain", "chips": 1000}
+            ]
+        }"#;
+
+        let state = parse_vlm_output(&output(json)).expect("valid state");
+        insta::assert_json_snapshot!(state);
+    }
+
+    #[test]
+    fn parses_river_allin_state() {
+        let json = r#"{
+            "game_phase": "river",
+            "hero_cards": [{"rank": "A", "suit": "spades"}, {"rank": "A", "suit": "hearts"}],
+            "board": [
+                {"rank": "A", "suit": "diamonds"},
+                {"rank": "K", "suit": "clubs"},
+                {"rank": "Q", "suit": "hearts"},
+                {"rank": "J", "suit": "spades"},
+                {"rank": "T", "suit": "clubs"}
+            ],
+            "pot_size": 5000,
+            "to_call": 2000,
+            "hero_chips": 2000,
+            "min_raise_to": 9000,
+            "max_raise_to": 7000,
+            "players": [
+                {"name": "Hero", "chips": 2000, "last_action": "call", "bet_amount": 5000},
+                {"name": "Villain", "chips": 5000, "last_action": "raise", "bet_amount": 7000}
+            ],
+            "action_required": true,
+            "available_actions": ["fold", "call", "allin"]
+        }"#;
+
+        let state = parse_vlm_output(&output(json)).expect("valid state");
+        insta::assert_json_snapshot!(state);
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_card() -> impl Strategy<Value = Card> {
+        prop_oneof![
+            Just("A"),
+            Just("K"),
+            Just("Q"),
+            Just("J"),
+            Just("T"),
+            Just("9"),
+            Just("8"),
+            Just("7"),
+            Just("6"),
+            Just("5"),
+            Just("4"),
+            Just("3"),
+            Just("2"),
+        ]
+        .prop_flat_map(|rank| {
+            prop_oneof![
+                Just("spades"),
+                Just("hearts"),
+                Just("diamonds"),
+                Just("clubs"),
+            ]
+            .prop_map(move |suit| Card {
+                rank: rank.to_string(),
+                suit: suit.to_string(),
+            })
+        })
+    }
+
+    fn arb_game_phase() -> impl Strategy<Value = GamePhase> {
+        prop_oneof![
+            Just(GamePhase::Lobby),
+            Just(GamePhase::Preflop),
+            Just(GamePhase::Flop),
+            Just(GamePhase::Turn),
+            Just(GamePhase::River),
+            Just(GamePhase::Showdown),
+        ]
+    }
+
+    fn arb_player_state() -> impl Strategy<Value = PlayerState> {
+        (
+            "[a-zA-Z][a-zA-Z0-9_]{0,15}",
+            0u32..1_000_000,
+            prop::option::of("[a-zA-Z]{0,10}"),
+            0u32..1_000_000,
+        )
+            .prop_map(|(name, chips, last_action, bet_amount)| PlayerState {
+                name,
+                chips,
+                last_action,
+                bet_amount,
+            })
+    }
+
+    fn arb_game_state() -> impl Strategy<Value = GameState> {
+        (
+            arb_game_phase(),
+            prop::collection::vec(arb_card(), 0..=2),
+            prop::collection::vec(arb_card(), 0..=5),
+            0u32..1_000_000,
+            0u32..1_000_000,
+            0u32..1_000_000,
+            prop::option::of(0u32..1_000_000),
+            prop::option::of(0u32..1_000_000),
+            prop::collection::vec(arb_player_state(), 0..=9),
+            prop::bool::ANY,
+            prop::collection::vec(
+                prop_oneof![
+                    Just("fold".to_string()),
+                    Just("check".to_string()),
+                    Just("call".to_string()),
+                    Just("raise".to_string()),
+                    Just("allin".to_string()),
+                ],
+                0..=5,
+            ),
+        )
+            .prop_map(
+                |(
+                    game_phase,
+                    hero_cards,
+                    board,
+                    pot_size,
+                    to_call,
+                    hero_chips,
+                    min_raise_to,
+                    max_raise_to,
+                    players,
+                    action_required,
+                    available_actions,
+                )| {
+                    GameState {
+                        game_phase,
+                        hero_cards,
+                        board,
+                        pot_size,
+                        to_call,
+                        hero_chips,
+                        min_raise_to,
+                        max_raise_to,
+                        players,
+                        action_required,
+                        available_actions,
+                        confidence: None,
+                    }
+                },
+            )
+            // Layer the optional confidence on top so the roundtrip test
+            // also covers `Some` values without growing the tuple.
+            .prop_flat_map(|state| {
+                prop::option::of(0.0f64..=1.0).prop_map(move |confidence| GameState {
+                    confidence,
+                    ..state.clone()
+                })
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn serialize_deserialize_roundtrip(state in arb_game_state()) {
+            let json = serde_json::to_string(&state).unwrap();
+            let deserialized: GameState = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(state, deserialized);
+        }
+
+        #[test]
+        fn validate_game_state_is_idempotent(state in arb_game_state()) {
+            let result1 = validate_game_state(&state);
+            let result2 = validate_game_state(&state);
+            prop_assert_eq!(result1, result2);
+        }
+
+        #[test]
+        fn valid_states_pass_validation(
+            phase in arb_game_phase(),
+            pot in 1..=1_000_000u32,
+            to_call in 0..=1_000_000u32,
+            hero_chips in 1..=1_000_000u32,
+        ) {
+            // This synthetic state models a passive observation of lobby,
+            // preflop, and showdown, and an actionable postflop street. Skip
+            // combinations it does not represent.
+            if to_call > 0 && matches!(phase, GamePhase::Lobby | GamePhase::Preflop | GamePhase::Showdown) {
+                return Ok(());
+            }
+
+            let expected_board = phase.expected_board_cards();
+            let mut board = Vec::new();
+            let ranks = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"];
+            let suits = ["spades", "hearts", "diamonds", "clubs"];
+            'board: for suit in suits {
+                for rank in ranks {
+                    if board.len() >= expected_board {
+                        break 'board;
+                    }
+                    board.push(Card {
+                        rank: rank.to_string(),
+                        suit: suit.to_string(),
+                    });
+                }
+            }
+
+            // Non-spade hole cards never collide with the spade-only board above.
+            let hero_cards = if matches!(phase, GamePhase::Lobby | GamePhase::Preflop) {
+                vec![]
+            } else {
+                vec![
+                    Card { rank: "A".to_string(), suit: "hearts".to_string() },
+                    Card { rank: "K".to_string(), suit: "hearts".to_string() },
+                ]
+            };
+
+            let state = GameState {
+                game_phase: phase,
+                hero_cards,
+                board,
+                pot_size: pot,
+                to_call,
+                hero_chips,
+                min_raise_to: if to_call > 0 { Some(pot * 2) } else { None },
+                max_raise_to: if to_call > 0 { Some(hero_chips + to_call) } else { None },
+                players: vec![
+                    PlayerState {
+                        name: "Hero".to_string(),
+                        chips: hero_chips,
+                        last_action: if to_call > 0 { Some("call".to_string()) } else { None },
+                        bet_amount: 0,
+                    },
+                    PlayerState {
+                        name: "Villain".to_string(),
+                        chips: 10_000,
+                        last_action: if to_call > 0 { Some("raise".to_string()) } else { None },
+                        bet_amount: to_call,
+                    },
+                ],
+                action_required: to_call > 0,
+                available_actions: if to_call > 0 {
+                    vec!["fold".to_string(), "call".to_string()]
+                } else {
+                    vec![]
+                },
+                confidence: None,
+            };
+
+            let result = validate_game_state(&state);
+            prop_assert!(result.is_ok(), "valid state rejected: {:?}", result);
+        }
     }
 }

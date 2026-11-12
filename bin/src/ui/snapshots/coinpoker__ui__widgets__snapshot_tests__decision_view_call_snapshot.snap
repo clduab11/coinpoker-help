@@ -1,0 +1,15 @@
+---
+source: bin/src/ui/widgets.rs
+assertion_line: 490
+expression: v
+---
+{
+  "action": "call",
+  "amount": 0,
+  "ev": 0.42,
+  "pot_odds": 0.238,
+  "equity": 0.412,
+  "break_even": 0.238,
+  "opponent": "lag",
+  "confidence": 0.82
+}
