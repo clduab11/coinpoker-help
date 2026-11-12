@@ -16,12 +16,14 @@ without a practice-only bypass. No real-money acceptance has been established.
 
 ## Start here
 
+- [Next live session: self-sufficient play (handoff brief)](HANDOFF.md)
 - [First manual seated diagnostic: launch, confirm, stop and checklist](docs/SEATED_DIAGNOSTIC.md)
 - [Windows setup and local dashboard](docs/INSTALL_WINDOWS.md)
 - [VLM compatibility and provenance](docs/VLM_COMPATIBILITY.md)
 - [Live JSON-lines contract](docs/EVENTS_V2.md)
 - [Visual evaluation contract](docs/VISUAL_EVALUATION_V2.md)
 - [Model terms](MODEL_LICENSES.md), [security](SECURITY.md), [contributing](CONTRIBUTING.md)
+- [Archive — superseded docs and handoffs](docs/archive/README.md)
 
 ## Current model and browser
 
