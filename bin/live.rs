@@ -25,7 +25,7 @@ use ingest::vlm::VlmBackend;
 use serde_json::json;
 
 use crate::config::Options;
-use crate::ui::overlay::{OverlayEvent, TableBounds};
+use crate::ui::overlay::OverlayEvent;
 use crate::{Pipeline, RunError};
 
 pub fn emit(value: &serde_json::Value) -> Result<(), RunError> {
@@ -1085,7 +1085,7 @@ fn run_with_sink<S: FnMut(&OverlayEvent)>(
 #[cfg(target_os = "windows")]
 fn window_position(hwnd: usize) -> Option<OverlayEvent> {
     ingest::windows::window_bounds(hwnd).map(|(x, y, width, height)| {
-        OverlayEvent::Position(TableBounds {
+        OverlayEvent::Position(crate::ui::overlay::TableBounds {
             x,
             y,
             width,

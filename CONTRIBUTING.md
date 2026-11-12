@@ -65,7 +65,6 @@ cargo test --doc --workspace --all-features --locked
 python -m unittest discover -s scripts/tests -v
 cargo run --locked --bin coinpoker -- --evaluate fixtures/synthetic/manifest.json
 python scripts/validate.py
-bash -n download-model.sh
 ```
 
 `scripts/validate.py` records individual outcomes under ignored `.local/`.
@@ -95,10 +94,13 @@ cargo audit --locked
 If an advisory appears, update the affected crate. If no fixed version exists
 yet, open an issue rather than silencing the check.
 
-### Shell scripts (enforced)
+### Operator scripts
 
-`download-model.sh` is checked with `bash -n` (syntax) everywhere and with
-`shellcheck` when it is installed. If you change that script, run both locally.
+`download-model.ps1` and everything under `scripts/*.ps1` is parsed for syntax
+by CI on Windows (the same parse `just syntax` runs locally). Install [pwsh]
+if you want to run it on other hosts.
+
+[pwsh]: https://learn.microsoft.com/powershell/scripting/install/installing-powershell
 
 ## Tests we write
 

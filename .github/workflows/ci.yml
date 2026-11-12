@@ -81,20 +81,4 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run audit
-        run: cargo audit --locked
-
-  shell-syntax:
-    name: Shell syntax
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate downloader syntax
-        shell: bash
-        run: bash -n download-model.sh
-      - name: Run shellcheck
-        run: |
-          if command -v shellcheck >/dev/null 2>&1; then
-            shellcheck download-model.sh
-          else
-            echo "shellcheck not installed, skipping (bash -n passed)"
-          fi
+        run: cargo audit
