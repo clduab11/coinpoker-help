@@ -1,4 +1,4 @@
 # Lightweight default suite and workflow validation only; no model/GPU stack.
 numpy==2.5.2
-Pillow==12.3.0
+Pillow==13.0.0
 PyYAML==6.0.3
