@@ -55,6 +55,19 @@ silently).
 - Chris may close tables/client anytime; the CDP poller is fail-quiet
   (`cdp-status` record with `unavailable`).
 
+## Action executor (fail-closed clicker)
+
+`scripts/action-executor.ps1 -Jsonl .local/self-play/<UTC>/live.jsonl` tails the
+run's stdout stream and clicks the decided action. Hardened (2026-11-13):
+identity from the stream (optional `-Hwnd`/`-ProcessId` pins must match), lease
+floor (`-MinLeaseMs`), window-rect scaled coordinates (refuses non-800x613
+proportions with `geometry-mismatch`), raise amounts typed (`-RaiseMode`), and
+read-back verification of every click (`-VerifyMs`). Fail-closed exits: a stop
+file (`<jsonl>.stop`), a stalled stream (`-EofGraceMs`), or an unverified click
+aborts with exit 2. `-DryRun` plans everything and clicks nothing
+(add `-SkipGeometry` when no window exists). Log: `<jsonl>.executor.log`.
+Offline proof: `scripts/tests/test_action_executor.py`.
+
 ## Receipts
 
 Phase 0 receipts: `.local/phase0-cdp/20261110T1845Z/` (verdict, target digests,
