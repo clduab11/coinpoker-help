@@ -49,6 +49,9 @@ opt-level = 3
 
 [profile.dev]
 opt-level = 1
+# Line-tables-only debuginfo: keeps debug artifacts compact ahead of the
+# testing cycle; backtraces retain file:line resolution.
+debug = 1
 
 [workspace.metadata]
 # Coverage command (default features only; desktop feature has no tests)
