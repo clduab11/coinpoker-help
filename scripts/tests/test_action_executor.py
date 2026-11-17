@@ -28,7 +28,9 @@ def now_ms():
 
 
 def decision(action, amount=0, *, hwnd=TABLE_HWND, pid=TABLE_PID, key=None,
-             expires_in=5000, generation=1):
+             # Generous lease: records are stamped before the pwsh subprocess
+             # cold-starts, which can take seconds on a loaded CI runner.
+             expires_in=15000, generation=1):
     return {
         "schema_version": 2,
         "event": "decision",
