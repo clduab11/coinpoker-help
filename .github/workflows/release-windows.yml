@@ -118,7 +118,7 @@ jobs:
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  coinpoker-help-windows-x64-candidate.zip" |
             Set-Content -LiteralPath 'dist/SHA256SUMS' -Encoding ascii
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coinpoker-help-windows-x64-candidate
           path: |
